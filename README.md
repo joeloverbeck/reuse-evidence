@@ -8,11 +8,11 @@ The project is deliberately not a clone detector and not an automatic refactorin
 
 ## Status
 
-**Initial repository-enrollment tracer bullet implemented.**
+**Repository enrollment and identity-preserving re-enrollment implemented.**
 
-The public Rust crate and standalone `reuse-evidence` binary can freshly enroll a Git repository, including an npm workspace with no Cargo project. Enrollment writes a human-readable version 1 TOML marker at the nearest repository root and uses the binary's shared success, unsafe-failure, and refusal exit meanings.
+The public Rust crate and standalone `reuse-evidence` binary can enroll a Git repository, including an npm workspace with no Cargo project. Enrollment writes a human-readable version 1 TOML marker at the nearest repository root, safely revalidates an existing marker without minting another identity, and uses the binary's shared success, unsafe-failure, and refusal exit meanings.
 
-This is deliberately a fresh-enrollment slice. Re-enrollment, identity-preserving idempotence, explicit visibility changes, portfolio discovery, the case lifecycle, capture, review, verification, and installed skill assets are not implemented yet.
+Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. Portfolio discovery, the case lifecycle, capture, review, verification, and installed skill assets are not implemented yet.
 
 The selected delivery constraints are:
 
@@ -23,7 +23,7 @@ The selected delivery constraints are:
 - human acceptance for every consequential reuse decision;
 - implementation delegated to the repository's normal engineering workflow.
 
-## Fresh enrollment
+## Enrollment
 
 From anywhere inside the Git repository to enroll:
 
@@ -32,6 +32,21 @@ reuse-evidence enroll --ecosystem-id products --visibility private
 ```
 
 `--visibility` accepts exactly `public` or `private`. A successful command writes `reuse-evidence.toml` at the nearest ancestor containing `.git` and reports the path and values it wrote on stdout. It adds no dependency or manifest entry to the enrolled repository and performs no network access.
+
+Re-running the same command validates and reports the existing enrollment with exit status `0`; it preserves the complete marker byte-for-byte. A different requested visibility or ecosystem identity is a refusal and writes nothing. An agent that already knows the repository identity can guard a re-enrollment explicitly:
+
+```console
+reuse-evidence enroll --ecosystem-id products --visibility private \
+  --expected-repository-id cd5dfedd-6015-4ce3-9345-853e25859b0a
+```
+
+That option verifies an existing identity only. It cannot assign a fresh identity, and a mismatch refuses without writes. Change visibility only through the deliberate command:
+
+```console
+reuse-evidence set-visibility --visibility public
+```
+
+Fresh marker creation and visibility replacement publish a complete marker atomically. A malformed, truncated, or unsupported-version marker is refused rather than repaired or overwritten.
 
 The marker is open, human-readable TOML with exactly these version 1 fields:
 

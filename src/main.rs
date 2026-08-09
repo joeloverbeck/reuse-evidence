@@ -4,7 +4,10 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand, error::ErrorKind};
-use reuse_evidence::{ExitMeaning, Visibility, enroll};
+use reuse_evidence::{
+    EnrollmentEffect, ExitMeaning, Visibility, enroll_with_expected_repository_id, set_visibility,
+};
+use uuid::Uuid;
 
 #[derive(Debug, Parser)]
 #[command(name = "reuse-evidence")]
@@ -22,6 +25,15 @@ enum Command {
         #[arg(long)]
         ecosystem_id: Option<String>,
         /// Declared repository visibility: public or private.
+        #[arg(long)]
+        visibility: Option<String>,
+        /// Existing repository identity to verify; never assigned to a new enrollment.
+        #[arg(long)]
+        expected_repository_id: Option<String>,
+    },
+    /// Deliberately change an enrolled repository's declared visibility.
+    SetVisibility {
+        /// New declared repository visibility: public or private.
         #[arg(long)]
         visibility: Option<String>,
     },
@@ -54,7 +66,9 @@ fn run(cli: Cli) -> ExitCode {
         Some(Command::Enroll {
             ecosystem_id,
             visibility,
-        }) => run_enroll(ecosystem_id, visibility),
+            expected_repository_id,
+        }) => run_enroll(ecosystem_id, visibility, expected_repository_id),
+        Some(Command::SetVisibility { visibility }) => run_set_visibility(visibility),
         None => {
             let mut command = Cli::command();
             let usage = command.render_usage();
@@ -79,6 +93,7 @@ fn run(cli: Cli) -> ExitCode {
 fn run_enroll(
     ecosystem_id: Option<String>,
     visibility: Option<String>,
+    expected_repository_id: Option<String>,
 ) -> Result<(), (ExitMeaning, String)> {
     let ecosystem_id = ecosystem_id.ok_or_else(|| {
         (
@@ -96,15 +111,57 @@ fn run_enroll(
     })?;
     let visibility =
         Visibility::parse(&visibility).map_err(|error| (error.meaning(), error.to_string()))?;
-    let enrollment = enroll(Path::new("."), &ecosystem_id, visibility)
-        .map_err(|error| (error.meaning(), error.to_string()))?;
+    let expected_repository_id = expected_repository_id
+        .map(|value| {
+            Uuid::parse_str(&value).map_err(|error| {
+                (
+                    ExitMeaning::Refusal,
+                    format!(
+                        "expected repository identity `{value}` is invalid: {error}\nresolution: use the UUID recorded in the existing marker or omit the identity guard"
+                    ),
+                )
+            })
+        })
+        .transpose()?;
+    let enrollment = enroll_with_expected_repository_id(
+        Path::new("."),
+        &ecosystem_id,
+        visibility,
+        expected_repository_id,
+    )
+    .map_err(|error| (error.meaning(), error.to_string()))?;
 
-    println!("enrolled repository");
+    report_enrollment(&enrollment);
+    Ok(())
+}
+
+fn run_set_visibility(visibility: Option<String>) -> Result<(), (ExitMeaning, String)> {
+    let visibility = visibility.ok_or_else(|| {
+        (
+            ExitMeaning::Refusal,
+            "missing required `--visibility`\nresolution: rerun with `--visibility public` or `--visibility private`"
+                .to_owned(),
+        )
+    })?;
+    let visibility =
+        Visibility::parse(&visibility).map_err(|error| (error.meaning(), error.to_string()))?;
+    let enrollment = set_visibility(Path::new("."), visibility)
+        .map_err(|error| (error.meaning(), error.to_string()))?;
+    report_enrollment(&enrollment);
+    Ok(())
+}
+
+fn report_enrollment(enrollment: &reuse_evidence::Enrollment) {
+    match enrollment.effect {
+        EnrollmentEffect::Created => println!("enrolled repository"),
+        EnrollmentEffect::Existing => println!("existing enrollment"),
+        EnrollmentEffect::VisibilityChanged => println!("changed repository visibility"),
+        EnrollmentEffect::VisibilityUnchanged => println!("repository visibility unchanged"),
+    }
     println!("marker: {}", enrollment.marker_path.display());
     println!("repository_id: {}", enrollment.repository_id);
     println!("ecosystem_id: {}", enrollment.ecosystem_id);
     println!("visibility: {}", enrollment.visibility);
-    Ok(())
 }
 
 const fn terminal_name(meaning: ExitMeaning) -> &'static str {
