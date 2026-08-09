@@ -10,11 +10,32 @@ struct Fixture {
 
 impl Fixture {
     fn new(name: &str) -> Self {
+        Self::beneath(&std::env::temp_dir(), name)
+    }
+
+    fn outside_repository(name: &str) -> Self {
+        [
+            std::env::temp_dir(),
+            PathBuf::from("/tmp"),
+            PathBuf::from("/dev/shm"),
+        ]
+        .into_iter()
+        .find(|candidate| {
+            candidate.is_dir()
+                && candidate
+                    .ancestors()
+                    .all(|ancestor| !ancestor.join(".git").exists())
+        })
+        .map(|candidate| Self::beneath(&candidate, name))
+        .expect("the test environment should provide a temporary directory outside Git")
+    }
+
+    fn beneath(parent: &Path, name: &str) -> Self {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock should be after the Unix epoch")
             .as_nanos();
-        let root = std::env::temp_dir().join(format!(
+        let root = parent.join(format!(
             "reuse-evidence-{name}-{}-{nonce}",
             std::process::id()
         ));
@@ -231,20 +252,14 @@ fn cli_argument_refusals_are_write_free_and_actionable() {
 }
 
 #[test]
-fn marker_creation_failure_has_distinct_unsafe_failure_status() {
-    let fixture = Fixture::new("unsafe-failure");
-    let repository = fixture.repository("consumer");
-    fs::create_dir(repository.join("reuse-evidence.toml"))
-        .expect("a conflicting marker directory should be creatable");
-    fs::write(
-        repository.join("reuse-evidence.toml").join("preserved.txt"),
-        b"unchanged\n",
-    )
-    .expect("conflict fixture should be writable");
-    let before = files_beneath(&repository);
+fn enrollment_outside_repository_refuses_without_writes() {
+    let fixture = Fixture::outside_repository("outside-repository");
+    fs::write(fixture.root.join("preserved.txt"), b"unchanged\n")
+        .expect("fixture content should be writable");
+    let before = files_beneath(&fixture.root);
 
     let output = run_in(
-        &repository,
+        &fixture.root,
         &[
             "enroll",
             "--ecosystem-id",
@@ -254,9 +269,15 @@ fn marker_creation_failure_has_distinct_unsafe_failure_status() {
         ],
     );
 
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
     let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
-    assert!(stderr.starts_with("unsafe failure:"), "{stderr}");
-    assert_eq!(files_beneath(&repository), before);
+    assert!(stderr.starts_with("refusal:"), "{stderr}");
+    assert!(stderr.contains("not inside a repository root"), "{stderr}");
+    assert!(stderr.contains("\nresolution:"), "{stderr}");
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "refusal must leave the target tree byte-identical"
+    );
 }
