@@ -1,0 +1,7 @@
+interface:
+  display_name: "Implement"
+  short_description: "Implement a PRD or issue set"
+  default_prompt: "Use $implement to build the work described by this PRD or set of issues."
+
+policy:
+  allow_implicit_invocation: false

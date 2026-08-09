@@ -1,0 +1,7 @@
+interface:
+  display_name: "To PRD"
+  short_description: "Publish this conversation as a PRD"
+  default_prompt: "Use $to-prd to turn this conversation into a PRD on the project issue tracker."
+
+policy:
+  allow_implicit_invocation: false

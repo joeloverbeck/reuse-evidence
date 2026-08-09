@@ -1,0 +1,7 @@
+interface:
+  display_name: "To Issues"
+  short_description: "Split a plan into tracker issues"
+  default_prompt: "Use $to-issues to break this plan or PRD into independently-grabbable issues on the project tracker."
+
+policy:
+  allow_implicit_invocation: false

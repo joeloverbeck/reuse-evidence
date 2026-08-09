@@ -1,0 +1,7 @@
+interface:
+  display_name: "Writing Great Skills"
+  short_description: "Write predictable agent skills"
+  default_prompt: "Use $writing-great-skills to design or revise a skill against the skill authoring vocabulary."
+
+policy:
+  allow_implicit_invocation: true

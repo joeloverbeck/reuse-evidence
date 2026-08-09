@@ -1,0 +1,7 @@
+interface:
+  display_name: "Refactor Skill"
+  short_description: "Refactor skills without content or interface drift"
+  default_prompt: "Use $refactor-skill to split .claude/skills/grilling into progressively disclosed files while preserving content, public anchors, and cross-skill contracts."
+
+policy:
+  allow_implicit_invocation: false

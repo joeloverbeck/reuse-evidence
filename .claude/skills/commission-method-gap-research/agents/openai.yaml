@@ -1,0 +1,6 @@
+interface:
+  display_name: "Commission Method-Gap Research"
+  short_description: "Commission research into missing skill methods"
+  default_prompt: "Use $commission-method-gap-research to find missing methodological machinery in this skill."
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Setup Engineering Skills"
+  short_description: "Configure the repo's issue tracker"
+  default_prompt: "Use $setup-matt-pocock-skills to configure this repo's issue tracker and triage label vocabulary."
+
+policy:
+  allow_implicit_invocation: false
