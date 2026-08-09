@@ -72,3 +72,17 @@ For a new abstraction, identify the real independent consumers. Repeated files, 
 ## Implementation workflow boundary
 
 `reuse-evidence` owns evidence, readiness, decisions, and verification. Ordinary engineering skills own interface design, TDD, implementation, and code review. An accepted reuse decision should produce a bounded implementation brief, then yield control. After implementation, return to reuse verification rather than duplicating the engineering workflow here.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked in GitHub Issues. External contributor PRs are also a triage request surface; collaborators' in-flight PRs are excluded. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Triage uses the canonical `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix` labels. The orthogonal `coordination` label marks an open parent coordinating separately `ready-for-agent` children; the parent is not independently grabbable. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository with `CONTEXT.md` at the root and architectural decisions under `docs/adr/`. See `docs/agents/domain.md`.
