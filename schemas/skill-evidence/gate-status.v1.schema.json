@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "reuse-evidence.skill-evidence.gate-status.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "generated_at",
+    "target_content_hash",
+    "qualifying_uses_on_current_hash",
+    "open_incident_ids",
+    "candidate_clusters",
+    "state",
+    "authorized_workflow",
+    "authorization_reason",
+    "trigger_event_ids",
+    "threshold_session_id",
+    "not_before",
+    "active_review_id",
+    "last_completed_review_id",
+    "review_reentry_basis",
+    "target_name",
+    "target_repo_relative_path",
+    "derivation_session_id"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "target_content_hash": { "type": "string", "minLength": 1 },
+    "qualifying_uses_on_current_hash": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "open_incident_ids": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "candidate_clusters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "symptom_key",
+          "open_event_ids",
+          "independent_incidents",
+          "max_severity"
+        ],
+        "properties": {
+          "symptom_key": {
+            "enum": [
+              "triggering",
+              "execution",
+              "output",
+              "state",
+              "tool-compatibility",
+              "coordination",
+              "cost",
+              "unknown"
+            ]
+          },
+          "open_event_ids": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "independent_incidents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_severity": {
+            "enum": [
+              "friction",
+              "material_failure",
+              "severe_incident"
+            ]
+          }
+        }
+      }
+    },
+    "state": {
+      "enum": [
+        "closed",
+        "collecting",
+        "eligible_pending_cooldown",
+        "eligible",
+        "quarantined_pending_cooldown",
+        "quarantined_eligible",
+        "review_in_progress",
+        "blocked"
+      ]
+    },
+    "authorized_workflow": {
+      "type": ["string", "null"]
+    },
+    "authorization_reason": {
+      "type": ["string", "null"]
+    },
+    "trigger_event_ids": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "threshold_session_id": {
+      "type": ["string", "null"]
+    },
+    "not_before": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "active_review_id": {
+      "type": ["string", "null"]
+    },
+    "last_completed_review_id": {
+      "type": ["string", "null"]
+    },
+    "review_reentry_basis": {
+      "enum": [
+        "first_eligibility",
+        "post_review_incident",
+        "queued_pre_close_evidence",
+        "queued_behind_instrument_limited_review",
+        "unadjudicated_severe",
+        null
+      ]
+    },
+    "target_name": { "type": "string", "minLength": 1 },
+    "target_repo_relative_path": { "type": "string", "minLength": 1 },
+    "derivation_session_id": {
+      "type": ["string", "null"]
+    },
+    "instrument_limited_incident_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "integrity_errors": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

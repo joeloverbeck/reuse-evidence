@@ -1,0 +1,7 @@
+interface:
+  display_name: "Skill Evolution"
+  short_description: "Evidence-gated revision of another skill"
+  default_prompt: "Use $skill-evolution with the target skill's path; it hard-refuses unless the freshly derived evidence gate authorizes a review."
+
+policy:
+  allow_implicit_invocation: false

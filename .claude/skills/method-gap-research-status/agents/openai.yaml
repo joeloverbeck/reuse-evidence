@@ -1,0 +1,8 @@
+interface:
+  display_name: "Method-Gap Research Status"
+  short_description: "Choose the next skill for a method-gap census"
+  default_prompt: "Use $method-gap-research-status with an exact skill-name family such as game-* to recommend one target, or none, for a census-only method-gap research review."
+
+policy:
+  allow_implicit_invocation: false
+

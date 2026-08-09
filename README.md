@@ -8,11 +8,11 @@ The project is deliberately not a clone detector and not an automatic refactorin
 
 ## Status
 
-**Repository enrollment and marker-only portfolio reporting implemented.**
+**Repository enrollment, marker-only portfolio reporting, and skill governance implemented.**
 
 The public Rust crate and standalone `reuse-evidence` binary can enroll a Git repository, including an npm workspace with no Cargo project. Enrollment writes a human-readable version 1 TOML marker at the nearest repository root, safely revalidates an existing marker without minting another identity, and uses the binary's shared success, unsafe-failure, and refusal exit meanings.
 
-Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, and unsupported marker versions. Historical portfolio deltas, the case lifecycle, capture, review, verification, and installed skill assets are not implemented yet.
+Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, and unsupported marker versions. The binary also mounts the published `skill-evidence` lifecycle under `reuse-evidence skills` and this repository commits the four operator packages it installs. Historical portfolio deltas, the reuse-case lifecycle, capture, review, verification, and this project's own `reuse-evidence-*` skill packages are not implemented yet.
 
 The selected delivery constraints are:
 
@@ -100,6 +100,22 @@ With neither configured nor supplied roots, the command refuses and names the ex
 Duplicate repository identities are reported as conflicts with every current path and make the command refuse with status `3` until every enrolled repository has a unique stable identity. A marker carrying another integer schema version is reported by path and version without interpreting its newer fields. Unmarked or otherwise invalid repositories are absent. Removing a marker withdraws its repository from the next report.
 
 This report is read-only: it writes no repository, cache, or configuration state, performs no network access, and emits no score, ranking, percentage, or health metric. New, moved, unavailable, and visibility-changed historical conditions require derived state and remain unimplemented.
+
+## Skill governance
+
+The `reuse-evidence` binary mounts the command surface from the published `skill-evidence` crate under its own `skills` subcommand:
+
+```console
+reuse-evidence skills evidence install --root .
+```
+
+The registry dependency resolves to `skill-evidence` 0.2.1 in `Cargo.lock`; it is not a path or Git dependency. The host identity is `reuse-evidence` for the schema namespace, command, and Cargo package. Its operator-skill directory is resolved from this crate's own manifest directory, never from the repository supplied through `--root`.
+
+The install command writes four operator packages under `.claude/skills/`, relative discovery links under `.agents/skills/`, and the two versioned contracts under `schemas/skill-evidence/`. A non-force install refuses with status `3` if any installed file differs, names every differing file, and writes nothing. `--force` is the explicit replacement operation.
+
+The mounted subtree's command contract and operator packages are versioned upstream by `skill-evidence`, not independently by this crate. `reuse-evidence` supplies the host identity and maps upstream outcomes onto the same process meanings used by its own commands: `0` success, `1` unsafe failure, and `3` refusal. Upstream diagnostic wording is not a byte-stable promise of this project.
+
+Dependency installation and upgrades do not migrate, rewrite, reorder, or merge `reports/skill-evidence/` receipts. A changed operator package has different content and therefore a new content hash; prior receipts remain historical evidence. This dependency governs this repository's skill assets only. It is not used for reuse-case events, readiness, decisions, briefs, or verification, and does not establish or share a lifecycle kernel between the projects.
 
 ## Intended lifecycle
 

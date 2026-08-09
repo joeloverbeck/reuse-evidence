@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "reuse-evidence.skill-evidence.event.v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "event_id",
+    "event_type",
+    "recorded_at",
+    "operator_workflow",
+    "target",
+    "top_level_session_id",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "event_id": { "type": "string", "minLength": 1 },
+    "event_type": {
+      "enum": [
+        "use_recorded",
+        "review_started",
+        "review_disposition",
+        "validation_completed",
+        "change_landed",
+        "decontamination_started",
+        "decontamination_completed"
+      ]
+    },
+    "recorded_at": { "type": "string", "format": "date-time" },
+    "operator_workflow": { "type": "string", "minLength": 1 },
+    "target": {
+      "type": "object",
+      "required": ["name", "repo_relative_path", "content_hash", "repo_head"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "repo_relative_path": { "type": "string", "minLength": 1 },
+        "content_hash": { "type": "string", "minLength": 1 },
+        "repo_head": { "type": "string", "minLength": 1 }
+      }
+    },
+    "top_level_session_id": { "type": "string", "minLength": 1 },
+    "payload": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "event_type": { "const": "use_recorded" } },
+        "required": ["event_type"]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "qualifying_use",
+              "retrospective",
+              "task_label",
+              "task_fingerprint",
+              "outcome",
+              "symptom_key",
+              "expected",
+              "observed",
+              "consequence",
+              "workaround_taken",
+              "evidence_refs",
+              "same_run_group"
+            ],
+            "properties": {
+              "qualifying_use": { "const": true },
+              "retrospective": { "type": "boolean" },
+              "task_label": { "type": "string", "minLength": 1 },
+              "task_fingerprint": { "type": "string", "minLength": 1 },
+              "outcome": {
+                "enum": [
+                  "clean",
+                  "friction",
+                  "material_failure",
+                  "severe_incident"
+                ]
+              },
+              "symptom_key": {
+                "type": ["string", "null"],
+                "enum": [
+                  "triggering",
+                  "execution",
+                  "output",
+                  "state",
+                  "tool-compatibility",
+                  "coordination",
+                  "cost",
+                  "unknown",
+                  null
+                ]
+              },
+              "expected": { "type": ["string", "null"] },
+              "observed": { "type": ["string", "null"] },
+              "consequence": { "type": ["string", "null"] },
+              "workaround_taken": {
+                "type": ["string", "null"],
+                "minLength": 1
+              },
+              "run_condition": {
+                "type": ["string", "null"],
+                "minLength": 1
+              },
+              "evidence_refs": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+              },
+              "same_run_group": { "type": "string", "minLength": 1 }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": { "outcome": { "const": "clean" } },
+                  "required": ["outcome"]
+                },
+                "then": {
+                  "properties": {
+                    "symptom_key": { "const": null },
+                    "expected": { "const": null },
+                    "observed": { "const": null },
+                    "consequence": { "const": null },
+                    "workaround_taken": { "const": null },
+                    "run_condition": { "const": null }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "outcome": {
+                      "enum": [
+                        "friction",
+                        "material_failure",
+                        "severe_incident"
+                      ]
+                    }
+                  },
+                  "required": ["outcome"]
+                },
+                "then": {
+                  "properties": {
+                    "symptom_key": {
+                      "enum": [
+                        "triggering",
+                        "execution",
+                        "output",
+                        "state",
+                        "tool-compatibility",
+                        "coordination",
+                        "cost",
+                        "unknown"
+                      ]
+                    },
+                    "expected": { "type": "string", "minLength": 1 },
+                    "observed": { "type": "string", "minLength": 1 },
+                    "consequence": { "type": "string", "minLength": 1 }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": { "retrospective": { "const": true } },
+                  "required": ["retrospective"]
+                },
+                "then": {
+                  "properties": {
+                    "evidence_refs": { "minItems": 1 }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "event_type": { "const": "review_disposition" } },
+        "required": ["event_type"]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["review_id", "disposition", "adjudicated_event_ids"],
+            "properties": {
+              "review_id": { "type": "string", "minLength": 1 },
+              "disposition": {
+                "enum": [
+                  "resolved_by_change",
+                  "closed_no_skill_defect",
+                  "outside_target",
+                  "insufficient_independence",
+                  "monitor_for_recurrence",
+                  "superseded_by_target_version",
+                  "candidate_rejected_validation",
+                  "blocked_no_valid_test"
+                ]
+              },
+              "adjudicated_event_ids": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event_type": {
+            "enum": [
+              "review_started",
+              "validation_completed",
+              "change_landed",
+              "decontamination_started",
+              "decontamination_completed"
+            ]
+          }
+        },
+        "required": ["event_type"]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["review_id"],
+            "properties": {
+              "review_id": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

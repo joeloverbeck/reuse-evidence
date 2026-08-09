@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -45,6 +46,8 @@ enum Command {
         #[arg(long)]
         root: Vec<PathBuf>,
     },
+    /// Govern this repository's installed agent skills.
+    Skills(skill_evidence::cli::SkillsArgs),
 }
 
 fn main() -> ExitCode {
@@ -78,6 +81,7 @@ fn run(cli: Cli) -> ExitCode {
         }) => run_enroll(ecosystem_id, visibility, expected_repository_id),
         Some(Command::SetVisibility { visibility }) => run_set_visibility(visibility),
         Some(Command::Portfolio { root }) => run_portfolio(&root),
+        Some(Command::Skills(args)) => return run_skills(args),
         None => {
             let mut command = Cli::command();
             let usage = command.render_usage();
@@ -96,6 +100,32 @@ fn run(cli: Cli) -> ExitCode {
             eprintln!("{}: {message}", terminal_name(meaning));
             ExitCode::from(meaning.status())
         }
+    }
+}
+
+fn run_skills(args: skill_evidence::cli::SkillsArgs) -> ExitCode {
+    let mut out = io::stdout().lock();
+    let mut err = io::stderr().lock();
+    let exit = skill_evidence::cli::run(args, &skill_evidence_host(), &mut out, &mut err);
+    out.flush().ok();
+    err.flush().ok();
+    ExitCode::from(skill_exit_meaning(exit).status())
+}
+
+fn skill_evidence_host() -> skill_evidence::Host {
+    skill_evidence::Host {
+        namespace: "reuse-evidence".to_owned(),
+        command: "reuse-evidence".to_owned(),
+        cargo_package: "reuse-evidence".to_owned(),
+        skills_directory: PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".claude/skills"),
+    }
+}
+
+const fn skill_exit_meaning(exit: skill_evidence::cli::Exit) -> ExitMeaning {
+    match exit {
+        skill_evidence::cli::Exit::Success => ExitMeaning::Success,
+        skill_evidence::cli::Exit::UnsafeFailure => ExitMeaning::UnsafeFailure,
+        skill_evidence::cli::Exit::Refusal => ExitMeaning::Refusal,
     }
 }
 

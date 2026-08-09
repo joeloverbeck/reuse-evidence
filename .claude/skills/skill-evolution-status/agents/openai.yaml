@@ -1,0 +1,7 @@
+interface:
+  display_name: "Skill Evolution Status"
+  short_description: "Distinguish ready, deferred, and blocked skill evolution"
+  default_prompt: "Use $skill-evolution-status with no arguments to distinguish skills ready for evolution, deferred after a same-hash review, or blocked after eligibility."
+
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Skill Evidence Capture"
+  short_description: "Record a receipt for a completed skill use"
+  default_prompt: "Use $skill-evidence-capture with the exercised skill's path to record one factual receipt for its just-completed use."
+
+policy:
+  allow_implicit_invocation: false
