@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
-use std::fmt::Write as _;
+use std::fmt::{self, Display, Formatter};
 use std::fs::{self, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -38,6 +38,12 @@ struct Scan {
     enrollments: Vec<Enrollment>,
     unsupported_markers: Vec<UnsupportedMarker>,
     unreadable_markers: Vec<UnreadableMarker>,
+}
+
+struct PortfolioObservation<'a> {
+    roots: &'a [PathBuf],
+    inspected_repositories: &'a BTreeSet<PathBuf>,
+    enrollments: &'a [Enrollment],
 }
 
 enum MarkerInspection {
@@ -91,9 +97,17 @@ pub(crate) fn report(root_overrides: &[PathBuf]) -> Result<PortfolioReport, Port
         .into_iter()
         .map(|repository| (repository.repository_id, repository))
         .collect::<BTreeMap<_, _>>();
-    let changes = derive_changes(&scan, &previous_repositories);
+    let observation = PortfolioObservation {
+        roots: &scan.roots,
+        inspected_repositories: &scan.inspected_repositories,
+        enrollments: &scan.enrollments,
+    };
+    let changes = derive_changes(&observation, &previous_repositories);
     let output = render_report(&scan, &identity_paths, Some(&changes));
-    save_state(&state_path, &next_state(&scan, previous_repositories))?;
+    save_state(
+        &state_path,
+        &next_state(&observation, previous_repositories),
+    )?;
     Ok(PortfolioReport::Complete(output))
 }
 
@@ -110,17 +124,17 @@ fn duplicate_identity_paths(enrollments: &[Enrollment]) -> BTreeMap<Uuid, Vec<Pa
 }
 
 fn derive_changes(
-    scan: &Scan,
+    observation: &PortfolioObservation<'_>,
     previous_repositories: &BTreeMap<Uuid, Enrollment>,
 ) -> PortfolioChanges {
-    let mut new_repositories = scan
+    let mut new_repositories = observation
         .enrollments
         .iter()
         .filter(|repository| !previous_repositories.contains_key(&repository.repository_id))
         .cloned()
         .collect::<Vec<_>>();
     new_repositories.sort_by(|left, right| left.repository_id.cmp(&right.repository_id));
-    let mut moved_repositories = scan
+    let mut moved_repositories = observation
         .enrollments
         .iter()
         .filter_map(|repository| {
@@ -132,21 +146,26 @@ fn derive_changes(
     let mut unavailable_repositories = previous_repositories
         .values()
         .filter(|repository| {
-            !scan
+            !observation
                 .enrollments
                 .iter()
                 .any(|current| current.repository_id == repository.repository_id)
         })
         .filter(|repository| {
-            scan.roots
+            observation
+                .roots
                 .iter()
                 .any(|root| repository.path.starts_with(root))
         })
-        .filter(|repository| !scan.inspected_repositories.contains(&repository.path))
+        .filter(|repository| {
+            !observation
+                .inspected_repositories
+                .contains(&repository.path)
+        })
         .cloned()
         .collect::<Vec<_>>();
     unavailable_repositories.sort_by(|left, right| left.repository_id.cmp(&right.repository_id));
-    let mut visibility_changes = scan
+    let mut visibility_changes = observation
         .enrollments
         .iter()
         .filter_map(|repository| {
@@ -170,133 +189,189 @@ fn render_report(
     identity_paths: &BTreeMap<Uuid, Vec<PathBuf>>,
     changes: Option<&PortfolioChanges>,
 ) -> String {
-    let mut grouped = BTreeMap::<String, Vec<Enrollment>>::new();
-    for enrollment in scan.enrollments.iter().cloned() {
-        grouped
-            .entry(enrollment.ecosystem_id.clone())
-            .or_default()
-            .push(enrollment);
+    PortfolioReportView {
+        scan,
+        identity_paths,
+        changes,
     }
+    .to_string()
+}
 
-    let mut output = String::new();
-    if scan.enrollments.is_empty()
-        && scan.unsupported_markers.is_empty()
-        && scan.unreadable_markers.is_empty()
-    {
-        output.push_str("no enrolled repositories found\n");
-    }
-    for (ecosystem_id, mut entries) in grouped {
-        entries.sort_by(|left, right| {
-            left.repository_id
-                .cmp(&right.repository_id)
-                .then_with(|| left.path.cmp(&right.path))
-        });
-        writeln!(output, "ecosystem: {ecosystem_id}").expect("writing to a string cannot fail");
-        for entry in entries {
-            write_repository_entry(&mut output, &entry);
-        }
-    }
-    if !identity_paths.is_empty() {
-        writeln!(output, "duplicate repository identity conflicts:")
-            .expect("writing to a string cannot fail");
-        for (repository_id, paths) in identity_paths {
-            let mut paths = paths.clone();
-            paths.sort();
-            writeln!(output, "- repository_id: {repository_id}")
-                .expect("writing to a string cannot fail");
-            writeln!(output, "  paths:").expect("writing to a string cannot fail");
-            for path in paths {
-                writeln!(output, "  - {}", path.display())
-                    .expect("writing to a string cannot fail");
+struct PortfolioReportView<'a> {
+    scan: &'a Scan,
+    identity_paths: &'a BTreeMap<Uuid, Vec<PathBuf>>,
+    changes: Option<&'a PortfolioChanges>,
+}
+
+enum RepositoryEntryView<'a> {
+    Enrolled(&'a Enrollment),
+    IdentityConflict {
+        repository_id: &'a Uuid,
+        paths: &'a [PathBuf],
+    },
+    Moved {
+        repository: &'a Enrollment,
+        previous_path: &'a Path,
+    },
+    VisibilityChanged {
+        repository: &'a Enrollment,
+        previous_visibility: &'a Visibility,
+    },
+}
+
+impl Display for RepositoryEntryView<'_> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        let repository_id = match self {
+            Self::Enrolled(repository)
+            | Self::Moved { repository, .. }
+            | Self::VisibilityChanged { repository, .. } => &repository.repository_id,
+            Self::IdentityConflict { repository_id, .. } => repository_id,
+        };
+        writeln!(formatter, "- repository_id: {repository_id}")?;
+
+        match self {
+            Self::Enrolled(repository) => {
+                writeln!(formatter, "  path: {}", repository.path.display())?;
+                writeln!(formatter, "  visibility: {}", repository.visibility)
+            }
+            Self::IdentityConflict { paths, .. } => {
+                writeln!(formatter, "  paths:")?;
+                let mut paths = paths.iter().collect::<Vec<_>>();
+                paths.sort();
+                for path in paths {
+                    writeln!(formatter, "  - {}", path.display())?;
+                }
+                Ok(())
+            }
+            Self::Moved {
+                repository,
+                previous_path,
+            } => {
+                writeln!(formatter, "  previous_path: {}", previous_path.display())?;
+                writeln!(formatter, "  path: {}", repository.path.display())
+            }
+            Self::VisibilityChanged {
+                repository,
+                previous_visibility,
+            } => {
+                writeln!(formatter, "  path: {}", repository.path.display())?;
+                writeln!(formatter, "  previous_visibility: {previous_visibility}")?;
+                writeln!(formatter, "  visibility: {}", repository.visibility)
             }
         }
     }
-    if !scan.unsupported_markers.is_empty() {
-        writeln!(output, "unsupported marker versions:").expect("writing to a string cannot fail");
-        let mut unsupported_markers = scan.unsupported_markers.iter().collect::<Vec<_>>();
-        unsupported_markers.sort_by(|left, right| left.path().cmp(right.path()));
-        for marker in unsupported_markers {
-            writeln!(output, "- marker: {}", marker.path().display())
-                .expect("writing to a string cannot fail");
-            writeln!(output, "  schema_version: {}", marker.schema_version())
-                .expect("writing to a string cannot fail");
-        }
-    }
-    if !scan.unreadable_markers.is_empty() {
-        writeln!(output, "unreadable repository markers:")
-            .expect("writing to a string cannot fail");
-        let mut unreadable_markers = scan.unreadable_markers.iter().collect::<Vec<_>>();
-        unreadable_markers.sort_by(|left, right| left.path().cmp(right.path()));
-        for marker in unreadable_markers {
-            writeln!(output, "- marker: {}", marker.path().display())
-                .expect("writing to a string cannot fail");
-            writeln!(output, "  reason: {}", marker.reason())
-                .expect("writing to a string cannot fail");
-        }
-    }
-    if let Some(changes) = changes {
-        append_changes(&mut output, changes);
-    }
-    output
 }
 
-fn append_changes(output: &mut String, changes: &PortfolioChanges) {
-    if !changes.new_repositories.is_empty() {
-        writeln!(output, "new repositories:").expect("writing to a string cannot fail");
-        for repository in &changes.new_repositories {
-            write_repository_entry(output, repository);
+impl Display for PortfolioReportView<'_> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        let mut grouped = BTreeMap::<&str, Vec<&Enrollment>>::new();
+        for enrollment in &self.scan.enrollments {
+            grouped
+                .entry(&enrollment.ecosystem_id)
+                .or_default()
+                .push(enrollment);
         }
-    }
-    if !changes.moved_repositories.is_empty() {
-        writeln!(output, "moved repositories:").expect("writing to a string cannot fail");
-        for (repository, previous_path) in &changes.moved_repositories {
-            writeln!(output, "- repository_id: {}", repository.repository_id)
-                .expect("writing to a string cannot fail");
-            writeln!(output, "  previous_path: {}", previous_path.display())
-                .expect("writing to a string cannot fail");
-            writeln!(output, "  path: {}", repository.path.display())
-                .expect("writing to a string cannot fail");
-        }
-    }
-    if !changes.unavailable_repositories.is_empty() {
-        writeln!(output, "unavailable repositories:").expect("writing to a string cannot fail");
-        for repository in &changes.unavailable_repositories {
-            write_repository_entry(output, repository);
-        }
-    }
-    if !changes.visibility_changes.is_empty() {
-        writeln!(output, "visibility changed repositories:")
-            .expect("writing to a string cannot fail");
-        for (repository, previous_visibility) in &changes.visibility_changes {
-            writeln!(output, "- repository_id: {}", repository.repository_id)
-                .expect("writing to a string cannot fail");
-            writeln!(output, "  path: {}", repository.path.display())
-                .expect("writing to a string cannot fail");
-            writeln!(output, "  previous_visibility: {previous_visibility}")
-                .expect("writing to a string cannot fail");
-            writeln!(output, "  visibility: {}", repository.visibility)
-                .expect("writing to a string cannot fail");
-        }
-    }
-}
 
-fn write_repository_entry(output: &mut String, repository: &Enrollment) {
-    writeln!(output, "- repository_id: {}", repository.repository_id)
-        .expect("writing to a string cannot fail");
-    writeln!(output, "  path: {}", repository.path.display())
-        .expect("writing to a string cannot fail");
-    writeln!(output, "  visibility: {}", repository.visibility)
-        .expect("writing to a string cannot fail");
+        if self.scan.enrollments.is_empty()
+            && self.scan.unsupported_markers.is_empty()
+            && self.scan.unreadable_markers.is_empty()
+        {
+            writeln!(formatter, "no enrolled repositories found")?;
+        }
+        for (ecosystem_id, mut entries) in grouped {
+            entries.sort_by(|left, right| {
+                left.repository_id
+                    .cmp(&right.repository_id)
+                    .then_with(|| left.path.cmp(&right.path))
+            });
+            writeln!(formatter, "ecosystem: {ecosystem_id}")?;
+            for entry in entries {
+                write!(formatter, "{}", RepositoryEntryView::Enrolled(entry))?;
+            }
+        }
+        if !self.identity_paths.is_empty() {
+            writeln!(formatter, "duplicate repository identity conflicts:")?;
+            for (repository_id, paths) in self.identity_paths {
+                write!(
+                    formatter,
+                    "{}",
+                    RepositoryEntryView::IdentityConflict {
+                        repository_id,
+                        paths,
+                    }
+                )?;
+            }
+        }
+        if !self.scan.unsupported_markers.is_empty() {
+            writeln!(formatter, "unsupported marker versions:")?;
+            let mut unsupported_markers = self.scan.unsupported_markers.iter().collect::<Vec<_>>();
+            unsupported_markers.sort_by(|left, right| left.path().cmp(right.path()));
+            for marker in unsupported_markers {
+                writeln!(formatter, "- marker: {}", marker.path().display())?;
+                writeln!(formatter, "  schema_version: {}", marker.schema_version())?;
+            }
+        }
+        if !self.scan.unreadable_markers.is_empty() {
+            writeln!(formatter, "unreadable repository markers:")?;
+            let mut unreadable_markers = self.scan.unreadable_markers.iter().collect::<Vec<_>>();
+            unreadable_markers.sort_by(|left, right| left.path().cmp(right.path()));
+            for marker in unreadable_markers {
+                writeln!(formatter, "- marker: {}", marker.path().display())?;
+                writeln!(formatter, "  reason: {}", marker.reason())?;
+            }
+        }
+        if let Some(changes) = self.changes {
+            if !changes.new_repositories.is_empty() {
+                writeln!(formatter, "new repositories:")?;
+                for repository in &changes.new_repositories {
+                    write!(formatter, "{}", RepositoryEntryView::Enrolled(repository))?;
+                }
+            }
+            if !changes.moved_repositories.is_empty() {
+                writeln!(formatter, "moved repositories:")?;
+                for (repository, previous_path) in &changes.moved_repositories {
+                    write!(
+                        formatter,
+                        "{}",
+                        RepositoryEntryView::Moved {
+                            repository,
+                            previous_path,
+                        }
+                    )?;
+                }
+            }
+            if !changes.unavailable_repositories.is_empty() {
+                writeln!(formatter, "unavailable repositories:")?;
+                for repository in &changes.unavailable_repositories {
+                    write!(formatter, "{}", RepositoryEntryView::Enrolled(repository))?;
+                }
+            }
+            if !changes.visibility_changes.is_empty() {
+                writeln!(formatter, "visibility changed repositories:")?;
+                for (repository, previous_visibility) in &changes.visibility_changes {
+                    write!(
+                        formatter,
+                        "{}",
+                        RepositoryEntryView::VisibilityChanged {
+                            repository,
+                            previous_visibility,
+                        }
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 fn next_state(
-    scan: &Scan,
+    observation: &PortfolioObservation<'_>,
     mut previous_repositories: BTreeMap<Uuid, Enrollment>,
 ) -> PortfolioState {
-    for inspected_repository in &scan.inspected_repositories {
+    for inspected_repository in observation.inspected_repositories {
         previous_repositories.retain(|_, repository| repository.path != *inspected_repository);
     }
-    for repository in &scan.enrollments {
+    for repository in observation.enrollments {
         previous_repositories.insert(repository.repository_id, repository.clone());
     }
     PortfolioState {
@@ -665,4 +740,147 @@ fn nonempty_environment_path(name: &str) -> Option<PathBuf> {
     env::var_os(name)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn enrollment(repository_id: &str, path: &str, visibility: Visibility) -> Enrollment {
+        Enrollment {
+            repository_id: Uuid::parse_str(repository_id)
+                .expect("test repository identity should be valid"),
+            ecosystem_id: "products".to_owned(),
+            path: PathBuf::from(path),
+            visibility,
+        }
+    }
+
+    #[test]
+    fn derive_changes_reports_each_current_observation_difference() {
+        let root = PathBuf::from("/portfolio");
+        let new_repository = enrollment(
+            "00000000-0000-4000-8000-000000000101",
+            "/portfolio/new",
+            Visibility::Private,
+        );
+        let moved_repository = enrollment(
+            "00000000-0000-4000-8000-000000000102",
+            "/portfolio/moved",
+            Visibility::Private,
+        );
+        let unavailable_repository = enrollment(
+            "00000000-0000-4000-8000-000000000103",
+            "/portfolio/unavailable",
+            Visibility::Private,
+        );
+        let visibility_changed_repository = enrollment(
+            "00000000-0000-4000-8000-000000000104",
+            "/portfolio/visibility",
+            Visibility::Public,
+        );
+        let enrollments = vec![
+            new_repository.clone(),
+            moved_repository.clone(),
+            visibility_changed_repository.clone(),
+        ];
+        let inspected_repositories = enrollments
+            .iter()
+            .map(|repository| repository.path.clone())
+            .collect();
+        let roots = vec![root];
+        let observation = PortfolioObservation {
+            roots: &roots,
+            inspected_repositories: &inspected_repositories,
+            enrollments: &enrollments,
+        };
+        let previous_repositories = [
+            (
+                moved_repository.repository_id,
+                enrollment(
+                    "00000000-0000-4000-8000-000000000102",
+                    "/portfolio/original",
+                    Visibility::Private,
+                ),
+            ),
+            (
+                unavailable_repository.repository_id,
+                unavailable_repository.clone(),
+            ),
+            (
+                visibility_changed_repository.repository_id,
+                enrollment(
+                    "00000000-0000-4000-8000-000000000104",
+                    "/portfolio/visibility",
+                    Visibility::Private,
+                ),
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        let changes = derive_changes(&observation, &previous_repositories);
+
+        assert_eq!(changes.new_repositories.len(), 1);
+        assert_eq!(
+            changes.new_repositories[0].repository_id,
+            new_repository.repository_id
+        );
+        assert_eq!(changes.moved_repositories.len(), 1);
+        assert_eq!(
+            changes.moved_repositories[0].0.repository_id,
+            moved_repository.repository_id
+        );
+        assert_eq!(
+            changes.moved_repositories[0].1,
+            PathBuf::from("/portfolio/original")
+        );
+        assert_eq!(changes.unavailable_repositories.len(), 1);
+        assert_eq!(
+            changes.unavailable_repositories[0].repository_id,
+            unavailable_repository.repository_id
+        );
+        assert_eq!(changes.visibility_changes.len(), 1);
+        assert_eq!(
+            changes.visibility_changes[0].0.repository_id,
+            visibility_changed_repository.repository_id
+        );
+        assert_eq!(changes.visibility_changes[0].1, Visibility::Private);
+    }
+
+    #[test]
+    fn next_state_replaces_a_stale_identity_at_an_inspected_path() {
+        let repository_path = PathBuf::from("/portfolio/current");
+        let current_repository = enrollment(
+            "00000000-0000-4000-8000-000000000112",
+            "/portfolio/current",
+            Visibility::Public,
+        );
+        let enrollments = vec![current_repository.clone()];
+        let inspected_repositories = [repository_path.clone()].into_iter().collect();
+        let roots = vec![PathBuf::from("/portfolio")];
+        let observation = PortfolioObservation {
+            roots: &roots,
+            inspected_repositories: &inspected_repositories,
+            enrollments: &enrollments,
+        };
+        let stale_repository = enrollment(
+            "00000000-0000-4000-8000-000000000111",
+            "/portfolio/current",
+            Visibility::Private,
+        );
+        let previous_repositories = [(stale_repository.repository_id, stale_repository)]
+            .into_iter()
+            .collect();
+
+        let state = next_state(&observation, previous_repositories);
+
+        assert_eq!(state.repositories.len(), 1);
+        assert_eq!(
+            state.repositories[0].repository_id,
+            current_repository.repository_id
+        );
+        assert_eq!(state.repositories[0].path, repository_path);
+        assert_eq!(state.repositories[0].visibility, Visibility::Public);
+    }
 }
