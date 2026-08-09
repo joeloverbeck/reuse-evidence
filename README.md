@@ -8,11 +8,11 @@ The project is deliberately not a clone detector and not an automatic refactorin
 
 ## Status
 
-**Repository enrollment and identity-preserving re-enrollment implemented.**
+**Repository enrollment and marker-only portfolio reporting implemented.**
 
 The public Rust crate and standalone `reuse-evidence` binary can enroll a Git repository, including an npm workspace with no Cargo project. Enrollment writes a human-readable version 1 TOML marker at the nearest repository root, safely revalidates an existing marker without minting another identity, and uses the binary's shared success, unsafe-failure, and refusal exit meanings.
 
-Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. Portfolio discovery, the case lifecycle, capture, review, verification, and installed skill assets are not implemented yet.
+Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, and unsupported marker versions. Historical portfolio deltas, the case lifecycle, capture, review, verification, and installed skill assets are not implemented yet.
 
 The selected delivery constraints are:
 
@@ -72,6 +72,34 @@ The default `cli` feature enables argument parsing and builds the standalone bin
 ```console
 cargo build --no-default-features --lib
 ```
+
+## Portfolio report
+
+Configure roots outside any repository in the platform's user-local `reuse-evidence/config.toml` file:
+
+```toml
+portfolio_roots = ["/home/alice/src", "/work/selected-products"]
+```
+
+On Linux the command uses `$XDG_CONFIG_HOME/reuse-evidence/config.toml`, falling back to `$HOME/.config/reuse-evidence/config.toml`. On macOS it uses `$XDG_CONFIG_HOME` when set, otherwise `$HOME/Library/Application Support/reuse-evidence/config.toml`; on Windows it uses `%APPDATA%\reuse-evidence\config.toml`.
+
+Run a fresh marker-only scan with:
+
+```console
+reuse-evidence portfolio
+```
+
+One or more `--root` values replace the configured roots for that invocation:
+
+```console
+reuse-evidence portfolio --root /home/alice/src/games --root /work/tools
+```
+
+With neither configured nor supplied roots, the command refuses and names the expected configuration file. Each run walks the selected roots afresh, reports only Git repositories with valid version 1 markers, groups them by declared ecosystem identity, and names each repository identity together with its current path and visibility. Ecosystem identity is presentation only; it never filters the selected roots.
+
+Duplicate repository identities are reported as conflicts with every current path and make the command refuse with status `3` until every enrolled repository has a unique stable identity. A marker carrying another integer schema version is reported by path and version without interpreting its newer fields. Unmarked or otherwise invalid repositories are absent. Removing a marker withdraws its repository from the next report.
+
+This report is read-only: it writes no repository, cache, or configuration state, performs no network access, and emits no score, ranking, percentage, or health metric. New, moved, unavailable, and visibility-changed historical conditions require derived state and remain unimplemented.
 
 ## Intended lifecycle
 

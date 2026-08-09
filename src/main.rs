@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand, error::ErrorKind};
@@ -8,6 +8,8 @@ use reuse_evidence::{
     EnrollmentEffect, ExitMeaning, Visibility, enroll_with_expected_repository_id, set_visibility,
 };
 use uuid::Uuid;
+
+mod portfolio;
 
 #[derive(Debug, Parser)]
 #[command(name = "reuse-evidence")]
@@ -36,6 +38,12 @@ enum Command {
         /// New declared repository visibility: public or private.
         #[arg(long)]
         visibility: Option<String>,
+    },
+    /// Rescan configured roots and report marker-enrolled repositories.
+    Portfolio {
+        /// Portfolio root for this run; overrides user-local configuration.
+        #[arg(long)]
+        root: Vec<PathBuf>,
     },
 }
 
@@ -69,6 +77,7 @@ fn run(cli: Cli) -> ExitCode {
             expected_repository_id,
         }) => run_enroll(ecosystem_id, visibility, expected_repository_id),
         Some(Command::SetVisibility { visibility }) => run_set_visibility(visibility),
+        Some(Command::Portfolio { root }) => run_portfolio(&root),
         None => {
             let mut command = Cli::command();
             let usage = command.render_usage();
@@ -87,6 +96,22 @@ fn run(cli: Cli) -> ExitCode {
             eprintln!("{}: {message}", terminal_name(meaning));
             ExitCode::from(meaning.status())
         }
+    }
+}
+
+fn run_portfolio(roots: &[PathBuf]) -> Result<(), (ExitMeaning, String)> {
+    let report = portfolio::report(roots).map_err(|message| (ExitMeaning::Refusal, message))?;
+    match report {
+        portfolio::PortfolioReport::Complete(report) => {
+            print!("{report}");
+            Ok(())
+        }
+        portfolio::PortfolioReport::IdentityConflict(report) => Err((
+            ExitMeaning::Refusal,
+            format!(
+                "duplicate repository identities make the portfolio ambiguous\n{report}resolution: restore a unique stable repository identity for every enrolled repository before rerunning the report"
+            ),
+        )),
     }
 }
 
