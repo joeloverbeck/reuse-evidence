@@ -3,7 +3,8 @@
 **Status:** Accepted  
 **Date:** 2026-08-09  
 **Decision owner:** Repository maintainer  
-**Governing principles:** [`FOUNDATIONS.md`](../principles/FOUNDATIONS.md), [`CAPABILITY-AND-WORKFLOW-BOUNDARIES.md`](../principles/CAPABILITY-AND-WORKFLOW-BOUNDARIES.md)
+**Governing principles:** [`FOUNDATIONS.md`](../principles/FOUNDATIONS.md), [`CAPABILITY-AND-WORKFLOW-BOUNDARIES.md`](../principles/CAPABILITY-AND-WORKFLOW-BOUNDARIES.md)  
+**Amended:** 2026-08-09 by [ADR 0008](0008-published-skill-evidence-dependency.md), which scopes this ADR's package-dependency clause to engineering-workflow skill sets consumed for implementation handoff. It does not authorize a dependency on any engineering workflow, and the decision below is otherwise unchanged.
 
 ## Context
 

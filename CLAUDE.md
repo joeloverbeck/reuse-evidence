@@ -40,7 +40,7 @@ Do not:
 - write clean or no-candidate evidence records;
 - turn discovery into a general architecture audit;
 - implement refactors inside the reuse-review capability;
-- make Matt Pocock's or any other external skill set a package dependency;
+- make Matt Pocock's or any other engineering-workflow skill set a package dependency; the published `skill-evidence` crate is a separately accepted governance dependency under ADR 0008, not an exception to this;
 - leak private repository identities, paths, source, or evidence into public state;
 - scan unmarked repositories merely because they sit beneath a configured root;
 - build a hosted service, daemon, MCP server, sensor-plugin platform, or central portfolio repository without new accepted evidence;

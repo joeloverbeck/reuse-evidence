@@ -25,7 +25,8 @@ This glossary is the shared language for `reuse-evidence`. Use these terms consi
 | **Evidence reference** | A recoverable pointer to a commit, diff, specification, test, source location, report, package, or other inspectable artifact. Conversation memory alone is not an evidence reference. |
 | **Enrolled repository** | A repository that contains a valid `reuse-evidence.toml` marker and therefore consents to local portfolio discovery under its declared visibility. Enrollment is not a migration obligation or backlog. |
 | **Portfolio root** | A user-local directory configured for discovery of enrolled repositories. Repositories beneath it are ignored unless they carry the marker. |
-| **Ecosystem** | A local set of enrolled repositories that may be compared for reuse pressure. It does not imply a public community, shared runtime, or product-line framework. |
+| **Ecosystem** | A local set of enrolled repositories that may be compared for reuse pressure. The set is determined by the configured portfolio roots. It does not imply a public community, shared runtime, or product-line framework. |
+| **Ecosystem identity** | The label a marker declares for the ecosystem its repository belongs to. It is recorded and reported so repositories can be grouped, and does not by itself restrict which enrolled repositories may be compared. |
 | **Steward repository** | The one repository that owns a case's authoritative event stream and accepted decision. Other participating repositories are referenced consumers, not synchronized copies. |
 | **Private dominance** | The rule that one private participant makes the complete case private. Private evidence may not be written into a public steward or public report. |
 | **Derived state** | Rebuildable projections such as case readiness, portfolio status, and indexes. Derived state is not an independent source of truth. |

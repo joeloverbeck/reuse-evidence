@@ -22,6 +22,7 @@ Only the human decision owner can accept, supersede, or reject an ADR. Merge, im
 | [0005](0005-optional-sensors-no-built-in-detector.md) | Sensors are optional evidence; the project does not build a detector in version 0.1. |
 | [0006](0006-reuse-decisions-not-refactor-execution.md) | Reuse review produces decisions and briefs; normal engineering performs refactors. |
 | [0007](0007-language-neutral-evidence-rust-first-delivery.md) | Evidence semantics are language-neutral while delivery is Rust-first. |
+| [0008](0008-published-skill-evidence-dependency.md) | The published `skill-evidence` crate governs this repository's own skills; ADR 0006's package-dependency clause is scoped to engineering-workflow skill sets. |
 
 ## Adding or changing an ADR
 
