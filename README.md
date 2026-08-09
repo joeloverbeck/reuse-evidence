@@ -8,9 +8,11 @@ The project is deliberately not a clone detector and not an automatic refactorin
 
 ## Status
 
-**Pre-implementation foundation.**
+**Initial repository-enrollment tracer bullet implemented.**
 
-This repository currently defines the mission, authority model, evidence semantics, privacy rules, capability boundaries, accepted architectural decisions, and the bounded acceptance target for version 0.1. It does not yet claim to implement the planned command or skill surface.
+The public Rust crate and standalone `reuse-evidence` binary can freshly enroll a Git repository, including an npm workspace with no Cargo project. Enrollment writes a human-readable version 1 TOML marker at the nearest repository root and uses the binary's shared success, unsafe-failure, and refusal exit meanings.
+
+This is deliberately a fresh-enrollment slice. Re-enrollment, identity-preserving idempotence, explicit visibility changes, portfolio discovery, the case lifecycle, capture, review, verification, and installed skill assets are not implemented yet.
 
 The selected delivery constraints are:
 
@@ -20,6 +22,41 @@ The selected delivery constraints are:
 - durable, inspectable case evidence rather than transcript memory;
 - human acceptance for every consequential reuse decision;
 - implementation delegated to the repository's normal engineering workflow.
+
+## Fresh enrollment
+
+From anywhere inside the Git repository to enroll:
+
+```console
+reuse-evidence enroll --ecosystem-id products --visibility private
+```
+
+`--visibility` accepts exactly `public` or `private`. A successful command writes `reuse-evidence.toml` at the nearest ancestor containing `.git` and reports the path and values it wrote on stdout. It adds no dependency or manifest entry to the enrolled repository and performs no network access.
+
+The marker is open, human-readable TOML with exactly these version 1 fields:
+
+```toml
+schema_version = 1
+repository_id = "cd5dfedd-6015-4ce3-9345-853e25859b0a"
+ecosystem_id = "products"
+visibility = "private"
+```
+
+`repository_id` is a generated opaque UUID. It contains no repository path, directory name, Cargo package identity, or npm package identity. `ecosystem_id` is a declared reporting label; it does not partition which enrolled repositories may later be compared.
+
+Every current command path uses one of three process statuses:
+
+| Status | Meaning |
+|---:|---|
+| `0` | Success |
+| `1` | Unsafe failure; no no-write guarantee is claimed |
+| `3` | Refusal; nothing was written, and stderr names the condition and resolution |
+
+The default `cli` feature enables argument parsing and builds the standalone binary. Library-only consumers can exclude that dependency:
+
+```console
+cargo build --no-default-features --lib
+```
 
 ## Intended lifecycle
 
