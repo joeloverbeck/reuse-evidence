@@ -1,16 +1,25 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-09T19:44:19.130545021Z",
+  "generated_at": "2026-08-09T21:26:42.546372308Z",
   "target_content_hash": "fa4587c9947cd3836cebbf6ebda49196f0b9fb0cef1b7b7ff5d03fc01f20d31f",
-  "qualifying_uses_on_current_hash": 1,
+  "qualifying_uses_on_current_hash": 2,
   "open_incident_ids": [
-    "evt_920ddf63-df49-4525-bfc0-366b2975ed73"
+    "evt_920ddf63-df49-4525-bfc0-366b2975ed73",
+    "evt_a86195b4-5a88-408f-a22a-f6ada76d20f5"
   ],
   "candidate_clusters": [
     {
       "symptom_key": "execution",
       "open_event_ids": [
         "evt_920ddf63-df49-4525-bfc0-366b2975ed73"
+      ],
+      "independent_incidents": 1,
+      "max_severity": "material_failure"
+    },
+    {
+      "symptom_key": "output",
+      "open_event_ids": [
+        "evt_a86195b4-5a88-408f-a22a-f6ada76d20f5"
       ],
       "independent_incidents": 1,
       "max_severity": "material_failure"
@@ -27,5 +36,5 @@
   "review_reentry_basis": null,
   "target_name": "tdd",
   "target_repo_relative_path": ".claude/skills/tdd",
-  "derivation_session_id": "019fe7d2-8e54-7c93-af09-b0c7c092d2c3"
+  "derivation_session_id": "019fe81e-0560-7400-a84a-153a0f83f6e0"
 }
