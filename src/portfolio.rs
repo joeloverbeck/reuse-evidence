@@ -6,6 +6,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use atomic_write_file::AtomicWriteFile;
+use reuse_evidence::marker::{self, MarkerRead, UnreadableMarker, UnsupportedMarker};
 use reuse_evidence::{ExitMeaning, Visibility};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -14,15 +15,6 @@ use uuid::Uuid;
 #[serde(deny_unknown_fields)]
 struct Config {
     portfolio_roots: Vec<PathBuf>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Marker {
-    schema_version: u64,
-    repository_id: Uuid,
-    ecosystem_id: String,
-    visibility: Visibility,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -40,22 +32,18 @@ struct PortfolioState {
 }
 
 #[derive(Debug)]
-struct UnsupportedMarker {
-    path: PathBuf,
-    schema_version: i64,
-}
-
-#[derive(Debug)]
 struct Scan {
     roots: Vec<PathBuf>,
     inspected_repositories: BTreeSet<PathBuf>,
     enrollments: Vec<Enrollment>,
     unsupported_markers: Vec<UnsupportedMarker>,
+    unreadable_markers: Vec<UnreadableMarker>,
 }
 
 enum MarkerInspection {
     Enrollment(Enrollment),
     Unsupported(UnsupportedMarker),
+    Unreadable(UnreadableMarker),
     Ignore,
 }
 
@@ -191,7 +179,10 @@ fn render_report(
     }
 
     let mut output = String::new();
-    if scan.enrollments.is_empty() && scan.unsupported_markers.is_empty() {
+    if scan.enrollments.is_empty()
+        && scan.unsupported_markers.is_empty()
+        && scan.unreadable_markers.is_empty()
+    {
         output.push_str("no enrolled repositories found\n");
     }
     for (ecosystem_id, mut entries) in grouped {
@@ -223,11 +214,23 @@ fn render_report(
     if !scan.unsupported_markers.is_empty() {
         writeln!(output, "unsupported marker versions:").expect("writing to a string cannot fail");
         let mut unsupported_markers = scan.unsupported_markers.iter().collect::<Vec<_>>();
-        unsupported_markers.sort_by(|left, right| left.path.cmp(&right.path));
+        unsupported_markers.sort_by(|left, right| left.path().cmp(right.path()));
         for marker in unsupported_markers {
-            writeln!(output, "- marker: {}", marker.path.display())
+            writeln!(output, "- marker: {}", marker.path().display())
                 .expect("writing to a string cannot fail");
-            writeln!(output, "  schema_version: {}", marker.schema_version)
+            writeln!(output, "  schema_version: {}", marker.schema_version())
+                .expect("writing to a string cannot fail");
+        }
+    }
+    if !scan.unreadable_markers.is_empty() {
+        writeln!(output, "unreadable repository markers:")
+            .expect("writing to a string cannot fail");
+        let mut unreadable_markers = scan.unreadable_markers.iter().collect::<Vec<_>>();
+        unreadable_markers.sort_by(|left, right| left.path().cmp(right.path()));
+        for marker in unreadable_markers {
+            writeln!(output, "- marker: {}", marker.path().display())
+                .expect("writing to a string cannot fail");
+            writeln!(output, "  reason: {}", marker.reason())
                 .expect("writing to a string cannot fail");
         }
     }
@@ -339,7 +342,7 @@ fn ensure_state_outside_repositories(
     }
     if let Some(repository) = resolved_state_path
         .ancestors()
-        .find(|ancestor| is_recognizable_git_metadata(&ancestor.join(".git")))
+        .find(|ancestor| marker::is_repository_root(ancestor))
     {
         return Err(PortfolioError::refusal(format!(
             "user-local portfolio state `{}` would be stored inside Git repository `{}`\nresolution: configure the platform state directory outside every Git repository",
@@ -348,10 +351,6 @@ fn ensure_state_outside_repositories(
         )));
     }
     Ok(())
-}
-
-fn is_recognizable_git_metadata(git_path: &Path) -> bool {
-    git_path.is_file() || git_path.join("HEAD").is_file()
 }
 
 fn resolve_path_through_existing_ancestor(path: &Path) -> std::io::Result<PathBuf> {
@@ -540,15 +539,17 @@ fn scan(roots: &[PathBuf]) -> Result<Scan, String> {
     let mut inspected_repositories = BTreeSet::new();
     let mut enrollments = Vec::new();
     let mut unsupported_markers = Vec::new();
+    let mut unreadable_markers = Vec::new();
     while let Some(directory) = directories.pop() {
         if !visited.insert(directory.clone()) {
             continue;
         }
-        if directory.join(".git").exists() {
+        if marker::is_repository_root(&directory) {
             inspected_repositories.insert(directory.clone());
-            match inspect_marker(&directory)? {
+            match inspect_marker(&directory) {
                 MarkerInspection::Enrollment(enrollment) => enrollments.push(enrollment),
                 MarkerInspection::Unsupported(marker) => unsupported_markers.push(marker),
+                MarkerInspection::Unreadable(marker) => unreadable_markers.push(marker),
                 MarkerInspection::Ignore => {}
             }
         }
@@ -588,54 +589,22 @@ fn scan(roots: &[PathBuf]) -> Result<Scan, String> {
         inspected_repositories,
         enrollments,
         unsupported_markers,
+        unreadable_markers,
     })
 }
 
-fn inspect_marker(repository: &Path) -> Result<MarkerInspection, String> {
-    let marker_path = repository.join(reuse_evidence::MARKER_FILE);
-    let marker_bytes = match fs::read(&marker_path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(MarkerInspection::Ignore);
-        }
-        Err(error) => {
-            return Err(format!(
-                "repository marker `{}` cannot be read: {error}\nresolution: make the marker readable or choose a narrower `--root <PATH>`",
-                marker_path.display()
-            ));
-        }
-    };
-    let Ok(marker_text) = std::str::from_utf8(&marker_bytes) else {
-        return Ok(MarkerInspection::Ignore);
-    };
-    let Ok(table) = toml::from_str::<toml::Table>(marker_text) else {
-        return Ok(MarkerInspection::Ignore);
-    };
-    let Some(schema_version) = table
-        .get("schema_version")
-        .and_then(toml::Value::as_integer)
-    else {
-        return Ok(MarkerInspection::Ignore);
-    };
-    if schema_version != 1 {
-        return Ok(MarkerInspection::Unsupported(UnsupportedMarker {
-            path: marker_path,
-            schema_version,
-        }));
+fn inspect_marker(repository: &Path) -> MarkerInspection {
+    match marker::read(repository) {
+        Some(MarkerRead::Supported(marker)) => MarkerInspection::Enrollment(Enrollment {
+            repository_id: marker.repository_id(),
+            ecosystem_id: marker.ecosystem_id().to_owned(),
+            path: repository.to_path_buf(),
+            visibility: marker.visibility(),
+        }),
+        Some(MarkerRead::UnsupportedSchemaVersion(marker)) => MarkerInspection::Unsupported(marker),
+        Some(MarkerRead::Unreadable(marker)) => MarkerInspection::Unreadable(marker),
+        None => MarkerInspection::Ignore,
     }
-    let Ok(marker) = toml::Value::Table(table).try_into::<Marker>() else {
-        return Ok(MarkerInspection::Ignore);
-    };
-    if marker.schema_version != 1 {
-        return Ok(MarkerInspection::Ignore);
-    }
-
-    Ok(MarkerInspection::Enrollment(Enrollment {
-        repository_id: marker.repository_id,
-        ecosystem_id: marker.ecosystem_id,
-        path: repository.to_path_buf(),
-        visibility: marker.visibility,
-    }))
 }
 
 fn config_path() -> Result<PathBuf, String> {

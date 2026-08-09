@@ -2,6 +2,8 @@
 
 //! Evidence-gated reuse decisions for repository portfolios.
 
+pub mod marker;
+
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -47,7 +49,7 @@ pub enum Visibility {
 }
 
 impl Visibility {
-    /// Parses the two visibility values supported by marker schema version 1.
+    /// Parses the two visibility values supported by the current marker schema.
     ///
     /// # Errors
     ///
@@ -137,19 +139,10 @@ impl fmt::Display for EnrollmentError {
 
 impl std::error::Error for EnrollmentError {}
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct Marker {
-    schema_version: u8,
-    repository_id: Uuid,
-    ecosystem_id: String,
-    visibility: Visibility,
-}
-
 /// Enrolls the repository containing `working_directory`.
 ///
-/// The repository root is the nearest ancestor containing a `.git` directory
-/// or file. An existing valid marker is preserved.
+/// The repository root is the nearest ancestor recognized by
+/// [`marker::is_repository_root`]. An existing valid marker is preserved.
 ///
 /// # Errors
 ///
@@ -179,49 +172,42 @@ pub fn enroll_with_expected_repository_id(
     visibility: Visibility,
     expected_repository_id: Option<Uuid>,
 ) -> Result<Enrollment, EnrollmentError> {
-    let marker_path = marker_path(working_directory)?;
-    match fs::read(&marker_path) {
-        Ok(marker_bytes) => {
-            let marker = parse_marker(
-                &marker_path,
-                &marker_bytes,
-                "restore a complete valid version 1 marker before rerunning enrollment",
-            )?;
-            if marker.visibility != visibility {
-                return Err(EnrollmentError::refusal(format!(
-                    "existing marker declares visibility `{}`, but enrollment requested `{visibility}`\nresolution: use `set-visibility --visibility {visibility}` for a deliberate visibility change",
-                    marker.visibility
-                )));
-            }
-            if marker.ecosystem_id != ecosystem_id {
-                return Err(EnrollmentError::refusal(format!(
-                    "existing marker declares ecosystem identity `{}`, but enrollment requested `{ecosystem_id}`\nresolution: rerun with `--ecosystem-id {}`; changing ecosystem identity is not implemented",
-                    marker.ecosystem_id, marker.ecosystem_id
-                )));
-            }
-            if let Some(expected_repository_id) = expected_repository_id
-                && marker.repository_id != expected_repository_id
-            {
-                return Err(EnrollmentError::refusal(format!(
-                    "existing marker declares repository identity `{}`, but enrollment expected `{expected_repository_id}`\nresolution: rerun with `--expected-repository-id {}` or omit the identity guard",
-                    marker.repository_id, marker.repository_id
-                )));
-            }
-            return Ok(Enrollment {
-                effect: EnrollmentEffect::Existing,
-                marker_path,
-                repository_id: marker.repository_id,
-                ecosystem_id: marker.ecosystem_id,
-                visibility: marker.visibility,
-            });
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(EnrollmentError::unsafe_failure(format!(
-                "could not read `{}`: {error}",
-                marker_path.display()
+    let repository_root = find_repository_root(working_directory)?;
+    let marker_path = repository_root.join(MARKER_FILE);
+    let malformed_resolution = format!(
+        "restore a complete valid version {} marker before rerunning enrollment",
+        marker::SUPPORTED_SCHEMA_VERSION
+    );
+    if let Some(marker) = marker_for_enrollment(&repository_root, &malformed_resolution)? {
+        if marker.visibility() != visibility {
+            return Err(EnrollmentError::refusal(format!(
+                "existing marker declares visibility `{}`, but enrollment requested `{visibility}`\nresolution: use `set-visibility --visibility {visibility}` for a deliberate visibility change",
+                marker.visibility()
             )));
         }
+        if marker.ecosystem_id() != ecosystem_id {
+            return Err(EnrollmentError::refusal(format!(
+                "existing marker declares ecosystem identity `{}`, but enrollment requested `{ecosystem_id}`\nresolution: rerun with `--ecosystem-id {}`; changing ecosystem identity is not implemented",
+                marker.ecosystem_id(),
+                marker.ecosystem_id()
+            )));
+        }
+        if let Some(expected_repository_id) = expected_repository_id
+            && marker.repository_id() != expected_repository_id
+        {
+            return Err(EnrollmentError::refusal(format!(
+                "existing marker declares repository identity `{}`, but enrollment expected `{expected_repository_id}`\nresolution: rerun with `--expected-repository-id {}` or omit the identity guard",
+                marker.repository_id(),
+                marker.repository_id()
+            )));
+        }
+        return Ok(Enrollment {
+            effect: EnrollmentEffect::Existing,
+            marker_path,
+            repository_id: marker.repository_id(),
+            ecosystem_id: marker.ecosystem_id().to_owned(),
+            visibility: marker.visibility(),
+        });
     }
 
     if expected_repository_id.is_some() {
@@ -232,12 +218,7 @@ pub fn enroll_with_expected_repository_id(
     }
 
     let repository_id = Uuid::new_v4();
-    let marker = Marker {
-        schema_version: 1,
-        repository_id,
-        ecosystem_id: ecosystem_id.to_owned(),
-        visibility,
-    };
+    let marker = marker::Marker::new(repository_id, ecosystem_id.to_owned(), visibility);
     let marker_bytes = toml::to_string(&marker).map_err(|error| {
         EnrollmentError::unsafe_failure(format!("could not encode the repository marker: {error}"))
     })?;
@@ -263,35 +244,28 @@ pub fn set_visibility(
     working_directory: &Path,
     visibility: Visibility,
 ) -> Result<Enrollment, EnrollmentError> {
-    let marker_path = marker_path(working_directory)?;
-    let marker_bytes = fs::read(&marker_path).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            EnrollmentError::refusal(format!(
-                "repository is not enrolled because `{}` does not exist\nresolution: run `enroll` before changing visibility",
-                marker_path.display()
-            ))
-        } else {
-            EnrollmentError::unsafe_failure(format!(
-                "could not read `{}`: {error}",
-                marker_path.display()
-            ))
-        }
-    })?;
-    let mut marker = parse_marker(
-        &marker_path,
-        &marker_bytes,
-        "restore a complete valid version 1 marker before changing visibility",
-    )?;
-    if marker.visibility == visibility {
+    let repository_root = find_repository_root(working_directory)?;
+    let marker_path = repository_root.join(MARKER_FILE);
+    let malformed_resolution = format!(
+        "restore a complete valid version {} marker before changing visibility",
+        marker::SUPPORTED_SCHEMA_VERSION
+    );
+    let Some(mut marker) = marker_for_enrollment(&repository_root, &malformed_resolution)? else {
+        return Err(EnrollmentError::refusal(format!(
+            "repository is not enrolled because `{}` does not exist\nresolution: run `enroll` before changing visibility",
+            marker_path.display()
+        )));
+    };
+    if marker.visibility() == visibility {
         return Ok(Enrollment {
             effect: EnrollmentEffect::VisibilityUnchanged,
             marker_path,
-            repository_id: marker.repository_id,
-            ecosystem_id: marker.ecosystem_id,
-            visibility: marker.visibility,
+            repository_id: marker.repository_id(),
+            ecosystem_id: marker.ecosystem_id().to_owned(),
+            visibility: marker.visibility(),
         });
     }
-    marker.visibility = visibility;
+    marker.set_visibility(visibility);
     let replacement = toml::to_string(&marker).map_err(|error| {
         EnrollmentError::unsafe_failure(format!("could not encode the repository marker: {error}"))
     })?;
@@ -300,33 +274,37 @@ pub fn set_visibility(
     Ok(Enrollment {
         effect: EnrollmentEffect::VisibilityChanged,
         marker_path,
-        repository_id: marker.repository_id,
-        ecosystem_id: marker.ecosystem_id,
-        visibility: marker.visibility,
+        repository_id: marker.repository_id(),
+        ecosystem_id: marker.ecosystem_id().to_owned(),
+        visibility: marker.visibility(),
     })
 }
 
-fn parse_marker(
-    marker_path: &Path,
-    marker_bytes: &[u8],
+fn marker_for_enrollment(
+    repository_root: &Path,
     malformed_resolution: &str,
-) -> Result<Marker, EnrollmentError> {
-    let marker_bytes = std::str::from_utf8(marker_bytes)
-        .map_err(|error| malformed_marker_error(marker_path, &error, malformed_resolution))?;
-    let table = toml::from_str::<toml::Table>(marker_bytes)
-        .map_err(|error| malformed_marker_error(marker_path, &error, malformed_resolution))?;
-    if let Some(schema_version) = table
-        .get("schema_version")
-        .and_then(toml::Value::as_integer)
-        && schema_version != 1
-    {
-        return Err(EnrollmentError::refusal(format!(
-            "marker schema version `{schema_version}` is not supported\nresolution: use a reuse-evidence version that supports marker schema version `{schema_version}`"
-        )));
+) -> Result<Option<marker::Marker>, EnrollmentError> {
+    match marker::read(repository_root) {
+        Some(marker::MarkerRead::Supported(marker)) => Ok(Some(marker)),
+        Some(marker::MarkerRead::UnsupportedSchemaVersion(marker)) => {
+            let schema_version = marker.schema_version();
+            Err(EnrollmentError::refusal(format!(
+                "marker schema version `{schema_version}` is not supported\nresolution: use a reuse-evidence version that supports marker schema version `{schema_version}`"
+            )))
+        }
+        Some(marker::MarkerRead::Unreadable(marker)) if marker.is_read_failure() => {
+            Err(EnrollmentError::unsafe_failure(format!(
+                "could not read `{}`: {marker}",
+                marker.path().display()
+            )))
+        }
+        Some(marker::MarkerRead::Unreadable(marker)) => Err(malformed_marker_error(
+            marker.path(),
+            &marker,
+            malformed_resolution,
+        )),
+        None => Ok(None),
     }
-    toml::Value::Table(table)
-        .try_into()
-        .map_err(|error| malformed_marker_error(marker_path, &error, malformed_resolution))
 }
 
 fn malformed_marker_error(
@@ -395,7 +373,7 @@ fn sync_parent(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn marker_path(working_directory: &Path) -> Result<PathBuf, EnrollmentError> {
+fn find_repository_root(working_directory: &Path) -> Result<PathBuf, EnrollmentError> {
     let working_directory = working_directory.canonicalize().map_err(|error| {
         EnrollmentError::refusal(format!(
             "working directory `{}` cannot be inspected: {error}\nresolution: rerun from an existing directory inside the repository",
@@ -408,11 +386,11 @@ fn marker_path(working_directory: &Path) -> Result<PathBuf, EnrollmentError> {
             working_directory.display()
         ))
     })?;
-    Ok(repository_root.join(MARKER_FILE))
+    Ok(repository_root.to_path_buf())
 }
 
 fn repository_root(working_directory: &Path) -> Option<&Path> {
     working_directory
         .ancestors()
-        .find(|candidate| candidate.join(".git").exists())
+        .find(|candidate| marker::is_repository_root(candidate))
 }

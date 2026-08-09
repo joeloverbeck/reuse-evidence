@@ -47,6 +47,11 @@ impl Fixture {
         let repository = self.root.join(name);
         fs::create_dir_all(repository.join(".git"))
             .expect("repository fixture should be creatable");
+        fs::write(
+            repository.join(".git").join("HEAD"),
+            b"ref: refs/heads/main\n",
+        )
+        .expect("repository fixture should contain recognizable Git metadata");
         repository
     }
 }

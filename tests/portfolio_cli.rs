@@ -30,6 +30,11 @@ impl Fixture {
         let repository = portfolio_root.join(name);
         fs::create_dir_all(repository.join(".git"))
             .expect("repository fixture should be creatable");
+        fs::write(
+            repository.join(".git").join("HEAD"),
+            b"ref: refs/heads/main\n",
+        )
+        .expect("repository fixture should contain recognizable Git metadata");
         repository
             .canonicalize()
             .expect("repository fixture path should be canonicalizable")
@@ -147,14 +152,6 @@ fn write_marker(repository: &Path, repository_id: &str, ecosystem_id: &str, visi
         ),
     )
     .expect("marker fixture should be writable");
-}
-
-fn make_git_metadata_recognizable(repository: &Path) {
-    fs::write(
-        repository.join(".git").join("HEAD"),
-        b"ref: refs/heads/main\n",
-    )
-    .expect("Git metadata fixture should be writable");
 }
 
 fn write_config(config_home: &Path, portfolio_roots: &[&Path]) -> PathBuf {
@@ -602,7 +599,6 @@ fn portfolio_refuses_state_path_inside_uninspected_git_repository() {
     let unrelated_root = fixture.root.join("unrelated");
     fs::create_dir_all(&unrelated_root).expect("unrelated root should be creatable");
     let state_repository = fixture.repository(&unrelated_root, "state-repository");
-    make_git_metadata_recognizable(&state_repository);
     let state_home = state_repository.join("derived-state");
     let state_path = state_home.join("reuse-evidence").join("portfolio.toml");
     let before = files_beneath(&state_repository);
@@ -646,7 +642,6 @@ fn portfolio_refuses_normalized_state_path_inside_uninspected_git_repository() {
     let unrelated_root = fixture.root.join("unrelated");
     fs::create_dir_all(&unrelated_root).expect("unrelated root should be creatable");
     let state_repository = fixture.repository(&unrelated_root, "state-repository");
-    make_git_metadata_recognizable(&state_repository);
     let state_home = outside
         .join("..")
         .join("unrelated")
@@ -800,6 +795,82 @@ fn portfolio_rescans_marker_state_and_reports_unsupported_versions() {
             "unsupported marker versions:\n- marker: {}\n  schema_version: 2\n",
             upgraded_repository.join("reuse-evidence.toml").display()
         )
+    );
+}
+
+#[test]
+fn unreadable_marker_is_refused_by_enrollment_and_reported_by_portfolio() {
+    let fixture = Fixture::new("portfolio-unreadable-marker");
+    let config_home = fixture.root.join("config");
+    let portfolio_root = fixture.root.join("portfolio");
+    fs::create_dir_all(&portfolio_root).expect("portfolio root should be creatable");
+    let repository = fixture.repository(&portfolio_root, "broken-enrollment");
+    let marker_path = repository.join("reuse-evidence.toml");
+    fs::write(
+        &marker_path,
+        b"schema_version = 1\nrepository_id = \"00000000-0000-4000-8000-000000000033\"\necosystem_id = \"products\"\nvisibility = \"private\"\nunknown_field = true\n",
+    )
+    .expect("unreadable marker fixture should be writable");
+    write_config(&config_home, &[&portfolio_root]);
+    let before = files_beneath(&portfolio_root);
+
+    let enrollment = run_in(
+        &repository,
+        &[
+            "enroll",
+            "--ecosystem-id",
+            "products",
+            "--visibility",
+            "private",
+        ],
+        &config_home,
+    );
+
+    assert_eq!(enrollment.status.code(), Some(3), "{enrollment:?}");
+    assert!(enrollment.stdout.is_empty(), "{enrollment:?}");
+    let enrollment_stderr =
+        String::from_utf8(enrollment.stderr).expect("enrollment stderr should be UTF-8");
+    assert_eq!(
+        enrollment_stderr,
+        format!(
+            "refusal: existing marker `{}` is malformed: unknown field `unknown_field`, expected one of `schema_version`, `repository_id`, `ecosystem_id`, `visibility`\n\nresolution: restore a complete valid version 1 marker before rerunning enrollment\n",
+            marker_path.display()
+        ),
+        "the shared marker reader must preserve enrollment's stderr byte-for-byte"
+    );
+
+    let portfolio = run_in(&fixture.root, &["portfolio"], &config_home);
+
+    assert_eq!(portfolio.status.code(), Some(0), "{portfolio:?}");
+    assert!(portfolio.stderr.is_empty(), "{portfolio:?}");
+    let portfolio_stdout =
+        String::from_utf8(portfolio.stdout).expect("portfolio stdout should be UTF-8");
+    assert!(
+        portfolio_stdout.contains("unreadable repository markers:\n"),
+        "{portfolio_stdout}"
+    );
+    assert!(
+        portfolio_stdout.contains(&format!("- marker: {}\n", marker_path.display())),
+        "{portfolio_stdout}"
+    );
+    assert!(
+        portfolio_stdout.contains("  reason: unknown field `unknown_field`"),
+        "{portfolio_stdout}"
+    );
+    assert!(
+        !portfolio_stdout.contains("no enrolled repositories found"),
+        "a present unreadable marker must not be reported as no enrollment: {portfolio_stdout}"
+    );
+    for prohibited in ["score", "percentage", "ranking", "health metric"] {
+        assert!(
+            !portfolio_stdout.to_lowercase().contains(prohibited),
+            "portfolio report must not contain `{prohibited}`: {portfolio_stdout}"
+        );
+    }
+    assert_eq!(
+        files_beneath(&portfolio_root),
+        before,
+        "enrollment refusal and portfolio reporting must preserve every inspected repository byte-for-byte"
     );
 }
 
