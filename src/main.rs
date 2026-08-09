@@ -130,7 +130,7 @@ const fn skill_exit_meaning(exit: skill_evidence::cli::Exit) -> ExitMeaning {
 }
 
 fn run_portfolio(roots: &[PathBuf]) -> Result<(), (ExitMeaning, String)> {
-    let report = portfolio::report(roots).map_err(|message| (ExitMeaning::Refusal, message))?;
+    let report = portfolio::report(roots).map_err(|error| (error.meaning, error.message))?;
     match report {
         portfolio::PortfolioReport::Complete(report) => {
             print!("{report}");
