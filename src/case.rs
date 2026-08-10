@@ -1,15 +1,18 @@
 //! Durable case recording and inspection mechanics.
 
+mod instant;
 mod publication;
 mod read;
 
+pub use instant::RecordedInstant;
 pub use read::{ListOutcome, ShowOutcome, list, show};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+
+use instant::MalformedInstant;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -362,6 +365,7 @@ pub fn open(
     working_directory: &Path,
     proposal_path: &Path,
     root_overrides: &[PathBuf],
+    recorded_at: RecordedInstant,
     preview: bool,
 ) -> Result<OpenOutcome, TerminalFailure> {
     let repository_root = find_repository_root(working_directory)?;
@@ -406,7 +410,7 @@ pub fn open(
         Visibility::Public
     };
     let case_id = proposal.case_id;
-    let event = event_bytes(&proposal, &steward, privacy)?;
+    let event = event_bytes(&proposal, &steward, privacy, recorded_at)?;
     let effect = if preview {
         OpenEffect::Preview
     } else {
@@ -439,6 +443,7 @@ pub fn append(
     expected_revision: i64,
     proposal_path: &Path,
     root_overrides: &[PathBuf],
+    recorded_at: RecordedInstant,
     preview: bool,
 ) -> Result<AppendOutcome, TerminalFailure> {
     let case_id = parse_case_id(case_id)?;
@@ -460,7 +465,7 @@ pub fn append(
         relative_case_directory.join(format!("{sequence:04}-occurrence-appended.toml"));
     validate_case_storage_path(&repository_root, &relative_event_path)?;
     let absolute_event_path = repository_root.join(&relative_event_path);
-    let event = append_event_bytes(&proposal, sequence)?;
+    let event = append_event_bytes(&proposal, sequence, recorded_at)?;
     let prepared_event_id = proposal.prepared.as_ref().map(|prepared| prepared.event_id);
     if preview {
         if absolute_event_path.exists() {
@@ -666,6 +671,7 @@ pub fn authorize_early_review(
     expected_revision: i64,
     proposal_path: &Path,
     root_overrides: &[PathBuf],
+    recorded_at: RecordedInstant,
     preview: bool,
 ) -> Result<EarlyReviewOutcome, TerminalFailure> {
     let case_id = parse_case_id(case_id)?;
@@ -686,7 +692,7 @@ pub fn authorize_early_review(
     let relative_event_path =
         relative_case_directory.join(format!("{sequence:04}-early-review-authorized.toml"));
     validate_case_storage_path(&repository_root, &relative_event_path)?;
-    let event = early_review_event_bytes(&proposal, sequence)?;
+    let event = early_review_event_bytes(&proposal, sequence, recorded_at)?;
     if preview {
         if let Some(outcome) = early_review_preview_retry(
             &repository_root.join(&relative_event_path),
@@ -1064,7 +1070,11 @@ fn retry_privacy(
     )
 }
 
-fn append_event_bytes(proposal: &AppendProposal, sequence: i64) -> Result<String, TerminalFailure> {
+fn append_event_bytes(
+    proposal: &AppendProposal,
+    sequence: i64,
+    recorded_at: RecordedInstant,
+) -> Result<String, TerminalFailure> {
     if let Some(prepared) = &proposal.prepared {
         return Ok(prepared.bytes.clone());
     }
@@ -1073,7 +1083,7 @@ fn append_event_bytes(proposal: &AppendProposal, sequence: i64) -> Result<String
         sequence,
         event_id: Uuid::new_v4(),
         event_type: EventType::OccurrenceAppended,
-        recorded_at: recording_timestamp()?,
+        recorded_at: recorded_at.to_string(),
         occurrence: proposal.occurrence.clone(),
     };
     toml::to_string(&event).map_err(|error| {
@@ -1086,6 +1096,7 @@ fn append_event_bytes(proposal: &AppendProposal, sequence: i64) -> Result<String
 fn early_review_event_bytes(
     proposal: &EarlyReviewProposal,
     sequence: i64,
+    recorded_at: RecordedInstant,
 ) -> Result<String, TerminalFailure> {
     if let Some(prepared) = &proposal.prepared {
         return Ok(prepared.bytes.clone());
@@ -1095,7 +1106,7 @@ fn early_review_event_bytes(
         sequence,
         event_id: Uuid::new_v4(),
         event_type: EventType::EarlyReviewAuthorized,
-        recorded_at: recording_timestamp()?,
+        recorded_at: recorded_at.to_string(),
         reason: proposal.reason.clone(),
         review_appetite: proposal.review_appetite.clone(),
         evidence: proposal.evidence.clone(),
@@ -1111,6 +1122,7 @@ fn event_bytes(
     proposal: &OpenProposal,
     steward: &marker::Marker,
     privacy: Visibility,
+    recorded_at: RecordedInstant,
 ) -> Result<String, TerminalFailure> {
     if let Some(prepared) = &proposal.prepared {
         if prepared.steward_repository_id != steward.repository_id() {
@@ -1140,7 +1152,7 @@ fn event_bytes(
         sequence: OPENING_SEQUENCE,
         event_id: Uuid::new_v4(),
         event_type: EventType::CaseOpened,
-        recorded_at: recording_timestamp()?,
+        recorded_at: recorded_at.to_string(),
         case_id: proposal.case_id,
         responsibility: proposal.responsibility.clone(),
         steward_repository_id: steward.repository_id(),
@@ -1740,50 +1752,24 @@ fn validate_recorded_at(
     event_name: &str,
     preview_command: &str,
 ) -> Result<(), TerminalFailure> {
-    let bytes = value.as_bytes();
-    let shaped = bytes.len() == 20
-        && bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && bytes[10] == b'T'
-        && bytes[13] == b':'
-        && bytes[16] == b':'
-        && bytes[19] == b'Z'
-        && bytes.iter().enumerate().all(|(index, byte)| {
-            matches!(index, 4 | 7 | 10 | 13 | 16 | 19) || byte.is_ascii_digit()
-        });
-    if !shaped {
-        return Err(TerminalFailure::refusal(
-            format!("prepared {event_name} event timestamp `{value}` is not UTC RFC 3339"),
-            format!("use the exact event rendered by `{preview_command}`"),
-        ));
-    }
-    let component = |range: std::ops::Range<usize>| {
-        value[range]
-            .parse::<u32>()
-            .expect("validated ASCII digits should parse")
-    };
-    let year = component(0..4);
-    let month = component(5..7);
-    let day = component(8..10);
-    let hour = component(11..13);
-    let minute = component(14..16);
-    let second = component(17..19);
-    let leap_year =
-        year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
-    let days_in_month = match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if leap_year => 29,
-        2 => 28,
-        _ => 0,
-    };
-    if day == 0 || day > days_in_month || hour > 23 || minute > 59 || second > 59 {
-        return Err(TerminalFailure::refusal(
-            format!("prepared {event_name} event timestamp `{value}` is not a valid UTC instant"),
-            format!("use the exact event rendered by `{preview_command}`"),
-        ));
-    }
-    Ok(())
+    RecordedInstant::parse(value)
+        .map(|_| ())
+        .map_err(|failure| {
+            let condition = match failure {
+                MalformedInstant::NotRfc3339 => {
+                    format!("prepared {event_name} event timestamp `{value}` is not UTC RFC 3339")
+                }
+                MalformedInstant::NotAValidInstant => {
+                    format!(
+                        "prepared {event_name} event timestamp `{value}` is not a valid UTC instant"
+                    )
+                }
+            };
+            TerminalFailure::refusal(
+                condition,
+                format!("use the exact event rendered by `{preview_command}`"),
+            )
+        })
 }
 
 fn require_nonempty(field: &str, value: &str) -> Result<(), TerminalFailure> {
@@ -1856,50 +1842,4 @@ fn resolve_participants(
         participants.insert(enrollment.repository_id, enrollment.visibility);
     }
     Ok(participants)
-}
-
-fn recording_timestamp() -> Result<String, TerminalFailure> {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| {
-            TerminalFailure::unsafe_failure(format!(
-                "system clock cannot supply the case recording timestamp: {error}"
-            ))
-        })?
-        .as_secs();
-    let seconds = i64::try_from(seconds).map_err(|error| {
-        TerminalFailure::unsafe_failure(format!(
-            "case recording timestamp is outside the supported range: {error}"
-        ))
-    })?;
-    let days = seconds.div_euclid(86_400);
-    let seconds_of_day = seconds.rem_euclid(86_400);
-    let (year, month, day) = civil_date_from_unix_days(days);
-    let hour = seconds_of_day / 3_600;
-    let minute = (seconds_of_day % 3_600) / 60;
-    let second = seconds_of_day % 60;
-    Ok(format!(
-        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z"
-    ))
-}
-
-fn civil_date_from_unix_days(days: i64) -> (i64, i64, i64) {
-    let shifted = days + 719_468;
-    let era = if shifted >= 0 {
-        shifted
-    } else {
-        shifted - 146_096
-    } / 146_097;
-    let day_of_era = shifted - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let mut year = year_of_era + era * 400;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_piece = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_piece + 2) / 5 + 1;
-    let month = month_piece + if month_piece < 10 { 3 } else { -9 };
-    if month <= 2 {
-        year += 1;
-    }
-    (year, month, day)
 }

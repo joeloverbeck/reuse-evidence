@@ -4184,3 +4184,72 @@ fn symlinked_case_directory_refuses_without_cross_repository_write() {
         "the steward command must not write through a symlink"
     );
 }
+
+#[test]
+fn prepared_append_event_with_an_unrecordable_timestamp_is_refused_without_writes() {
+    let fixture = Fixture::new("prepared-append-timestamp");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(&proposal, append_occurrence_proposal()).expect("append proposal should be writable");
+    let arguments = [
+        "case",
+        "append",
+        CASE_ID,
+        "--expected-revision",
+        "1",
+        "--proposal",
+        proposal_path,
+        "--root",
+        root,
+    ];
+    let mut preview_arguments = arguments.to_vec();
+    preview_arguments.push("--preview");
+    let preview = run_in(&steward, &preview_arguments);
+    assert_eq!(preview.status.code(), Some(0), "{preview:?}");
+    let preview = String::from_utf8(preview.stdout).expect("stdout should be UTF-8");
+    let (_, event) = preview
+        .split_once("event:\n")
+        .expect("preview should contain the exact event");
+    let recorded_at = event
+        .lines()
+        .find(|line| line.starts_with("recorded_at = "))
+        .expect("the previewed event should record its instant");
+
+    for (substitute, condition) in [
+        ("2023-02-29T00:00:00Z", "is not a valid UTC instant"),
+        ("2024-01-01T00:00:00", "is not UTC RFC 3339"),
+    ] {
+        fs::write(
+            &proposal,
+            event.replace(recorded_at, &format!("recorded_at = \"{substitute}\"")),
+        )
+        .expect("prepared append event should be writable");
+        let before_refusal = files_beneath(&fixture.root);
+
+        let refused = run_in(&steward, &arguments);
+
+        assert_eq!(refused.status.code(), Some(3), "{refused:?}");
+        assert!(refused.stdout.is_empty(), "{refused:?}");
+        assert_eq!(
+            String::from_utf8(refused.stderr).expect("stderr should be UTF-8"),
+            format!(
+                "refusal: prepared append event timestamp `{substitute}` {condition}\nresolution: use the exact event rendered by `case append --preview`\n"
+            )
+        );
+        assert_eq!(
+            files_beneath(&fixture.root),
+            before_refusal,
+            "a refused prepared append must write nothing"
+        );
+    }
+}

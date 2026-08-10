@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand, error::ErrorKind};
 use reuse_evidence::{
-    EnrollmentEffect, ExitMeaning, TerminalFailure, Visibility, case,
+    EnrollmentEffect, ExitMeaning, TerminalFailure, Visibility, case, case::RecordedInstant,
     enroll_with_expected_repository_id, portfolio, set_visibility,
 };
 use uuid::Uuid;
@@ -177,7 +177,13 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
                     "rerun with `case open --proposal <PATH>`",
                 )
             })?;
-            let outcome = case::open(Path::new("."), &proposal, &root, preview)?;
+            let outcome = case::open(
+                Path::new("."),
+                &proposal,
+                &root,
+                RecordedInstant::now()?,
+                preview,
+            )?;
             print!("{}", outcome.render());
             Ok(())
         }
@@ -206,6 +212,7 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
                 expected_revision,
                 &proposal,
                 &root,
+                RecordedInstant::now()?,
                 preview,
             )?;
             print!("{}", outcome.render());
@@ -238,6 +245,7 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
                 expected_revision,
                 &proposal,
                 &root,
+                RecordedInstant::now()?,
                 preview,
             )?;
             print!("{}", outcome.render());
