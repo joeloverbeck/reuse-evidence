@@ -1,6 +1,7 @@
 //! Durable case recording and inspection mechanics.
 
 mod instant;
+mod naming;
 mod publication;
 mod read;
 
@@ -13,6 +14,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use instant::MalformedInstant;
+use naming::{EventFileName, EventPosition, EventType, OPENING_SEQUENCE};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -22,7 +24,6 @@ use crate::portfolio;
 use crate::{TerminalFailure, Visibility, create_file_atomically};
 
 const CASE_SCHEMA_VERSION: i64 = 1;
-const OPENING_SEQUENCE: i64 = 1;
 const REVIEW_ONLY_NOTICE: &str = "authorizes semantic review; does not authorize extraction";
 const PORTFOLIO_UNAVAILABLE_FOOTER: &str = "portfolio conditions unavailable: configure portfolio roots or supply `--root <PATH>` to derive privacy conflicts and staleness\n";
 const PARTICIPANTS_UNRESOLVED_FOOTER: &str = "portfolio conditions unavailable: a recorded participant does not resolve to exactly one enrolled repository beneath the selected portfolio roots; restore its enrollment and unique repository identity to derive privacy\n";
@@ -174,14 +175,6 @@ struct EarlyReviewAuthorizedEvent {
     reason: String,
     review_appetite: String,
     evidence: Vec<EvidenceReference>,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum EventType {
-    CaseOpened,
-    OccurrenceAppended,
-    EarlyReviewAuthorized,
 }
 
 impl publication::RevisionedCase for read::CaseRecord {
@@ -371,9 +364,13 @@ pub fn open(
     let repository_root = find_repository_root(working_directory)?;
     let steward = read_steward(&repository_root)?;
     let proposal = read_proposal(proposal_path)?;
-    let event_path = PathBuf::from("reuse-evidence/cases")
-        .join(proposal.case_id.to_string())
-        .join("0001-case-opened.toml");
+    let relative_case_directory =
+        PathBuf::from("reuse-evidence/cases").join(proposal.case_id.to_string());
+    let event_path = case_event_path(
+        &relative_case_directory,
+        OPENING_SEQUENCE,
+        EventType::CaseOpened,
+    )?;
     validate_case_storage_path(&repository_root, &event_path)?;
     let absolute_event_path = repository_root.join(&event_path);
     if absolute_event_path.exists() {
@@ -461,8 +458,8 @@ pub fn append(
     )?;
     let proposal = read_append_proposal(proposal_path)?;
     validate_prepared_append_sequence(&proposal, expected_revision, sequence)?;
-    let relative_event_path =
-        relative_case_directory.join(format!("{sequence:04}-occurrence-appended.toml"));
+    let event_type = EventType::OccurrenceAppended;
+    let relative_event_path = case_event_path(&relative_case_directory, sequence, event_type)?;
     validate_case_storage_path(&repository_root, &relative_event_path)?;
     let absolute_event_path = repository_root.join(&relative_event_path);
     let event = append_event_bytes(&proposal, sequence, recorded_at)?;
@@ -689,8 +686,8 @@ pub fn authorize_early_review(
     )?;
     let proposal = read_early_review_proposal(proposal_path)?;
     validate_prepared_early_review_sequence(&proposal, expected_revision, sequence)?;
-    let relative_event_path =
-        relative_case_directory.join(format!("{sequence:04}-early-review-authorized.toml"));
+    let event_type = EventType::EarlyReviewAuthorized;
+    let relative_event_path = case_event_path(&relative_case_directory, sequence, event_type)?;
     validate_case_storage_path(&repository_root, &relative_event_path)?;
     let event = early_review_event_bytes(&proposal, sequence, recorded_at)?;
     if preview {
@@ -1184,7 +1181,7 @@ fn prepare_case_directory(case_directory: &Path, case_id: Uuid) -> Result<(), Te
                     "make the steward-local case directory readable before retrying",
                 )
             })?;
-            if !is_opening_temporary(&entry.file_name()) {
+            if !naming::is_staged_temporary(&entry.file_name(), EventPosition::Opening) {
                 return Err(TerminalFailure::refusal(
                     format!(
                         "case identity `{case_id}` already has unrecognized content at `{}`",
@@ -1216,7 +1213,7 @@ fn cleanup_opening_temporaries(case_directory: &Path) -> Result<(), TerminalFail
                 "a case directory entry could not be inspected after publishing the event: {error}"
             ))
         })?;
-        if is_opening_temporary(&entry.file_name()) {
+        if naming::is_staged_temporary(&entry.file_name(), EventPosition::Opening) {
             fs::remove_file(entry.path()).map_err(|error| {
                 TerminalFailure::unsafe_failure(format!(
                     "interrupted case staging file `{}` could not be removed: {error}",
@@ -1228,14 +1225,18 @@ fn cleanup_opening_temporaries(case_directory: &Path) -> Result<(), TerminalFail
     Ok(())
 }
 
-fn is_opening_temporary(file_name: &std::ffi::OsStr) -> bool {
-    let Some(file_name) = file_name.to_str() else {
-        return false;
-    };
-    file_name
-        .strip_prefix(".0001-case-opened.toml.")
-        .and_then(|suffix| suffix.strip_suffix(".tmp"))
-        .is_some_and(|identity| Uuid::parse_str(identity).is_ok())
+fn case_event_path(
+    relative_case_directory: &Path,
+    sequence: i64,
+    event_type: EventType,
+) -> Result<PathBuf, TerminalFailure> {
+    let file_name = EventFileName::new(sequence, event_type).ok_or_else(|| {
+        TerminalFailure::unsafe_failure(format!(
+            "case event `{}` at sequence {sequence} has no accepted file name",
+            event_type.body_name()
+        ))
+    })?;
+    Ok(relative_case_directory.join(file_name.to_string()))
 }
 
 fn validate_case_storage_path(

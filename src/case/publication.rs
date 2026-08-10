@@ -7,8 +7,7 @@ use uuid::Uuid;
 
 use crate::{CreateFileOutcome, TerminalFailure, create_file_atomically_if_absent};
 
-const OPENING_SEQUENCE: i64 = 1;
-const MAX_CASE_SEQUENCE: i64 = 9_999;
+use super::naming::{EventFileName, EventType, MAX_CASE_SEQUENCE, OPENING_SEQUENCE};
 
 pub(super) trait RevisionedCase {
     fn revision(&self) -> i64;
@@ -90,9 +89,11 @@ impl<C> LockedPublication<C> {
         relative_case_directory: &Path,
         mut read_case: impl FnMut() -> Result<C, TerminalFailure>,
     ) -> Result<Self, TerminalFailure> {
-        let opening_event_path = repository_root
-            .join(relative_case_directory)
-            .join("0001-case-opened.toml");
+        let opening_event_path = repository_root.join(relative_case_directory).join(
+            EventFileName::new(OPENING_SEQUENCE, EventType::CaseOpened)
+                .expect("the opening event has an accepted file identity")
+                .to_string(),
+        );
         let opening_event = File::open(&opening_event_path).map_err(|error| {
             TerminalFailure::refusal(
                 format!(
@@ -293,8 +294,11 @@ mod tests {
             fs::create_dir_all(root.join(&relative_case_directory))
                 .expect("case directory should be creatable");
             fs::write(
-                root.join(&relative_case_directory)
-                    .join("0001-case-opened.toml"),
+                root.join(&relative_case_directory).join(
+                    EventFileName::new(OPENING_SEQUENCE, EventType::CaseOpened)
+                        .expect("the opening event has an accepted file identity")
+                        .to_string(),
+                ),
                 "immutable opening event\n",
             )
             .expect("opening event should be writable");
@@ -304,9 +308,12 @@ mod tests {
             }
         }
 
-        fn event_path(&self, suffix: &str) -> PathBuf {
-            self.relative_case_directory
-                .join(format!("0002-{suffix}.toml"))
+        fn event_path(&self, event_type: EventType) -> PathBuf {
+            self.relative_case_directory.join(
+                EventFileName::new(2, event_type)
+                    .expect("the later event has an accepted file identity")
+                    .to_string(),
+            )
         }
     }
 
@@ -335,7 +342,7 @@ mod tests {
     #[test]
     fn publish_creates_typed_sequence_file() {
         let fixture = Fixture::new("create");
-        let event_path = fixture.event_path("occurrence-appended");
+        let event_path = fixture.event_path(EventType::OccurrenceAppended);
         let event = event_bytes(EVENT_ID);
         let publication = Publication::new(1).expect("expected revision should be valid");
 
@@ -373,7 +380,7 @@ mod tests {
     #[test]
     fn occupied_path_returns_existing() {
         let fixture = Fixture::new("occupied");
-        let event_path = fixture.event_path("occurrence-appended");
+        let event_path = fixture.event_path(EventType::OccurrenceAppended);
         fs::write(fixture.root.join(&event_path), "recorded event\n")
             .expect("occupied event should be writable");
         let locked =
@@ -392,7 +399,7 @@ mod tests {
     #[test]
     fn matching_identity_and_bytes_is_idempotent() {
         let fixture = Fixture::new("idempotent");
-        let event_path = fixture.event_path("occurrence-appended");
+        let event_path = fixture.event_path(EventType::OccurrenceAppended);
         let event = event_bytes(EVENT_ID);
         fs::write(fixture.root.join(&event_path), &event)
             .expect("recorded event should be writable");
@@ -432,7 +439,7 @@ mod tests {
     #[test]
     fn different_identity_is_a_revision_conflict() {
         let fixture = Fixture::new("identity-conflict");
-        let event_path = fixture.event_path("occurrence-appended");
+        let event_path = fixture.event_path(EventType::OccurrenceAppended);
         fs::write(fixture.root.join(&event_path), event_bytes(EVENT_ID))
             .expect("recorded event should be writable");
         let publication = Publication::new(1).expect("expected revision should be valid");
@@ -470,7 +477,7 @@ mod tests {
     #[test]
     fn matching_identity_with_drifted_bytes_refuses() {
         let fixture = Fixture::new("content-drift");
-        let event_path = fixture.event_path("occurrence-appended");
+        let event_path = fixture.event_path(EventType::OccurrenceAppended);
         let recorded = event_bytes(EVENT_ID);
         fs::write(fixture.root.join(&event_path), &recorded)
             .expect("recorded event should be writable");
@@ -507,7 +514,7 @@ mod tests {
     #[test]
     fn stale_expected_revision_refuses_without_writing() {
         let fixture = Fixture::new("stale-revision");
-        let event_path = fixture.event_path("occurrence-appended");
+        let event_path = fixture.event_path(EventType::OccurrenceAppended);
         let publication = Publication::new(1).expect("expected revision should be valid");
 
         let result = publication.publish(

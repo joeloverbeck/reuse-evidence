@@ -2986,6 +2986,105 @@ fn review_r3_spec_1_idempotent_append_retry_reports_complete_case_privacy() {
 }
 
 #[test]
+fn review_r1_spec_1_staged_temporary_policy_remains_context_specific() {
+    let unopened_fixture = Fixture::new("later-staging-before-open");
+    let unopened_steward = unopened_fixture.repository("steward", STEWARD_ID, "private");
+    unopened_fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    unopened_fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    let unopened_proposal = unopened_fixture.proposal(&two_occurrence_proposal());
+    let unopened_case_directory = unopened_steward.join("reuse-evidence/cases").join(CASE_ID);
+    fs::create_dir_all(&unopened_case_directory)
+        .expect("interrupted case directory should be reproducible");
+    fs::write(
+        unopened_case_directory
+            .join(".0002-occurrence-appended.toml.00000000-0000-4000-8000-000000000088.tmp"),
+        "interrupted later event\n",
+    )
+    .expect("interrupted later-event staging should be reproducible");
+    let unopened_before = files_beneath(&unopened_fixture.root);
+    let unopened = run_in(
+        &unopened_steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            unopened_proposal
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+            "--root",
+            unopened_fixture
+                .root
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+        ],
+    );
+
+    let opened_fixture = Fixture::new("opening-staging-during-read");
+    let opened_steward = opened_fixture.repository("steward", STEWARD_ID, "private");
+    opened_fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    opened_fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    let opened_proposal = opened_fixture.proposal(&two_occurrence_proposal());
+    let opened = run_in(
+        &opened_steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            opened_proposal
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+            "--root",
+            opened_fixture
+                .root
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    let opened_case_directory = opened_steward.join("reuse-evidence/cases").join(CASE_ID);
+    fs::write(
+        opened_case_directory
+            .join(".0001-case-opened.toml.00000000-0000-4000-8000-000000000088.tmp"),
+        "interrupted opening event\n",
+    )
+    .expect("interrupted opening-event staging should be reproducible");
+    let opened_before = files_beneath(&opened_fixture.root);
+    let shown = run_without_portfolio_configuration(
+        &opened_fixture,
+        &opened_steward,
+        &["case", "show", CASE_ID],
+    );
+
+    assert_eq!(
+        (unopened.status.code(), shown.status.code()),
+        (Some(3), Some(3)),
+        "opening must reject later-event staging and reading must reject opening-event staging: unopened={unopened:?}, shown={shown:?}"
+    );
+    assert!(unopened.stdout.is_empty(), "{unopened:?}");
+    assert!(shown.stdout.is_empty(), "{shown:?}");
+    assert!(
+        String::from_utf8(unopened.stderr)
+            .expect("stderr should be UTF-8")
+            .contains("already has unrecognized content"),
+    );
+    assert!(
+        String::from_utf8(shown.stderr)
+            .expect("stderr should be UTF-8")
+            .contains("contains unrecognized event file"),
+    );
+    assert_eq!(
+        files_beneath(&unopened_fixture.root),
+        unopened_before,
+        "refusal before opening must preserve later-event staging"
+    );
+    assert_eq!(
+        files_beneath(&opened_fixture.root),
+        opened_before,
+        "read refusal must preserve opening-event staging"
+    );
+}
+
+#[test]
 fn review_r1_interrupted_append_staging_leaves_case_readable_and_retryable() {
     let fixture = Fixture::new("interrupted-append-staging");
     let steward = fixture.repository("steward", STEWARD_ID, "private");

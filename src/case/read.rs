@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use uuid::Uuid;
 
+use super::naming::{self, EventFileName, EventPosition, EventType, OPENING_SEQUENCE};
 use super::{
-    CASE_SCHEMA_VERSION, CaseOpenedEvent, EarlyReviewAuthorizedEvent, EventType, OPENING_SEQUENCE,
-    Occurrence, OccurrenceAppendedEvent, REVIEW_ONLY_NOTICE, find_repository_root, read_steward,
+    CASE_SCHEMA_VERSION, CaseOpenedEvent, EarlyReviewAuthorizedEvent, Occurrence,
+    OccurrenceAppendedEvent, REVIEW_ONLY_NOTICE, find_repository_root, read_steward,
     validate_case_storage_path,
 };
 use crate::{TerminalFailure, Visibility, portfolio};
@@ -426,7 +427,7 @@ fn read_case(
                     "make every recorded event in the case readable before retrying",
                 )
             })?;
-            if is_later_event_temporary(&entry.file_name()) {
+            if naming::is_staged_temporary(&entry.file_name(), EventPosition::Later) {
                 let file_type = entry.file_type().map_err(|error| {
                     TerminalFailure::refusal(
                         format!("an event in case `{case_id}` cannot be read: {error}"),
@@ -591,7 +592,7 @@ fn read_case_event(
             "restore a supported recorded event before reading the case",
         )
     })?;
-    let file_sequence = event_sequence_from_file_name(
+    let file_sequence = naming::sequence_from_file_name(
         event_path
             .file_name()
             .and_then(|name| name.to_str())
@@ -602,8 +603,6 @@ fn read_case_event(
         .file_name()
         .and_then(|name| name.to_str())
         .expect("validated event paths have UTF-8 sequence filenames");
-    let (_, file_event_type) = event_file_identity(file_name)
-        .expect("validated event paths have recognized sequence filenames");
     match discriminator.event_type {
         EventType::CaseOpened => {
             let event = toml::from_str::<CaseOpenedEvent>(&event_text)
@@ -631,14 +630,7 @@ fn read_case_event(
                     "restore the event under the case and steward identities it records",
                 ));
             }
-            validate_file_event_type(
-                case_id,
-                file_name,
-                file_sequence,
-                file_event_type,
-                "case_opened",
-                "case-opened",
-            )?;
+            validate_file_event_type(case_id, file_name, file_sequence, event.event_type)?;
             super::validate_recorded_opening(&event)?;
             Ok((file_sequence, CaseEvent::Opened(event)))
         }
@@ -648,16 +640,10 @@ fn read_case_event(
             case_id,
             file_sequence,
             file_name,
-            file_event_type,
         ),
-        EventType::EarlyReviewAuthorized => read_early_review_event(
-            event_path,
-            &event_text,
-            case_id,
-            file_sequence,
-            file_name,
-            file_event_type,
-        ),
+        EventType::EarlyReviewAuthorized => {
+            read_early_review_event(event_path, &event_text, case_id, file_sequence, file_name)
+        }
     }
 }
 
@@ -667,7 +653,6 @@ fn read_occurrence_appended_event(
     case_id: Uuid,
     file_sequence: i64,
     file_name: &str,
-    file_event_type: &str,
 ) -> Result<(i64, CaseEvent), TerminalFailure> {
     let event = toml::from_str::<OccurrenceAppendedEvent>(event_text)
         .map_err(|error| invalid_event(event_path, &error))?;
@@ -681,14 +666,7 @@ fn read_occurrence_appended_event(
             "restore `case_opened` as sequence 1 and append occurrences only after it",
         ));
     }
-    validate_file_event_type(
-        case_id,
-        file_name,
-        file_sequence,
-        file_event_type,
-        "occurrence_appended",
-        "occurrence-appended",
-    )?;
+    validate_file_event_type(case_id, file_name, file_sequence, event.event_type)?;
     super::validate_recorded_append(&event)?;
     Ok((file_sequence, CaseEvent::OccurrenceAppended(event)))
 }
@@ -699,7 +677,6 @@ fn read_early_review_event(
     case_id: Uuid,
     file_sequence: i64,
     file_name: &str,
-    file_event_type: &str,
 ) -> Result<(i64, CaseEvent), TerminalFailure> {
     let event = toml::from_str::<EarlyReviewAuthorizedEvent>(event_text)
         .map_err(|error| invalid_event(event_path, &error))?;
@@ -713,14 +690,7 @@ fn read_early_review_event(
             "restore `case_opened` as sequence 1 and authorize early review only after it",
         ));
     }
-    validate_file_event_type(
-        case_id,
-        file_name,
-        file_sequence,
-        file_event_type,
-        "early_review_authorized",
-        "early-review-authorized",
-    )?;
+    validate_file_event_type(case_id, file_name, file_sequence, event.event_type)?;
     super::validate_recorded_early_review(&event)?;
     Ok((file_sequence, CaseEvent::EarlyReviewAuthorized(event)))
 }
@@ -753,18 +723,21 @@ fn validate_file_event_type(
     case_id: Uuid,
     file_name: &str,
     file_sequence: i64,
-    file_event_type: &str,
-    recorded_event_type: &str,
-    file_event_slug: &str,
+    recorded_event_type: EventType,
 ) -> Result<(), TerminalFailure> {
-    if file_event_type != file_event_slug {
+    let expected_file_name = EventFileName::new(file_sequence, recorded_event_type)
+        .expect("the validated recorded event has an accepted file identity")
+        .to_string();
+    let file_identity_matches = EventFileName::parse(file_name).is_some_and(|identity| {
+        identity.sequence() == file_sequence && identity.event_type() == recorded_event_type
+    });
+    if !file_identity_matches {
         return Err(TerminalFailure::refusal(
             format!(
-                "case `{case_id}` event file `{file_name}` does not match its recorded type `{recorded_event_type}`"
+                "case `{case_id}` event file `{file_name}` does not match its recorded type `{}`",
+                recorded_event_type.body_name()
             ),
-            format!(
-                "restore the event as `{file_sequence:04}-{file_event_slug}.toml` before reading the case"
-            ),
+            format!("restore the event as `{expected_file_name}` before reading the case"),
         ));
     }
     Ok(())
@@ -782,7 +755,7 @@ fn validate_event_sequences(event_paths: &[PathBuf], case_id: Uuid) -> Result<()
                     "restore sequence-numbered UTF-8 TOML event filenames before reading the case",
                 )
             })?;
-        let sequence = event_sequence_from_file_name(file_name).ok_or_else(|| {
+        let sequence = naming::sequence_from_file_name(file_name).ok_or_else(|| {
             TerminalFailure::refusal(
                 format!("case `{case_id}` contains unrecognized event file `{file_name}`"),
                 "restore event filenames in `NNNN-<event-type>.toml` form before reading the case",
@@ -828,46 +801,4 @@ fn validate_event_sequences(event_paths: &[PathBuf], case_id: Uuid) -> Result<()
         }
     }
     Ok(())
-}
-
-fn event_sequence_from_file_name(file_name: &str) -> Option<i64> {
-    event_file_identity(file_name).map(|(sequence, _)| sequence)
-}
-
-fn is_later_event_temporary(file_name: &std::ffi::OsStr) -> bool {
-    let Some(file_name) = file_name.to_str() else {
-        return false;
-    };
-    let Some(staged_name) = file_name
-        .strip_prefix('.')
-        .and_then(|name| name.strip_suffix(".tmp"))
-    else {
-        return false;
-    };
-    let Some((event_file_name, identity)) = staged_name.rsplit_once('.') else {
-        return false;
-    };
-    Uuid::parse_str(identity).is_ok()
-        && event_file_identity(event_file_name).is_some_and(|(sequence, event_type)| {
-            sequence > OPENING_SEQUENCE
-                && matches!(
-                    event_type,
-                    "occurrence-appended" | "early-review-authorized"
-                )
-        })
-}
-
-fn event_file_identity(file_name: &str) -> Option<(i64, &str)> {
-    let (sequence, event_type) = file_name.strip_suffix(".toml")?.split_once('-')?;
-    if sequence.len() != 4
-        || !sequence.bytes().all(|byte| byte.is_ascii_digit())
-        || event_type.is_empty()
-    {
-        return None;
-    }
-    sequence
-        .parse()
-        .ok()
-        .filter(|sequence| *sequence > 0)
-        .map(|sequence| (sequence, event_type))
 }
