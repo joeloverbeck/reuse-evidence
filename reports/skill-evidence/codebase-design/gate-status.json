@@ -1,11 +1,22 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-10T14:34:46.883816412Z",
+  "generated_at": "2026-08-10T15:47:43.409582084Z",
   "target_content_hash": "5ae942c389ca86d6f232cc5ca5251ffb74a670900351671353e8c4387f98dd3a",
-  "qualifying_uses_on_current_hash": 2,
-  "open_incident_ids": [],
-  "candidate_clusters": [],
-  "state": "closed",
+  "qualifying_uses_on_current_hash": 3,
+  "open_incident_ids": [
+    "evt_31fefdb2-4446-49c3-bc3c-603bbbf6c8fc"
+  ],
+  "candidate_clusters": [
+    {
+      "symptom_key": "output",
+      "open_event_ids": [
+        "evt_31fefdb2-4446-49c3-bc3c-603bbbf6c8fc"
+      ],
+      "independent_incidents": 1,
+      "max_severity": "material_failure"
+    }
+  ],
+  "state": "collecting",
   "authorized_workflow": null,
   "authorization_reason": null,
   "trigger_event_ids": [],
@@ -16,5 +27,5 @@
   "review_reentry_basis": null,
   "target_name": "codebase-design",
   "target_repo_relative_path": ".claude/skills/codebase-design",
-  "derivation_session_id": "462e17f5-61ed-4b10-a376-56d8bdf4a244"
+  "derivation_session_id": "019febe5-2a89-76b3-ad6d-3f5d8f0e4bba"
 }
