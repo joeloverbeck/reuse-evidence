@@ -9,7 +9,7 @@
 
 ADR 0009 requires every later-event writer to take an exclusive lock on the immutable opening event, re-read and validate the case revision and operation eligibility while holding it, and hold it through exclusive creation of the typed next event file. That protocol is stated once as authority and implemented twice: `case::append` (`src/case.rs:402`) and `case::authorize_early_review` (`src/case.rs:516`).
 
-The two implementations have already diverged. On an exact idempotent retry whose participants cannot be resolved because no portfolio root is configured, `existing_append` propagates the failure (`src/case.rs:920`) and the command refuses; `existing_early_review` swallows it and reports `privacy: private` (`src/case.rs:683`) and the command succeeds. Neither branch is covered by any test: `run_without_portfolio_configuration` in `tests/case_cli.rs` is used only for `case show` and `case list`. One question about a privacy receipt therefore has two shipped answers, and the suite cannot tell.
+The two implementations have already diverged. On an exact idempotent retry whose participants cannot be resolved — whether because no portfolio root is configured, or because roots are selected and a recorded participant no longer resolves to exactly one enrolled repository — `existing_append` propagates the failure (`src/case.rs:920`) and the command refuses; `existing_early_review` swallows it and reports `privacy: private` (`src/case.rs:683`) and the command succeeds. Neither branch is covered by any test: `run_without_portfolio_configuration` in `tests/case_cli.rs` is used only for `case show` and `case list`. One question about a privacy receipt therefore has two shipped answers, and the suite cannot tell.
 
 That is the observed pressure. It is not an argument from predicted convenience: the remaining later event types named in [`design/v0.1-scope-and-acceptance.md`](../design/v0.1-scope-and-acceptance.md) §2 have no open issues, and this decision does not rest on them.
 
@@ -55,7 +55,7 @@ Adding a later event type means implementing its proposal, eligibility, privacy,
 
 ### Compatibility and migration
 
-No recorded evidence changes. Event files, filenames, sequence semantics, and schema versions are untouched, so `CONSUMER-CONTRACT.md` §3 is not engaged. One receipt changes: an exact retry that cannot resolve participants reports `privacy: unknown` with the existing portfolio-unavailable footer instead of refusing or asserting `private`. That is a command-surface change permitted by `CONSUMER-CONTRACT.md` §8 during `0.x`, and it preserves the idempotency `FOUNDATIONS.md` §11 requires of side effects.
+No recorded evidence changes. Event files, filenames, sequence semantics, and schema versions are untouched, so `CONSUMER-CONTRACT.md` §3 is not engaged. One receipt changes: an exact retry that cannot resolve participants reports `privacy: unknown` instead of refusing or asserting `private`, for every later event type. Its footer names the cause, because the two causes need different resolutions: no configured root selection keeps the existing portfolio-unavailable footer, while an unresolvable participant under selected roots gets a footer naming that condition. Neither footer carries repository identities or paths. That is a command-surface change permitted by `CONSUMER-CONTRACT.md` §8 during `0.x`, and it preserves the idempotency `FOUNDATIONS.md` §11 requires of side effects.
 
 ## Alternatives considered
 

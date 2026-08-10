@@ -22,6 +22,7 @@ const CASE_SCHEMA_VERSION: i64 = 1;
 const OPENING_SEQUENCE: i64 = 1;
 const REVIEW_ONLY_NOTICE: &str = "authorizes semantic review; does not authorize extraction";
 const PORTFOLIO_UNAVAILABLE_FOOTER: &str = "portfolio conditions unavailable: configure portfolio roots or supply `--root <PATH>` to derive privacy conflicts and staleness\n";
+const PARTICIPANTS_UNRESOLVED_FOOTER: &str = "portfolio conditions unavailable: a recorded participant does not resolve to exactly one enrolled repository beneath the selected portfolio roots; restore its enrollment and unique repository identity to derive privacy\n";
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -211,8 +212,38 @@ pub struct AppendOutcome {
     event_path: PathBuf,
     revision: i64,
     readiness: read::Readiness,
-    privacy: Option<Visibility>,
+    privacy: ReportedPrivacy,
     event: String,
+}
+
+/// The complete case privacy a receipt reports, or why it could not be derived.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReportedPrivacy {
+    /// Derived from the steward and the resolved participants.
+    Derived(Visibility),
+    /// No usable portfolio root selection is configured or supplied.
+    PortfolioUnconfigured,
+    /// Roots are selected, but a recorded participant does not resolve to one enrolled repository.
+    ParticipantsUnresolved,
+}
+
+impl ReportedPrivacy {
+    /// Writes the `privacy:` line, followed by the footer explaining an underivable privacy.
+    fn write_receipt_line(self, receipt: &mut String) {
+        match self {
+            Self::Derived(privacy) => {
+                writeln!(receipt, "privacy: {privacy}").expect("writing to a String cannot fail");
+            }
+            Self::PortfolioUnconfigured => {
+                receipt.push_str("privacy: unknown\n");
+                receipt.push_str(PORTFOLIO_UNAVAILABLE_FOOTER);
+            }
+            Self::ParticipantsUnresolved => {
+                receipt.push_str("privacy: unknown\n");
+                receipt.push_str(PARTICIPANTS_UNRESOLVED_FOOTER);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -229,7 +260,7 @@ pub struct EarlyReviewOutcome {
     case_id: Uuid,
     event_path: PathBuf,
     revision: i64,
-    privacy: Option<Visibility>,
+    privacy: ReportedPrivacy,
     event: String,
 }
 
@@ -288,12 +319,7 @@ impl AppendOutcome {
             receipt.push_str(REVIEW_ONLY_NOTICE);
             receipt.push('\n');
         }
-        if let Some(privacy) = self.privacy {
-            writeln!(&mut receipt, "privacy: {privacy}").expect("writing to a String cannot fail");
-        } else {
-            receipt.push_str("privacy: unknown\n");
-            receipt.push_str(PORTFOLIO_UNAVAILABLE_FOOTER);
-        }
+        self.privacy.write_receipt_line(&mut receipt);
         if self.effect == AppendEffect::Preview {
             receipt.push_str("event:\n");
             receipt.push_str(&self.event);
@@ -317,12 +343,7 @@ impl EarlyReviewOutcome {
             self.event_path.display(),
             self.revision
         );
-        if let Some(privacy) = self.privacy {
-            writeln!(&mut receipt, "privacy: {privacy}").expect("writing to a String cannot fail");
-        } else {
-            receipt.push_str("privacy: unknown\n");
-            receipt.push_str(PORTFOLIO_UNAVAILABLE_FOOTER);
-        }
+        self.privacy.write_receipt_line(&mut receipt);
         if self.effect == EarlyReviewEffect::Preview {
             receipt.push_str("event:\n");
             receipt.push_str(&self.event);
@@ -446,14 +467,14 @@ pub fn append(
             let existing =
                 publication::existing_event(&case, &absolute_event_path, prepared_event_id, &event)
                     .map_err(|failure| append_existing_event_failure(case_id, failure))?;
-            return append_retry_outcome(
+            return Ok(append_retry_outcome(
                 case_id,
                 relative_event_path,
                 &case,
                 existing,
                 &steward,
                 root_overrides,
-            );
+            ));
         }
         if case.revision != expected_revision {
             return Err(TerminalFailure::refusal(
@@ -474,7 +495,7 @@ pub fn append(
             event_path: relative_event_path,
             revision: sequence,
             readiness: case.readiness_after_appending_occurrence(),
-            privacy: Some(privacy),
+            privacy: ReportedPrivacy::Derived(privacy),
             event,
         });
     }
@@ -509,17 +530,17 @@ pub fn append(
             event_path: relative_event_path,
             revision: sequence,
             readiness: case.readiness_after_appending_occurrence(),
-            privacy: Some(validation),
+            privacy: ReportedPrivacy::Derived(validation),
             event,
         }),
-        publication::PublicationOutcome::Existing { case, event } => append_retry_outcome(
+        publication::PublicationOutcome::Existing { case, event } => Ok(append_retry_outcome(
             case_id,
             relative_event_path,
             &case,
             event,
             &steward,
             root_overrides,
-        ),
+        )),
     }
 }
 
@@ -530,16 +551,16 @@ fn append_retry_outcome(
     event: publication::ExistingEvent,
     steward: &marker::Marker,
     root_overrides: &[PathBuf],
-) -> Result<AppendOutcome, TerminalFailure> {
-    Ok(AppendOutcome {
+) -> AppendOutcome {
+    AppendOutcome {
         effect: AppendEffect::Existing,
         case_id,
         event_path,
         revision: event.sequence,
         readiness: case.readiness(),
-        privacy: append_retry_privacy(case, steward, root_overrides)?,
+        privacy: retry_privacy(case, steward, root_overrides),
         event: event.bytes,
-    })
+    }
 }
 
 fn append_publication_failure(
@@ -698,7 +719,7 @@ pub fn authorize_early_review(
             case_id,
             event_path: relative_event_path,
             revision: sequence,
-            privacy: Some(privacy),
+            privacy: ReportedPrivacy::Derived(privacy),
             event,
         });
     }
@@ -762,7 +783,7 @@ fn early_review_created_outcome(
         case_id,
         event_path,
         revision,
-        privacy: Some(privacy),
+        privacy: ReportedPrivacy::Derived(privacy),
         event,
     }
 }
@@ -780,7 +801,7 @@ fn early_review_retry_outcome(
         case_id,
         event_path,
         revision: event.sequence,
-        privacy: early_review_retry_privacy(case, steward, root_overrides),
+        privacy: retry_privacy(case, steward, root_overrides),
         event: event.bytes,
     }
 }
@@ -1022,29 +1043,25 @@ fn derive_complete_case_privacy(
     }
 }
 
-fn append_retry_privacy(
+/// Reports complete case privacy for an exact retry, or why it cannot be derived.
+///
+/// An exact retry writes nothing, so an underivable privacy is reported rather than refused. Every
+/// later event type reports it the same way, as ADR 0010 requires of the retry outcome.
+fn retry_privacy(
     case: &read::CaseRecord,
     steward: &marker::Marker,
     root_overrides: &[PathBuf],
-) -> Result<Option<Visibility>, TerminalFailure> {
-    if portfolio::selected_roots_if_configured(root_overrides)?.is_none() {
-        return Ok(None);
-    }
-    derive_complete_case_privacy(case, steward, root_overrides).map(Some)
-}
-
-fn early_review_retry_privacy(
-    case: &read::CaseRecord,
-    steward: &marker::Marker,
-    root_overrides: &[PathBuf],
-) -> Option<Visibility> {
-    if matches!(
+) -> ReportedPrivacy {
+    if !matches!(
         portfolio::selected_roots_if_configured(root_overrides),
-        Ok(None)
+        Ok(Some(_))
     ) {
-        return None;
+        return ReportedPrivacy::PortfolioUnconfigured;
     }
-    Some(derive_complete_case_privacy(case, steward, root_overrides).unwrap_or(Visibility::Private))
+    derive_complete_case_privacy(case, steward, root_overrides).map_or(
+        ReportedPrivacy::ParticipantsUnresolved,
+        ReportedPrivacy::Derived,
+    )
 }
 
 fn append_event_bytes(proposal: &AppendProposal, sequence: i64) -> Result<String, TerminalFailure> {

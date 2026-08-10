@@ -1545,6 +1545,80 @@ fn exact_early_review_retry_without_portfolio_reports_unknown_privacy_without_wr
 }
 
 #[test]
+fn exact_early_review_retry_with_unresolvable_participant_reports_unknown_privacy_without_writes() {
+    let fixture = Fixture::new("early-review-retry-unresolvable-participant");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    let second_consumer = fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    let open_proposal = fixture.proposal(&two_occurrence_proposal());
+    let open_proposal_path = open_proposal
+        .to_str()
+        .expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            open_proposal_path,
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    let proposal = fixture.root.join("early-review.toml");
+    fs::write(&proposal, early_review_override_proposal())
+        .expect("early-review proposal should be writable");
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let arguments = [
+        "case",
+        "override",
+        CASE_ID,
+        "--expected-revision",
+        "1",
+        "--proposal",
+        proposal_path,
+        "--root",
+        root,
+        "--preview",
+    ];
+    let preview = run_in(&steward, &arguments);
+    assert_eq!(preview.status.code(), Some(0), "{preview:?}");
+    let preview = String::from_utf8(preview.stdout).expect("stdout should be UTF-8");
+    let (_, event) = preview
+        .split_once("event:\n")
+        .expect("preview should contain the exact event");
+    fs::write(&proposal, event).expect("prepared early-review event should be writable");
+    let applied = run_in(&steward, &arguments[..arguments.len() - 1]);
+    assert_eq!(applied.status.code(), Some(0), "{applied:?}");
+    fs::remove_file(second_consumer.join("reuse-evidence.toml"))
+        .expect("recorded participant should become un-enrolled");
+    let before_retry = files_beneath(&fixture.root);
+    let event_path = steward
+        .join("reuse-evidence/cases")
+        .join(CASE_ID)
+        .join("0002-early-review-authorized.toml");
+    let _write_protection = WriteProtection::for_file_and_parent(&event_path);
+
+    let retry = run_in(&steward, &arguments[..arguments.len() - 1]);
+
+    assert_eq!(retry.status.code(), Some(0), "{retry:?}");
+    assert!(retry.stderr.is_empty(), "{retry:?}");
+    assert_eq!(
+        String::from_utf8(retry.stdout).expect("stdout should be UTF-8"),
+        format!(
+            "early review already authorized\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-early-review-authorized.toml\nrevision: 2\nstate: review-ready\nreadiness_basis: early-review-override\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: unknown\nportfolio conditions unavailable: a recorded participant does not resolve to exactly one enrolled repository beneath the selected portfolio roots; restore its enrollment and unique repository identity to derive privacy\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before_retry,
+        "an exact retry whose participants cannot be resolved must write nothing"
+    );
+}
+
+#[test]
 fn review_r1_standards_1_concurrent_later_event_writers_publish_one_sequence() {
     let fixture = Fixture::new("r1-cross-event-single-sequence");
     let steward = fixture.repository("steward", STEWARD_ID, "private");
@@ -2768,6 +2842,69 @@ fn exact_append_retry_without_portfolio_reports_unknown_privacy_without_writes()
         files_beneath(&fixture.root),
         before_retry,
         "an exact retry without portfolio configuration must write nothing"
+    );
+}
+
+#[test]
+fn exact_append_retry_with_unresolvable_participant_reports_unknown_privacy_without_writes() {
+    let fixture = Fixture::new("append-retry-unresolvable-participant");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    let second_consumer = fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(&proposal, append_occurrence_proposal()).expect("append proposal should be writable");
+    let arguments = [
+        "case",
+        "append",
+        CASE_ID,
+        "--expected-revision",
+        "1",
+        "--proposal",
+        proposal_path,
+        "--root",
+        root,
+        "--preview",
+    ];
+    let preview = run_in(&steward, &arguments);
+    assert_eq!(preview.status.code(), Some(0), "{preview:?}");
+    let preview = String::from_utf8(preview.stdout).expect("stdout should be UTF-8");
+    let (_, event) = preview
+        .split_once("event:\n")
+        .expect("preview should contain the exact event");
+    fs::write(&proposal, event).expect("prepared append event should be writable");
+    let applied = run_in(&steward, &arguments[..arguments.len() - 1]);
+    assert_eq!(applied.status.code(), Some(0), "{applied:?}");
+    fs::remove_file(second_consumer.join("reuse-evidence.toml"))
+        .expect("recorded participant should become un-enrolled");
+    let before_retry = files_beneath(&fixture.root);
+    let event_path = steward
+        .join("reuse-evidence/cases")
+        .join(CASE_ID)
+        .join("0002-occurrence-appended.toml");
+    let _write_protection = WriteProtection::for_file_and_parent(&event_path);
+
+    let retry = run_in(&steward, &arguments[..arguments.len() - 1]);
+
+    assert_eq!(retry.status.code(), Some(0), "{retry:?}");
+    assert!(retry.stderr.is_empty(), "{retry:?}");
+    assert_eq!(
+        String::from_utf8(retry.stdout).expect("stdout should be UTF-8"),
+        format!(
+            "occurrence already recorded\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-occurrence-appended.toml\nrevision: 2\nstate: review-ready\nreadiness_basis: occurrence-count\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: unknown\nportfolio conditions unavailable: a recorded participant does not resolve to exactly one enrolled repository beneath the selected portfolio roots; restore its enrollment and unique repository identity to derive privacy\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before_retry,
+        "an exact retry whose participants cannot be resolved must write nothing"
     );
 }
 
