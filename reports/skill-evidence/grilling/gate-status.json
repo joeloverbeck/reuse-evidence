@@ -1,12 +1,13 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-10T18:28:13.600496911Z",
+  "generated_at": "2026-08-10T18:55:31.045009291Z",
   "target_content_hash": "b9f458b0917db5368c6826732f0daf19b63f157b11d22034c023c8d465794ee6",
-  "qualifying_uses_on_current_hash": 4,
+  "qualifying_uses_on_current_hash": 5,
   "open_incident_ids": [
     "evt_fd786d97-7718-4253-9749-5a5f8b2de8f4",
     "evt_738194db-1039-42b1-93fe-c88f23541cd2",
-    "evt_3ae0499f-8ef0-4317-b2b7-a197ea675524"
+    "evt_3ae0499f-8ef0-4317-b2b7-a197ea675524",
+    "evt_a197d32e-168a-482b-8086-5b883450b449"
   ],
   "candidate_clusters": [
     {
@@ -14,13 +15,14 @@
       "open_event_ids": [
         "evt_fd786d97-7718-4253-9749-5a5f8b2de8f4",
         "evt_738194db-1039-42b1-93fe-c88f23541cd2",
-        "evt_3ae0499f-8ef0-4317-b2b7-a197ea675524"
+        "evt_3ae0499f-8ef0-4317-b2b7-a197ea675524",
+        "evt_a197d32e-168a-482b-8086-5b883450b449"
       ],
-      "independent_incidents": 3,
+      "independent_incidents": 4,
       "max_severity": "friction"
     }
   ],
-  "state": "eligible_pending_cooldown",
+  "state": "eligible",
   "authorized_workflow": "skill-evolution",
   "authorization_reason": "friction_recurrence:execution",
   "trigger_event_ids": [
@@ -35,5 +37,5 @@
   "review_reentry_basis": "first_eligibility",
   "target_name": "grilling",
   "target_repo_relative_path": ".claude/skills/grilling",
-  "derivation_session_id": "656bae71-2bbf-4a97-9855-11bb7f159987"
+  "derivation_session_id": "f1ce61cb-3739-42df-b4f6-b686010913ba"
 }

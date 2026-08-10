@@ -14,6 +14,7 @@ This glossary is the shared language for `reuse-evidence`. Use these terms consi
 | **Reuse pressure** | Accumulated evidence that several independent consumers require the same responsibility or that an existing shared abstraction is serving consumers that now change for different reasons. |
 | **Case** | The durable evidence and decision history for one proposed shared responsibility. A case begins only when at least two plausible independent occurrences exist. |
 | **Case event** | One immutable, sequence-numbered fact in a case's authoritative history. Each event is stored as its own TOML file and later events correct or extend history without rewriting it. |
+| **Case event envelope** | The type-independent part of every case event: its schema version, sequence, event type, and event identity, together with the file name that encodes its sequence and type. Every event type records the same envelope; only the body differs. |
 | **Case revision** | The highest contiguous event sequence number recorded for a case. Opening a case creates revision 1. |
 | **Later case event** | Any case event after the one that opened the case. Later events extend or correct history; the opening event is never replaced or reordered. |
 | **Publication** | The act of recording exactly one later case event against an expected case revision. It records one new event or nothing at all, an identical retry changes nothing, and opening a case is not a publication. |
@@ -41,6 +42,7 @@ This glossary is the shared language for `reuse-evidence`. Use these terms consi
 - A **responsibility** may have several **occurrences**.
 - An **occurrence** belongs to one **reuse consumer** and is supported by **evidence references**.
 - A second independent occurrence may open a **case** in a **steward repository**.
+- A **case event** is one **case event envelope** plus a body determined by its event type.
 - A **publication** records one **later case event** and raises the **case revision** by one.
 - Accumulated occurrences derive **watching** or **review-ready** state.
 - A **reuse review** proposes a **reuse decision**.
