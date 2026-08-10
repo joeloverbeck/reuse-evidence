@@ -8,11 +8,11 @@ The project is deliberately not a clone detector and not an automatic refactorin
 
 ## Status
 
-**Repository enrollment, marker-only portfolio reporting with derived change state, durable case opening, growth, and reading, and skill governance implemented.**
+**Repository enrollment, marker-only portfolio reporting with derived change state, durable case opening, growth, early-review authorization, and reading, and skill governance implemented.**
 
 The public Rust crate and standalone `reuse-evidence` binary can enroll a Git repository, including an npm workspace with no Cargo project. Enrollment writes a human-readable version 1 TOML marker at the nearest repository root, safely revalidates an existing marker without minting another identity, and uses the binary's shared success, unsafe-failure, and refusal exit meanings.
 
-Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, unsupported or unreadable markers, and new, moved, unavailable, or visibility-changed repositories. The case command can preview and atomically open a steward-local case from two or more evidenced occurrences, append a later occurrence against an expected revision, list every case stewarded by the current repository, and show one case's complete evidence record with freshly derived readiness, privacy-conflict, and staleness conditions. The binary also mounts the published `skill-evidence` lifecycle under `reuse-evidence skills` and this repository commits the four operator packages it installs. Early review, capture, reuse review, decisions, verification, and this project's own `reuse-evidence-*` skill packages are not implemented yet.
+Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, unsupported or unreadable markers, and new, moved, unavailable, or visibility-changed repositories. The case command can preview and atomically open a steward-local case from two or more evidenced occurrences, append a later occurrence against an expected revision, record a human early-review override on a watching case, list every case stewarded by the current repository, and show one case's complete evidence record with freshly derived readiness, privacy-conflict, and staleness conditions. The binary also mounts the published `skill-evidence` lifecycle under `reuse-evidence skills` and this repository commits the four operator packages it installs. Capture, reuse review, decisions, verification, and this project's own `reuse-evidence-*` skill packages are not implemented yet.
 
 The selected delivery constraints are:
 
@@ -184,9 +184,35 @@ reuse-evidence case append 00000000-0000-4000-8000-000000000011 \
   --root /home/alice/src --preview
 ```
 
-Save the exact `event:` bytes after approval and repeat without `--preview`. A successful revision-1 append exclusively creates `0002-occurrence-appended.toml`, modifies no existing event, and reports the case identity, file, resulting revision, derived state, and privacy consequence. A third occurrence derives `review-ready`; the receipt explicitly states that this authorizes semantic review and does not authorize extraction.
+Save the exact `event:` bytes after approval and repeat without `--preview`. A successful revision-1 append exclusively creates `0002-occurrence-appended.toml`, modifies no existing event, and reports the case identity, file, resulting revision, derived state, readiness basis, and privacy consequence. A third occurrence derives `review-ready` with `readiness_basis: occurrence-count`; the receipt explicitly states that this authorizes semantic review and does not authorize extraction.
 
-An expected revision that does not match refuses without writing. Retrying the exact prepared event at its occupied sequence reports the occurrence as already recorded with success; a different event identity at that sequence is a revision conflict. Unknown cases, a repeated participant-and-consumer pair, and a private participant under a currently public steward also refuse without writing. Participant resolution uses the same `--root` overrides or user-local portfolio configuration as case opening.
+An expected revision that does not match refuses without writing. Retrying the exact prepared event at its occupied sequence reports the occurrence as already recorded with success; a different event identity at that sequence is a revision conflict. Unknown cases, a repeated participant-and-consumer pair, and a private participant under a currently public steward also refuse without writing. Participant resolution uses the same `--root` overrides or user-local portfolio configuration as case opening. Every later-event writer serializes its fresh revision check through a transient operating-system lock on the immutable opening event, then holds that lock through exclusive creation of the typed next event; concurrent append and override operations against one revision cannot both publish.
+
+## Authorize early review
+
+An early-review override applies only to a watching case whose two occurrences do not already satisfy the ordinary review threshold. Prepare a TOML proposal that records all three required parts of the human decision:
+
+```toml
+reason = "coordinated compatibility fixes are already required"
+review_appetite = "compare the two contracts for at most one working day"
+
+[[evidence]]
+kind = "commit"
+reference = "4444444"
+path = "docs/compatibility.md"
+```
+
+Recover the current revision with `case show`, then preview the exact event without writing:
+
+```console
+reuse-evidence case override 00000000-0000-4000-8000-000000000011 \
+  --expected-revision 1 --proposal early-review.toml \
+  --root /home/alice/src --preview
+```
+
+Save the exact `event:` bytes after approval and repeat without `--preview`. A successful revision-1 override exclusively creates `0002-early-review-authorized.toml`, modifies no existing event, and reports the case identity, file, resulting revision, `state: review-ready`, `readiness_basis: early-review-override`, the review-only authorization notice, and the current privacy consequence. One or more `--root` values select the portfolio roots used to resolve every recorded participant, with the user-local portfolio configuration used when no `--root` override is supplied. The consequence is private when the immutable case privacy, the steward's current declared visibility, or any participant's current declared visibility is private. An exact no-write retry remains successful if current portfolio conditions are unavailable and conservatively reports private rather than making an unsupported public claim.
+
+The command refuses a missing reason, evidence collection, review appetite, or expected revision; an empty evidence collection; a stale revision; an unknown case; a current public steward for a private case; a second override; and an override on a case already review-ready from three or more occurrences. Every refusal exits with status `3` and writes nothing. Retrying the exact prepared event at its occupied sequence reports that early review is already authorized with status `0` and preserves every file byte-for-byte. Once recorded, the early-review override remains the displayed readiness basis even if a later append raises the occurrence count to the ordinary threshold.
 
 ## Read cases
 
@@ -196,7 +222,7 @@ From anywhere inside an enrolled steward repository, list every case it owns wit
 reuse-evidence case list
 ```
 
-The listing reports each case identity, current revision, occurrence count, and state. Two occurrences derive `watching`; three or more derive `review-ready`. Every review-ready result states that it authorizes semantic review and does not authorize extraction.
+The listing reports each case identity, current revision, occurrence count, and state. Two occurrences derive `watching`; three or more derive `review-ready` with `readiness_basis: occurrence-count`; a recorded early-review override derives `review-ready` with `readiness_basis: early-review-override`. Every review-ready result states that it authorizes semantic review and does not authorize extraction.
 
 Show the responsibility and complete occurrence evidence for one case with:
 
@@ -204,7 +230,7 @@ Show the responsibility and complete occurrence evidence for one case with:
 reuse-evidence case show 00000000-0000-4000-8000-000000000011
 ```
 
-Both commands rebuild their output directly from the steward's event files on every invocation and write nothing. With configured portfolio roots, or one or more explicit `--root` values, they freshly resolve participant markers and report whether the current case is `privacy_conflicted` or `stale`. Without roots, the steward-local read still succeeds and reports those two current conditions as unknown.
+Both commands rebuild their output directly from the steward's event files on every invocation and write nothing. `case show` renders a recorded override's reason, review appetite, and evidence references. With configured portfolio roots, or one or more explicit `--root` values, both reads freshly resolve participant markers and report whether the current case is `privacy_conflicted` or `stale`. Without roots, the steward-local read still succeeds and reports those two current conditions as unknown.
 
 A current public steward with any currently private recorded participant is privacy-conflicted. A participant identity that no longer resolves uniquely to a discoverable enrolled repository makes the case stale; its historical occurrence remains fully visible. A duplicate or missing event sequence makes the read refuse with the condition and recovery action instead of deriving a plausible result from damaged history. No cache, index, projection file, score, percentage, ranking, duplication measure, or health metric is produced.
 

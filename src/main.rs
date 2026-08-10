@@ -85,6 +85,23 @@ enum CaseCommand {
         #[arg(long)]
         preview: bool,
     },
+    /// Record a human-authorized early-review override.
+    Override {
+        /// Opaque identity of the stewarded case to make review-ready.
+        case_id: String,
+        /// Revision the caller believes the case currently records.
+        #[arg(long)]
+        expected_revision: Option<i64>,
+        /// TOML proposal containing the reason, evidence, and review appetite.
+        #[arg(long)]
+        proposal: Option<PathBuf>,
+        /// Portfolio root for participant resolution; overrides configuration.
+        #[arg(long)]
+        root: Vec<PathBuf>,
+        /// Render the exact event and privacy consequence without writing.
+        #[arg(long)]
+        preview: bool,
+    },
     /// List every case stewarded by the current repository.
     List {
         /// Portfolio root for current participant conditions; overrides configuration.
@@ -184,6 +201,38 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
                 )
             })?;
             let outcome = case::append(
+                Path::new("."),
+                &case_id,
+                expected_revision,
+                &proposal,
+                &root,
+                preview,
+            )?;
+            print!("{}", outcome.render());
+            Ok(())
+        }
+        CaseCommand::Override {
+            case_id,
+            expected_revision,
+            proposal,
+            root,
+            preview,
+        } => {
+            let expected_revision = expected_revision.ok_or_else(|| {
+                TerminalFailure::refusal(
+                    "missing required `--expected-revision`",
+                    format!(
+                        "run `case show {case_id}` to recover the current revision, then rerun `case override {case_id} --expected-revision <REVISION>`"
+                    ),
+                )
+            })?;
+            let proposal = proposal.ok_or_else(|| {
+                TerminalFailure::refusal(
+                    "missing required `--proposal`",
+                    "rerun with `case override <CASE_ID> --proposal <PATH>`",
+                )
+            })?;
+            let outcome = case::authorize_early_review(
                 Path::new("."),
                 &case_id,
                 expected_revision,

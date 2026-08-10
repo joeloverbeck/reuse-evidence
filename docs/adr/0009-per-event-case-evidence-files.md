@@ -4,6 +4,7 @@
 **Date:** 2026-08-10  
 **Decision owner:** Repository maintainer  
 **Governing principles:** [`CONSUMER-CONTRACT.md`](../principles/CONSUMER-CONTRACT.md), [`PORTFOLIO-PRIVACY-AND-STEWARDSHIP.md`](../principles/PORTFOLIO-PRIVACY-AND-STEWARDSHIP.md), [`FOUNDATIONS.md`](../principles/FOUNDATIONS.md)
+**Amended:** 2026-08-10 by explicit maintainer acceptance after the first second-event-type implementation exposed cross-type sequence races. The durable layout is unchanged; later-event writers now serialize revision selection through a transient operating-system lock on the immutable opening event.
 
 ## Context
 
@@ -25,7 +26,9 @@ A case's authoritative event stream is a directory of sequence-numbered single-e
 - Each event is one file named `NNNN-<event-type>.toml`, where `NNNN` is the zero-padded sequence number.
 - Events use TOML, matching the marker's existing committed format.
 - A case's **revision** is the highest sequence number present.
-- An append is an exclusive create of the next sequence file. The filesystem's refusal to create an existing path *is* the expected-revision check; no separate compare-and-swap is required.
+- A later-event write publishes through exclusive create of the next typed sequence file. While only one later event type exists, the filesystem's refusal to create that path supplies the expected-revision check directly.
+- Once several later event types exist, their typed filenames do not contend for one path. Every later-event writer therefore takes an exclusive operating-system file lock on the immutable `0001-case-opened.toml`, re-reads and validates the case revision and operation eligibility while holding the lock, and holds it through exclusive creation of the typed next event.
+- The lock is transient and process-scoped: it is released by closing the file or process termination. It creates no lock file, durable claim, index, event, or schema field. Exclusive create remains the publication operation and recorded events remain immutable.
 - Recorded events are never rewritten or reordered. Correction happens by appending a later event.
 - A reader refuses a case whose sequence numbers are duplicated or non-contiguous rather than interpreting a damaged stream.
 - Event files are committed evidence. The disposable user-local index under `PORTFOLIO-PRIVACY-AND-STEWARDSHIP.md` §9 remains separate and cannot override them.
@@ -37,7 +40,7 @@ This authorizes a file layout and the concurrency primitive it implies. It does 
 ### Positive
 
 - An append cannot rewrite history, because it only ever creates a path that did not exist.
-- Expected-revision protection comes from an operation the operating system already makes atomic, rather than from application-level locking.
+- Expected-revision protection remains operating-system-mediated. Exclusive create atomically publishes one immutable event; the opening-event lock serializes revision selection when different event types would otherwise target different paths.
 - The write reuses the existing atomic create primitive in `src/lib.rs`; no new append primitive is needed.
 - A partial write can damage at most the one event being recorded.
 - Ordinary parallel branch work does not produce merge conflicts in evidence; when two branches do record the same event type at the same sequence, Git reports it loudly as an add/add conflict.
@@ -48,12 +51,13 @@ This authorizes a file layout and the concurrency primitive it implies. It does 
 
 - A case accumulates one file per event rather than one file per case.
 - Reading a case requires listing and sorting a directory instead of reading a single path.
+- Later-event writers briefly contend on the opening event even when they would record different event types. The lock is steward-local and held only across a fresh read, validation, and one exclusive create.
 - Two branches recording *different* event types at the same sequence merge cleanly into a duplicated sequence number, so the reader must detect it rather than the merge doing so. The refusal above is the mitigation.
 - Sequence ordering lives in filenames, so hand-deleting a file leaves a gap. This is detectable, and consumers are already obliged not to hand-edit authoritative history once a compiled writer exists (`CONSUMER-CONTRACT.md` §6).
 
 ### Operational burden
 
-Recording one occurrence is one file creation. Inspecting a case is one directory listing. Neither requires the tool: the layout is readable with `ls` and a text editor, satisfying the no-lock-in obligation in `CONSUMER-CONTRACT.md` §9.
+Recording one later event is one transient lock plus one file creation. Inspecting a case is one directory listing. Neither leaves control machinery behind, and the durable layout remains readable with `ls` and a text editor, satisfying the no-lock-in obligation in `CONSUMER-CONTRACT.md` §9.
 
 ### Compatibility and migration
 

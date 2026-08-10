@@ -6,7 +6,7 @@ pub use read::{ListOutcome, ShowOutcome, list, show};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
-use std::fs;
+use std::fs::{self, File};
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -40,6 +40,13 @@ enum AppendProposalDocument {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum EarlyReviewProposalDocument {
+    Prepared(EarlyReviewAuthorizedEvent),
+    Human(HumanEarlyReviewProposalDocument),
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HumanOpenProposalDocument {
     case_id: String,
@@ -51,6 +58,14 @@ struct HumanOpenProposalDocument {
 #[serde(deny_unknown_fields)]
 struct HumanAppendProposalDocument {
     occurrence: Occurrence,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HumanEarlyReviewProposalDocument {
+    reason: Option<String>,
+    review_appetite: Option<String>,
+    evidence: Option<Vec<EvidenceReference>>,
 }
 
 #[derive(Debug)]
@@ -76,6 +91,21 @@ struct AppendProposal {
 
 #[derive(Debug)]
 struct PreparedAppend {
+    sequence: i64,
+    event_id: Uuid,
+    bytes: String,
+}
+
+#[derive(Debug)]
+struct EarlyReviewProposal {
+    reason: String,
+    review_appetite: String,
+    evidence: Vec<EvidenceReference>,
+    prepared: Option<PreparedEarlyReview>,
+}
+
+#[derive(Debug)]
+struct PreparedEarlyReview {
     sequence: i64,
     event_id: Uuid,
     bytes: String,
@@ -131,11 +161,25 @@ struct OccurrenceAppendedEvent {
     occurrence: Occurrence,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EarlyReviewAuthorizedEvent {
+    schema_version: i64,
+    sequence: i64,
+    event_id: Uuid,
+    event_type: EventType,
+    recorded_at: String,
+    reason: String,
+    review_appetite: String,
+    evidence: Vec<EvidenceReference>,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum EventType {
     CaseOpened,
     OccurrenceAppended,
+    EarlyReviewAuthorized,
 }
 
 /// The complete observable result of opening or previewing a case.
@@ -162,13 +206,31 @@ pub struct AppendOutcome {
     case_id: Uuid,
     event_path: PathBuf,
     revision: i64,
-    occurrence_count: usize,
+    readiness: read::Readiness,
     privacy: Visibility,
     event: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AppendEffect {
+    Preview,
+    Created,
+    Existing,
+}
+
+/// The complete observable result of authorizing or previewing early review.
+#[derive(Debug)]
+pub struct EarlyReviewOutcome {
+    effect: EarlyReviewEffect,
+    case_id: Uuid,
+    event_path: PathBuf,
+    revision: i64,
+    privacy: Visibility,
+    event: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EarlyReviewEffect {
     Preview,
     Created,
     Existing,
@@ -206,15 +268,18 @@ impl AppendOutcome {
             AppendEffect::Created => "appended occurrence",
             AppendEffect::Existing => "occurrence already recorded",
         };
-        let readiness = read::Readiness::from_occurrence_count(self.occurrence_count);
         let mut receipt = format!(
             "{heading}\ncase_id: {}\nfile: {}\nrevision: {}\nstate: {}\n",
             self.case_id,
             self.event_path.display(),
             self.revision,
-            readiness.label()
+            self.readiness.label()
         );
-        if readiness == read::Readiness::ReviewReady {
+        if let Some(basis) = self.readiness.basis() {
+            writeln!(&mut receipt, "readiness_basis: {basis}")
+                .expect("writing to a String cannot fail");
+        }
+        if self.readiness.authorizes_review() {
             receipt.push_str("readiness: ");
             receipt.push_str(REVIEW_ONLY_NOTICE);
             receipt.push('\n');
@@ -222,6 +287,30 @@ impl AppendOutcome {
         writeln!(&mut receipt, "privacy: {}", self.privacy)
             .expect("writing to a String cannot fail");
         if self.effect == AppendEffect::Preview {
+            receipt.push_str("event:\n");
+            receipt.push_str(&self.event);
+        }
+        receipt
+    }
+}
+
+impl EarlyReviewOutcome {
+    /// Renders the receipt followed by exact event bytes for a preview.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let heading = match self.effect {
+            EarlyReviewEffect::Preview => "early-review override preview",
+            EarlyReviewEffect::Created => "authorized early review",
+            EarlyReviewEffect::Existing => "early review already authorized",
+        };
+        let mut receipt = format!(
+            "{heading}\ncase_id: {}\nfile: {}\nrevision: {}\nstate: review-ready\nreadiness_basis: early-review-override\nreadiness: {REVIEW_ONLY_NOTICE}\nprivacy: {}\n",
+            self.case_id,
+            self.event_path.display(),
+            self.revision,
+            self.privacy
+        );
+        if self.effect == EarlyReviewEffect::Preview {
             receipt.push_str("event:\n");
             receipt.push_str(&self.event);
         }
@@ -324,7 +413,7 @@ pub fn append(
     let steward = read_steward(&repository_root)?;
     let relative_case_directory = Path::new("reuse-evidence/cases").join(case_id.to_string());
     validate_case_storage_path(&repository_root, &relative_case_directory)?;
-    let case = read::read_case_for_append(
+    let mut case = read::read_case_for_append(
         &repository_root,
         &relative_case_directory,
         case_id,
@@ -347,6 +436,18 @@ pub fn append(
     validate_case_storage_path(&repository_root, &relative_event_path)?;
     let absolute_event_path = repository_root.join(&relative_event_path);
     let event = append_event_bytes(&proposal, sequence)?;
+    let _case_write_lock = if preview {
+        None
+    } else {
+        let lock = lock_case_for_later_event(&repository_root, &relative_case_directory)?;
+        case = read::read_case_for_append(
+            &repository_root,
+            &relative_case_directory,
+            case_id,
+            steward.repository_id(),
+        )?;
+        Some(lock)
+    };
     if absolute_event_path.exists() {
         return existing_append(
             &absolute_event_path,
@@ -400,10 +501,215 @@ pub fn append(
         case_id,
         event_path: relative_event_path,
         revision: sequence,
-        occurrence_count: case.occurrences.len() + 1,
+        readiness: case.readiness_after_appending_occurrence(),
         privacy,
         event,
     })
+}
+
+/// Records or previews a human-authorized early-review override.
+///
+/// # Errors
+///
+/// Returns a classified failure when the steward, case, proposal, or revision
+/// cannot be read or validated safely.
+pub fn authorize_early_review(
+    working_directory: &Path,
+    case_id: &str,
+    expected_revision: i64,
+    proposal_path: &Path,
+    root_overrides: &[PathBuf],
+    preview: bool,
+) -> Result<EarlyReviewOutcome, TerminalFailure> {
+    let case_id = parse_case_id(case_id)?;
+    let sequence = next_append_sequence(expected_revision)?;
+    let repository_root = find_repository_root(working_directory)?;
+    let steward = read_steward(&repository_root)?;
+    let relative_case_directory = Path::new("reuse-evidence/cases").join(case_id.to_string());
+    validate_case_storage_path(&repository_root, &relative_case_directory)?;
+    let mut case = read::read_case_for_early_review(
+        &repository_root,
+        &relative_case_directory,
+        case_id,
+        steward.repository_id(),
+    )?;
+    let proposal = read_early_review_proposal(proposal_path)?;
+    if let Some(prepared) = &proposal.prepared
+        && prepared.sequence != sequence
+    {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "prepared early-review event records sequence {}, but expected revision {expected_revision} requires sequence {sequence}",
+                prepared.sequence
+            ),
+            "preview the early-review override again against the current expected revision",
+        ));
+    }
+    let relative_event_path =
+        relative_case_directory.join(format!("{sequence:04}-early-review-authorized.toml"));
+    validate_case_storage_path(&repository_root, &relative_event_path)?;
+    let absolute_event_path = repository_root.join(&relative_event_path);
+    let event = early_review_event_bytes(&proposal, sequence)?;
+    let _case_write_lock = if preview {
+        None
+    } else {
+        let lock = lock_case_for_later_event(&repository_root, &relative_case_directory)?;
+        case = read::read_case_for_early_review(
+            &repository_root,
+            &relative_case_directory,
+            case_id,
+            steward.repository_id(),
+        )?;
+        Some(lock)
+    };
+    if absolute_event_path.exists() {
+        return existing_early_review(
+            &absolute_event_path,
+            relative_event_path,
+            &case,
+            &proposal,
+            &event,
+            &steward,
+            root_overrides,
+        );
+    }
+    let privacy = derive_complete_case_privacy(&case, &steward, root_overrides)?;
+    validate_early_review_privacy(&case, &steward, privacy)?;
+    if case.revision != expected_revision {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "expected revision {expected_revision} does not match case `{case_id}` current revision {}",
+                case.revision
+            ),
+            format!(
+                "run `case show {case_id}` and retry `case override {case_id}` with `--expected-revision {}` and the approved proposal",
+                case.revision
+            ),
+        ));
+    }
+    validate_new_early_review(&case)?;
+    let effect = if preview {
+        EarlyReviewEffect::Preview
+    } else {
+        match create_file_atomically_if_absent(&absolute_event_path, event.as_bytes())? {
+            CreateFileOutcome::Created => EarlyReviewEffect::Created,
+            CreateFileOutcome::Occupied => {
+                let refreshed = read::read_case_for_early_review(
+                    &repository_root,
+                    &relative_case_directory,
+                    case_id,
+                    steward.repository_id(),
+                )?;
+                return existing_early_review(
+                    &absolute_event_path,
+                    relative_event_path,
+                    &refreshed,
+                    &proposal,
+                    &event,
+                    &steward,
+                    root_overrides,
+                );
+            }
+        }
+    };
+    Ok(EarlyReviewOutcome {
+        effect,
+        case_id,
+        event_path: relative_event_path,
+        revision: sequence,
+        privacy,
+        event,
+    })
+}
+
+fn existing_early_review(
+    absolute_event_path: &Path,
+    relative_event_path: PathBuf,
+    case: &read::CaseRecord,
+    proposal: &EarlyReviewProposal,
+    proposed_event: &str,
+    steward: &marker::Marker,
+    root_overrides: &[PathBuf],
+) -> Result<EarlyReviewOutcome, TerminalFailure> {
+    let recorded_bytes = fs::read_to_string(absolute_event_path).map_err(|error| {
+        TerminalFailure::refusal(
+            format!(
+                "recorded early-review event `{}` cannot be read: {error}",
+                absolute_event_path.display()
+            ),
+            "restore the recorded event before retrying the early-review override",
+        )
+    })?;
+    let recorded =
+        toml::from_str::<EarlyReviewAuthorizedEvent>(&recorded_bytes).map_err(|error| {
+            TerminalFailure::refusal(
+                format!(
+                    "recorded early-review event `{}` is invalid: {error}",
+                    absolute_event_path.display()
+                ),
+                "restore the supported recorded event before retrying the early-review override",
+            )
+        })?;
+    let Some(prepared) = &proposal.prepared else {
+        return Err(early_review_revision_conflict(
+            case.case_id,
+            recorded.sequence,
+            recorded.event_id,
+            None,
+            case.revision,
+        ));
+    };
+    if recorded.event_id != prepared.event_id {
+        return Err(early_review_revision_conflict(
+            case.case_id,
+            recorded.sequence,
+            recorded.event_id,
+            Some(prepared.event_id),
+            case.revision,
+        ));
+    }
+    if recorded_bytes != proposed_event {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "early-review event identity `{}` is already recorded with different content",
+                recorded.event_id
+            ),
+            "restore the exact previewed early-review event before retrying",
+        ));
+    }
+    // An exact retry writes nothing. If current portfolio conditions are
+    // unavailable, preserve idempotent success and avoid a false public claim.
+    let privacy =
+        derive_complete_case_privacy(case, steward, root_overrides).unwrap_or(Visibility::Private);
+    Ok(EarlyReviewOutcome {
+        effect: EarlyReviewEffect::Existing,
+        case_id: case.case_id,
+        event_path: relative_event_path,
+        revision: recorded.sequence,
+        privacy,
+        event: recorded_bytes,
+    })
+}
+
+fn early_review_revision_conflict(
+    case_id: Uuid,
+    sequence: i64,
+    recorded_event_id: Uuid,
+    proposed_event_id: Option<Uuid>,
+    current_revision: i64,
+) -> TerminalFailure {
+    let proposed = proposed_event_id.map_or_else(
+        || "a newly prepared event".to_owned(),
+        |event_id| format!("event `{event_id}`"),
+    );
+    TerminalFailure::refusal(
+        format!(
+            "case `{case_id}` has a revision conflict at sequence {sequence}: event `{recorded_event_id}` is recorded instead of {proposed}"
+        ),
+        format!(
+            "inspect sequence {sequence}; retry its recorded identity if it is the intended early-review override, or prepare a new operation against revision {current_revision}"
+        ),
+    )
 }
 
 fn next_append_sequence(expected_revision: i64) -> Result<i64, TerminalFailure> {
@@ -422,6 +728,75 @@ fn next_append_sequence(expected_revision: i64) -> Result<i64, TerminalFailure> 
         ));
     }
     Ok(expected_revision + 1)
+}
+
+fn lock_case_for_later_event(
+    repository_root: &Path,
+    relative_case_directory: &Path,
+) -> Result<File, TerminalFailure> {
+    let opening_event_path = repository_root
+        .join(relative_case_directory)
+        .join("0001-case-opened.toml");
+    let opening_event = File::open(&opening_event_path).map_err(|error| {
+        TerminalFailure::refusal(
+            format!(
+                "case opening event `{}` cannot be opened for write serialization: {error}",
+                opening_event_path.display()
+            ),
+            "restore the immutable opening event and retry the later case event",
+        )
+    })?;
+    opening_event.lock().map_err(|error| {
+        TerminalFailure::refusal(
+            format!(
+                "case opening event `{}` cannot serialize a later case event: {error}",
+                opening_event_path.display()
+            ),
+            "make the immutable opening event lockable and retry the later case event",
+        )
+    })?;
+    Ok(opening_event)
+}
+
+fn validate_early_review_privacy(
+    case: &read::CaseRecord,
+    steward: &marker::Marker,
+    privacy: Visibility,
+) -> Result<(), TerminalFailure> {
+    if steward.visibility() == Visibility::Public && privacy == Visibility::Private {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "public steward `{}` cannot authorize early review for private case `{}`",
+                steward.repository_id(),
+                case.case_id
+            ),
+            "run `set-visibility --visibility private` in the steward repository, then preview the early-review override again",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_new_early_review(case: &read::CaseRecord) -> Result<(), TerminalFailure> {
+    if case.has_early_review() {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case `{}` is already review-ready from its recorded early-review override",
+                case.case_id
+            ),
+            "proceed to semantic review; do not record another early-review override",
+        ));
+    }
+    if case.occurrences.len() >= 3 {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case `{}` is already review-ready from {} recorded occurrences",
+                case.case_id,
+                case.occurrences.len()
+            ),
+            "proceed to semantic review; an early-review override cannot change this case's readiness",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_new_append(
@@ -541,7 +916,7 @@ fn existing_append(
         case_id: case.case_id,
         event_path: relative_event_path,
         revision: recorded.sequence,
-        occurrence_count: case.occurrences.len(),
+        readiness: case.readiness(),
         privacy: derive_complete_case_privacy(case, steward, root_overrides)?,
         event: recorded_bytes,
     })
@@ -601,6 +976,30 @@ fn append_event_bytes(proposal: &AppendProposal, sequence: i64) -> Result<String
     toml::to_string(&event).map_err(|error| {
         TerminalFailure::unsafe_failure(format!(
             "occurrence append event could not be encoded: {error}"
+        ))
+    })
+}
+
+fn early_review_event_bytes(
+    proposal: &EarlyReviewProposal,
+    sequence: i64,
+) -> Result<String, TerminalFailure> {
+    if let Some(prepared) = &proposal.prepared {
+        return Ok(prepared.bytes.clone());
+    }
+    let event = EarlyReviewAuthorizedEvent {
+        schema_version: CASE_SCHEMA_VERSION,
+        sequence,
+        event_id: Uuid::new_v4(),
+        event_type: EventType::EarlyReviewAuthorized,
+        recorded_at: recording_timestamp()?,
+        reason: proposal.reason.clone(),
+        review_appetite: proposal.review_appetite.clone(),
+        evidence: proposal.evidence.clone(),
+    };
+    toml::to_string(&event).map_err(|error| {
+        TerminalFailure::unsafe_failure(format!(
+            "early-review authorization event could not be encoded: {error}"
         ))
     })
 }
@@ -958,6 +1357,74 @@ fn read_append_proposal(path: &Path) -> Result<AppendProposal, TerminalFailure> 
     Ok(proposal)
 }
 
+fn read_early_review_proposal(path: &Path) -> Result<EarlyReviewProposal, TerminalFailure> {
+    let text = fs::read_to_string(path).map_err(|error| {
+        TerminalFailure::refusal(
+            format!(
+                "early-review proposal `{}` cannot be read: {error}",
+                path.display()
+            ),
+            "supply a readable UTF-8 TOML proposal with `--proposal <PATH>`",
+        )
+    })?;
+    let document = toml::from_str::<EarlyReviewProposalDocument>(&text).map_err(|error| {
+        TerminalFailure::refusal(
+            format!(
+                "early-review proposal `{}` is invalid: {error}",
+                path.display()
+            ),
+            "provide a complete TOML early-review proposal",
+        )
+    })?;
+    let proposal = match document {
+        EarlyReviewProposalDocument::Human(document) => {
+            let reason = document.reason.ok_or_else(|| {
+                TerminalFailure::refusal(
+                    "early-review override reason is missing",
+                    "provide a concrete reason why waiting for a third occurrence is materially worse",
+                )
+            })?;
+            let evidence = document.evidence.ok_or_else(|| {
+                TerminalFailure::refusal(
+                    "early-review override evidence is missing",
+                    "add one or more recoverable evidence references bearing why waiting is worse",
+                )
+            })?;
+            let review_appetite = document.review_appetite.ok_or_else(|| {
+                TerminalFailure::refusal(
+                    "early-review override review appetite is missing",
+                    "bound the review effort before authorizing early review",
+                )
+            })?;
+            EarlyReviewProposal {
+                reason,
+                review_appetite,
+                evidence,
+                prepared: None,
+            }
+        }
+        EarlyReviewProposalDocument::Prepared(event) => {
+            validate_recorded_early_review(&event)?;
+            EarlyReviewProposal {
+                reason: event.reason,
+                review_appetite: event.review_appetite,
+                evidence: event.evidence,
+                prepared: Some(PreparedEarlyReview {
+                    sequence: event.sequence,
+                    event_id: event.event_id,
+                    bytes: text,
+                }),
+            }
+        }
+    };
+    validate_early_review_content(
+        &proposal.reason,
+        &proposal.review_appetite,
+        &proposal.evidence,
+    )?;
+    Ok(proposal)
+}
+
 fn parse_case_id(value: &str) -> Result<Uuid, TerminalFailure> {
     let case_id = Uuid::parse_str(value).map_err(|error| {
         TerminalFailure::refusal(
@@ -1107,6 +1574,62 @@ fn validate_recorded_append(event: &OccurrenceAppendedEvent) -> Result<(), Termi
     }
     validate_recorded_at(&event.recorded_at, "append", "case append --preview")?;
     validate_occurrence(&event.occurrence, 1, "occurrence.evidence")
+}
+
+fn validate_recorded_early_review(
+    event: &EarlyReviewAuthorizedEvent,
+) -> Result<(), TerminalFailure> {
+    if event.schema_version != CASE_SCHEMA_VERSION
+        || event.sequence <= OPENING_SEQUENCE
+        || event.event_type != EventType::EarlyReviewAuthorized
+    {
+        return Err(TerminalFailure::refusal(
+            "prepared early-review event is not a supported `early_review_authorized` event after revision 1",
+            "use the exact event rendered by `case override --preview`",
+        ));
+    }
+    if event.event_id.get_version_num() != 4 {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "prepared early-review event identity `{}` is not an opaque UUID version 4",
+                event.event_id
+            ),
+            "use the exact event rendered by `case override --preview`",
+        ));
+    }
+    validate_recorded_at(
+        &event.recorded_at,
+        "early-review authorization",
+        "case override --preview",
+    )?;
+    validate_early_review_content(&event.reason, &event.review_appetite, &event.evidence)
+}
+
+fn validate_early_review_content(
+    reason: &str,
+    review_appetite: &str,
+    evidence: &[EvidenceReference],
+) -> Result<(), TerminalFailure> {
+    require_nonempty("reason", reason)?;
+    require_nonempty("review_appetite", review_appetite)?;
+    if evidence.is_empty() {
+        return Err(TerminalFailure::refusal(
+            "early-review override requires at least one evidence reference",
+            "add one or more recoverable evidence references bearing why waiting is worse",
+        ));
+    }
+    for (index, reference) in evidence.iter().enumerate() {
+        if reference.reference.trim().is_empty() {
+            return Err(TerminalFailure::refusal(
+                format!("early-review evidence reference {} is empty", index + 1),
+                "provide a recoverable commit reference bearing why waiting is worse",
+            ));
+        }
+        if let Some(path) = &reference.path {
+            validate_relative_evidence_path(path)?;
+        }
+    }
+    Ok(())
 }
 
 fn validate_recorded_at(

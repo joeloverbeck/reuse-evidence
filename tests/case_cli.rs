@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const CASE_ID: &str = "00000000-0000-4000-8000-000000000011";
@@ -89,6 +89,53 @@ fn run_without_portfolio_configuration(
         .expect("compiled reuse-evidence binary should run")
 }
 
+fn spawn_competing_later_event_writers(
+    steward: &Path,
+    root: &str,
+    append_proposal: &Path,
+    override_proposal: &Path,
+) -> (Child, Child) {
+    let append = Command::new(env!("CARGO_BIN_EXE_reuse-evidence"))
+        .args([
+            "case",
+            "append",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            append_proposal
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ])
+        .current_dir(steward)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("append process should start");
+    let override_process = Command::new(env!("CARGO_BIN_EXE_reuse-evidence"))
+        .args([
+            "case",
+            "override",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            override_proposal
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ])
+        .current_dir(steward)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("override process should start");
+    (append, override_process)
+}
+
 fn recover_case_revision(fixture: &Fixture, steward: &Path, case_id: &str) -> String {
     let recovered =
         run_without_portfolio_configuration(fixture, steward, &["case", "show", case_id]);
@@ -170,6 +217,11 @@ fn append_occurrence_proposal() -> String {
     )
 }
 
+fn early_review_override_proposal() -> String {
+    "reason = \"coordinated compatibility fixes are already required\"\nreview_appetite = \"compare the two contracts for at most one working day\"\n\n[[evidence]]\nkind = \"commit\"\nreference = \"4444444\"\npath = \"docs/compatibility.md\"\n"
+        .to_owned()
+}
+
 fn duplicate_occurrence_append_proposal() -> String {
     format!(
         "[occurrence]\nrepository_id = \"{FIRST_PARTICIPANT_ID}\"\nconsumer = \"rust-release-tool\"\nindependence = \"a repository move is not a new consumer need\"\n\n[[occurrence.evidence]]\nkind = \"commit\"\nreference = \"3333333\"\npath = \"src/event.rs\"\n"
@@ -221,7 +273,7 @@ fn listing_reports_every_stewarded_case_and_derived_state_without_writes_or_port
     assert_eq!(
         stdout,
         format!(
-            "cases\n- case_id: {CASE_ID}\n  revision: 1\n  occurrence_count: 2\n  state: watching\n  privacy_conflicted: unknown\n  stale: unknown\n- case_id: {SECOND_CASE_ID}\n  revision: 1\n  occurrence_count: 3\n  state: review-ready\n  readiness: authorizes semantic review; does not authorize extraction\n  privacy_conflicted: unknown\n  stale: unknown\nportfolio conditions unavailable: configure portfolio roots or supply `--root <PATH>` to derive privacy conflicts and staleness\n"
+            "cases\n- case_id: {CASE_ID}\n  revision: 1\n  occurrence_count: 2\n  state: watching\n  privacy_conflicted: unknown\n  stale: unknown\n- case_id: {SECOND_CASE_ID}\n  revision: 1\n  occurrence_count: 3\n  state: review-ready\n  readiness_basis: occurrence-count\n  readiness: authorizes semantic review; does not authorize extraction\n  privacy_conflicted: unknown\n  stale: unknown\nportfolio conditions unavailable: configure portfolio roots or supply `--root <PATH>` to derive privacy conflicts and staleness\n"
         )
     );
     for prohibited in [
@@ -1112,7 +1164,7 @@ fn appending_third_occurrence_creates_one_event_and_derives_review_ready() {
     assert_eq!(
         String::from_utf8(output.stdout).expect("stdout should be UTF-8"),
         format!(
-            "appended occurrence\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-occurrence-appended.toml\nrevision: 2\nstate: review-ready\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
+            "appended occurrence\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-occurrence-appended.toml\nrevision: 2\nstate: review-ready\nreadiness_basis: occurrence-count\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
         )
     );
 
@@ -1162,13 +1214,1265 @@ fn appending_third_occurrence_creates_one_event_and_derives_review_ready() {
     let shown = run_without_portfolio_configuration(&fixture, &steward, &["case", "show", CASE_ID]);
     assert_eq!(shown.status.code(), Some(0), "{shown:?}");
     let shown = String::from_utf8(shown.stdout).expect("stdout should be UTF-8");
-    assert!(shown.contains("revision: 2\noccurrence_count: 3\nstate: review-ready\n"));
+    assert!(shown.contains(
+        "revision: 2\noccurrence_count: 3\nstate: review-ready\nreadiness_basis: occurrence-count\n"
+    ));
     assert!(
         shown.contains("readiness: authorizes semantic review; does not authorize extraction\n")
     );
     assert!(shown.contains(
         "- repository_id: 00000000-0000-4000-8000-000000000015\n  consumer: desktop-packager\n  independence: separate distribution contract\n"
     ));
+}
+
+#[test]
+fn recording_early_review_override_creates_one_event_and_derives_override_ready() {
+    let fixture = Fixture::new("early-review-override");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    let open_proposal = fixture.proposal(&two_occurrence_proposal());
+    let open_proposal_path = open_proposal
+        .to_str()
+        .expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            open_proposal_path,
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    let override_proposal = fixture.root.join("early-review.toml");
+    fs::write(&override_proposal, early_review_override_proposal())
+        .expect("early-review proposal should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "override",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            override_proposal
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("stdout should be UTF-8"),
+        format!(
+            "authorized early review\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-early-review-authorized.toml\nrevision: 2\nstate: review-ready\nreadiness_basis: early-review-override\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
+        )
+    );
+
+    let relative_event = PathBuf::from("steward")
+        .join("reuse-evidence/cases")
+        .join(CASE_ID)
+        .join("0002-early-review-authorized.toml");
+    let mut after = files_beneath(&fixture.root);
+    let event = after
+        .remove(&relative_event)
+        .expect("override should create its one event file");
+    assert_eq!(after, before, "override must add only its event file");
+    let event = String::from_utf8(event).expect("event should be UTF-8");
+    let parsed = event
+        .parse::<toml::Table>()
+        .expect("early-review event should be valid TOML");
+    assert_eq!(parsed["schema_version"].as_integer(), Some(1));
+    assert_eq!(parsed["sequence"].as_integer(), Some(2));
+    assert_eq!(
+        parsed["event_type"].as_str(),
+        Some("early_review_authorized")
+    );
+    assert_eq!(
+        parsed["reason"].as_str(),
+        Some("coordinated compatibility fixes are already required")
+    );
+    assert_eq!(
+        parsed["review_appetite"].as_str(),
+        Some("compare the two contracts for at most one working day")
+    );
+    assert_eq!(parsed["evidence"].as_array().map(Vec::len), Some(1));
+    assert_eq!(parsed["evidence"][0]["kind"].as_str(), Some("commit"));
+    assert_eq!(parsed["evidence"][0]["reference"].as_str(), Some("4444444"));
+
+    let shown = run_without_portfolio_configuration(&fixture, &steward, &["case", "show", CASE_ID]);
+    assert_eq!(shown.status.code(), Some(0), "{shown:?}");
+    let shown = String::from_utf8(shown.stdout).expect("stdout should be UTF-8");
+    assert!(shown.contains(
+        "revision: 2\noccurrence_count: 2\nstate: review-ready\nreadiness_basis: early-review-override\nreadiness: authorizes semantic review; does not authorize extraction\n"
+    ));
+    assert!(shown.contains(
+        "early_review:\n  reason: coordinated compatibility fixes are already required\n  review_appetite: compare the two contracts for at most one working day\n  evidence:\n  - kind: commit\n    reference: 4444444\n    path: docs/compatibility.md\n"
+    ));
+}
+
+#[test]
+fn approved_early_review_preview_is_byte_exact_and_retry_is_idempotent() {
+    let fixture = Fixture::new("preview-and-retry-early-review");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    let open_proposal = fixture.proposal(&two_occurrence_proposal());
+    let open_proposal_path = open_proposal
+        .to_str()
+        .expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            open_proposal_path,
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    let override_proposal = fixture.root.join("early-review.toml");
+    fs::write(&override_proposal, early_review_override_proposal())
+        .expect("early-review proposal should be writable");
+    let override_proposal_path = override_proposal
+        .to_str()
+        .expect("fixture path should be UTF-8");
+    let arguments = [
+        "case",
+        "override",
+        CASE_ID,
+        "--expected-revision",
+        "1",
+        "--proposal",
+        override_proposal_path,
+        "--root",
+        root,
+    ];
+    let mut preview_arguments = arguments.to_vec();
+    preview_arguments.push("--preview");
+    let before_preview = files_beneath(&fixture.root);
+
+    let preview = run_in(&steward, &preview_arguments);
+
+    assert_eq!(preview.status.code(), Some(0), "{preview:?}");
+    assert!(preview.stderr.is_empty(), "{preview:?}");
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before_preview,
+        "early-review preview must preserve every fixture byte"
+    );
+    let preview = String::from_utf8(preview.stdout).expect("stdout should be UTF-8");
+    let (receipt, event) = preview
+        .split_once("event:\n")
+        .expect("preview should separate its receipt from the exact event");
+    assert_eq!(
+        receipt,
+        format!(
+            "early-review override preview\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-early-review-authorized.toml\nrevision: 2\nstate: review-ready\nreadiness_basis: early-review-override\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
+        )
+    );
+    fs::write(&override_proposal, event)
+        .expect("the exact previewed early-review event should be approvable");
+
+    let applied = run_in(&steward, &arguments);
+    assert_eq!(applied.status.code(), Some(0), "{applied:?}");
+    assert_eq!(
+        fs::read_to_string(
+            steward
+                .join("reuse-evidence/cases")
+                .join(CASE_ID)
+                .join("0002-early-review-authorized.toml")
+        )
+        .expect("approved early-review event should be recorded"),
+        event,
+        "applying an approved preview must preserve its exact bytes"
+    );
+    let before_retry = files_beneath(&fixture.root);
+
+    let retry_arguments = [
+        "case",
+        "override",
+        CASE_ID,
+        "--expected-revision",
+        "1",
+        "--proposal",
+        override_proposal_path,
+    ];
+    let retry = run_in(&steward, &retry_arguments);
+
+    assert_eq!(retry.status.code(), Some(0), "{retry:?}");
+    assert!(retry.stderr.is_empty(), "{retry:?}");
+    assert_eq!(
+        String::from_utf8(retry.stdout).expect("stdout should be UTF-8"),
+        format!(
+            "early review already authorized\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-early-review-authorized.toml\nrevision: 2\nstate: review-ready\nreadiness_basis: early-review-override\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before_retry,
+        "retrying the same early-review event identity must preserve every fixture byte"
+    );
+}
+
+#[test]
+fn review_r1_standards_1_concurrent_later_event_writers_publish_one_sequence() {
+    let fixture = Fixture::new("r1-cross-event-single-sequence");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let open_proposal = fixture.proposal(&two_occurrence_proposal());
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            open_proposal
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    let append_proposal = fixture.root.join("append.toml");
+    fs::write(&append_proposal, append_occurrence_proposal())
+        .expect("append proposal should be writable");
+    let override_proposal = fixture.root.join("override.toml");
+    fs::write(&override_proposal, early_review_override_proposal())
+        .expect("override proposal should be writable");
+    let opening = File::open(
+        steward
+            .join("reuse-evidence/cases")
+            .join(CASE_ID)
+            .join("0001-case-opened.toml"),
+    )
+    .expect("opening event should be readable");
+    opening
+        .lock()
+        .expect("test should be able to hold the case write lock");
+
+    let (mut append, mut override_process) =
+        spawn_competing_later_event_writers(&steward, root, &append_proposal, &override_proposal);
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        append
+            .try_wait()
+            .expect("append status should be readable")
+            .is_none(),
+        "append must wait while another process holds the case write lock"
+    );
+    assert!(
+        override_process
+            .try_wait()
+            .expect("override status should be readable")
+            .is_none(),
+        "override must wait while another process holds the case write lock"
+    );
+    drop(opening);
+
+    let append = append
+        .wait_with_output()
+        .expect("append process should finish");
+    let override_output = override_process
+        .wait_with_output()
+        .expect("override process should finish");
+    let status_codes = [append.status.code(), override_output.status.code()];
+    assert_eq!(
+        status_codes.iter().filter(|code| **code == Some(0)).count(),
+        1,
+        "exactly one same-revision writer should publish: append={append:?}, override={override_output:?}"
+    );
+    assert_eq!(
+        status_codes.iter().filter(|code| **code == Some(3)).count(),
+        1,
+        "the competing writer should refuse: append={append:?}, override={override_output:?}"
+    );
+    let case_directory = steward.join("reuse-evidence/cases").join(CASE_ID);
+    let sequence_two = fs::read_dir(&case_directory)
+        .expect("case should remain readable")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("0002-"))
+        .count();
+    assert_eq!(sequence_two, 1, "only one sequence-two event may exist");
+}
+
+#[test]
+fn review_r1_spec_1_cross_event_loser_refuses_stale_without_duplicate_sequence() {
+    let fixture = Fixture::new("r1-cross-event-stale-loser");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let open_proposal = fixture.proposal(&two_occurrence_proposal());
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            open_proposal
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    let append_proposal = fixture.root.join("append.toml");
+    fs::write(&append_proposal, append_occurrence_proposal())
+        .expect("append proposal should be writable");
+    let override_proposal = fixture.root.join("override.toml");
+    fs::write(&override_proposal, early_review_override_proposal())
+        .expect("override proposal should be writable");
+    let opening = File::open(
+        steward
+            .join("reuse-evidence/cases")
+            .join(CASE_ID)
+            .join("0001-case-opened.toml"),
+    )
+    .expect("opening event should be readable");
+    opening
+        .lock()
+        .expect("test should be able to hold the case write lock");
+
+    let (append, override_process) =
+        spawn_competing_later_event_writers(&steward, root, &append_proposal, &override_proposal);
+    std::thread::sleep(Duration::from_millis(100));
+    drop(opening);
+
+    let append = append
+        .wait_with_output()
+        .expect("append process should finish");
+    let override_output = override_process
+        .wait_with_output()
+        .expect("override process should finish");
+    let loser = [&append, &override_output]
+        .into_iter()
+        .find(|output| output.status.code() == Some(3))
+        .expect("one competing writer should refuse");
+    assert!(loser.stdout.is_empty(), "{loser:?}");
+    let loser_stderr = String::from_utf8(loser.stderr.clone()).expect("stderr should be UTF-8");
+    assert!(
+        loser_stderr.starts_with(&format!(
+            "refusal: expected revision 1 does not match case `{CASE_ID}` current revision 2\n"
+        )),
+        "{loser_stderr}"
+    );
+    assert!(
+        loser_stderr.contains(&format!("run `case show {CASE_ID}`")),
+        "{loser_stderr}"
+    );
+    let shown = run_without_portfolio_configuration(&fixture, &steward, &["case", "show", CASE_ID]);
+    assert_eq!(shown.status.code(), Some(0), "{shown:?}");
+    let shown = String::from_utf8(shown.stdout).expect("stdout should be UTF-8");
+    assert!(shown.contains("revision: 2\n"), "{shown}");
+}
+
+#[test]
+fn review_r1_standards_2_public_steward_refuses_private_case_override_without_writes() {
+    let fixture = Fixture::new("r1-public-steward-private-case-override");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    let open_proposal = fixture.proposal(&two_occurrence_proposal());
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            open_proposal
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    let visibility_change = run_in(&steward, &["set-visibility", "--visibility", "public"]);
+    assert_eq!(
+        visibility_change.status.code(),
+        Some(0),
+        "{visibility_change:?}"
+    );
+    let override_proposal = fixture.root.join("override.toml");
+    fs::write(&override_proposal, early_review_override_proposal())
+        .expect("override proposal should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "override",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            override_proposal
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        format!(
+            "refusal: public steward `{STEWARD_ID}` cannot authorize early review for private case `{CASE_ID}`\nresolution: run `set-visibility --visibility private` in the steward repository, then preview the early-review override again\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "a privacy refusal must preserve every fixture byte"
+    );
+}
+
+#[test]
+fn review_r1_spec_2_append_after_override_preserves_override_readiness_basis() {
+    let fixture = Fixture::new("r1-append-after-override-basis");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let open_proposal = fixture.proposal(&two_occurrence_proposal());
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            open_proposal
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    let override_proposal = fixture.root.join("override.toml");
+    fs::write(&override_proposal, early_review_override_proposal())
+        .expect("override proposal should be writable");
+    let override_output = run_in(
+        &steward,
+        &[
+            "case",
+            "override",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            override_proposal
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(
+        override_output.status.code(),
+        Some(0),
+        "{override_output:?}"
+    );
+    let append_proposal = fixture.root.join("append.toml");
+    fs::write(&append_proposal, append_occurrence_proposal())
+        .expect("append proposal should be writable");
+
+    let appended = run_in(
+        &steward,
+        &[
+            "case",
+            "append",
+            CASE_ID,
+            "--expected-revision",
+            "2",
+            "--proposal",
+            append_proposal
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(appended.status.code(), Some(0), "{appended:?}");
+    assert!(appended.stderr.is_empty(), "{appended:?}");
+    assert_eq!(
+        String::from_utf8(appended.stdout).expect("stdout should be UTF-8"),
+        format!(
+            "appended occurrence\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0003-occurrence-appended.toml\nrevision: 3\nstate: review-ready\nreadiness_basis: early-review-override\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
+        )
+    );
+    let shown = run_without_portfolio_configuration(&fixture, &steward, &["case", "show", CASE_ID]);
+    assert_eq!(shown.status.code(), Some(0), "{shown:?}");
+    let shown = String::from_utf8(shown.stdout).expect("stdout should be UTF-8");
+    assert!(shown.contains(
+        "revision: 3\noccurrence_count: 3\nstate: review-ready\nreadiness_basis: early-review-override\n"
+    ));
+}
+
+#[test]
+fn review_r2_standards_1_exact_override_retry_survives_steward_visibility_change() {
+    let fixture = Fixture::new("r2-idempotent-override-visibility");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    let open_proposal = fixture.proposal(&two_occurrence_proposal());
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            open_proposal
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    let override_proposal = fixture.root.join("override.toml");
+    fs::write(&override_proposal, early_review_override_proposal())
+        .expect("override proposal should be writable");
+    let proposal_path = override_proposal
+        .to_str()
+        .expect("fixture path should be UTF-8");
+    let arguments = [
+        "case",
+        "override",
+        CASE_ID,
+        "--expected-revision",
+        "1",
+        "--proposal",
+        proposal_path,
+        "--root",
+        root,
+    ];
+    let mut preview_arguments = arguments.to_vec();
+    preview_arguments.push("--preview");
+    let preview = run_in(&steward, &preview_arguments);
+    assert_eq!(preview.status.code(), Some(0), "{preview:?}");
+    let preview = String::from_utf8(preview.stdout).expect("stdout should be UTF-8");
+    let (_, event) = preview
+        .split_once("event:\n")
+        .expect("preview should contain exact event bytes");
+    fs::write(&override_proposal, event).expect("prepared event should be writable");
+    let applied = run_in(&steward, &arguments);
+    assert_eq!(applied.status.code(), Some(0), "{applied:?}");
+    let visibility_change = run_in(&steward, &["set-visibility", "--visibility", "public"]);
+    assert_eq!(
+        visibility_change.status.code(),
+        Some(0),
+        "{visibility_change:?}"
+    );
+    let before_retry = files_beneath(&fixture.root);
+
+    let retry_arguments = [
+        "case",
+        "override",
+        CASE_ID,
+        "--expected-revision",
+        "1",
+        "--proposal",
+        proposal_path,
+    ];
+    let retry = run_in(&steward, &retry_arguments);
+
+    assert_eq!(retry.status.code(), Some(0), "{retry:?}");
+    assert!(retry.stderr.is_empty(), "{retry:?}");
+    assert!(
+        String::from_utf8(retry.stdout)
+            .expect("stdout should be UTF-8")
+            .starts_with("early review already authorized\n"),
+        "exact prepared identity should retain the success meaning"
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before_retry,
+        "an exact retry after visibility change must preserve every byte"
+    );
+}
+
+#[test]
+fn review_r2_spec_1_exact_override_retry_reports_recorded_event_after_public_transition() {
+    let fixture = Fixture::new("r2-exact-override-retry-public-transition");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    let open_proposal = fixture.proposal(&two_occurrence_proposal());
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            open_proposal
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    let override_proposal = fixture.root.join("override.toml");
+    fs::write(&override_proposal, early_review_override_proposal())
+        .expect("override proposal should be writable");
+    let proposal_path = override_proposal
+        .to_str()
+        .expect("fixture path should be UTF-8");
+    let arguments = [
+        "case",
+        "override",
+        CASE_ID,
+        "--expected-revision",
+        "1",
+        "--proposal",
+        proposal_path,
+        "--root",
+        root,
+    ];
+    let mut preview_arguments = arguments.to_vec();
+    preview_arguments.push("--preview");
+    let preview = run_in(&steward, &preview_arguments);
+    assert_eq!(preview.status.code(), Some(0), "{preview:?}");
+    let preview = String::from_utf8(preview.stdout).expect("stdout should be UTF-8");
+    let (_, event) = preview
+        .split_once("event:\n")
+        .expect("preview should contain exact event bytes");
+    fs::write(&override_proposal, event).expect("prepared event should be writable");
+    let applied = run_in(&steward, &arguments);
+    assert_eq!(applied.status.code(), Some(0), "{applied:?}");
+    let visibility_change = run_in(&steward, &["set-visibility", "--visibility", "public"]);
+    assert_eq!(
+        visibility_change.status.code(),
+        Some(0),
+        "{visibility_change:?}"
+    );
+
+    let retry = run_in(&steward, &arguments);
+
+    assert_eq!(retry.status.code(), Some(0), "{retry:?}");
+    assert!(retry.stderr.is_empty(), "{retry:?}");
+    assert_eq!(
+        String::from_utf8(retry.stdout).expect("stdout should be UTF-8"),
+        format!(
+            "early review already authorized\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-early-review-authorized.toml\nrevision: 2\nstate: review-ready\nreadiness_basis: early-review-override\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
+        )
+    );
+    let event_path = steward
+        .join("reuse-evidence/cases")
+        .join(CASE_ID)
+        .join("0002-early-review-authorized.toml");
+    assert_eq!(
+        fs::read_to_string(event_path).expect("recorded event should remain readable"),
+        event,
+        "the exact recorded event must remain unchanged"
+    );
+}
+
+#[test]
+fn review_r2_spec_2_override_receipts_apply_current_private_steward_consequence() {
+    let fixture = Fixture::new("r2-override-current-private-consequence");
+    let steward = fixture.repository("steward", STEWARD_ID, "public");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "public");
+    let open_proposal = fixture.proposal(&two_occurrence_proposal());
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            open_proposal
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    let visibility_change = run_in(&steward, &["set-visibility", "--visibility", "private"]);
+    assert_eq!(
+        visibility_change.status.code(),
+        Some(0),
+        "{visibility_change:?}"
+    );
+    let override_proposal = fixture.root.join("override.toml");
+    fs::write(&override_proposal, early_review_override_proposal())
+        .expect("override proposal should be writable");
+    let proposal_path = override_proposal
+        .to_str()
+        .expect("fixture path should be UTF-8");
+    let arguments = [
+        "case",
+        "override",
+        CASE_ID,
+        "--expected-revision",
+        "1",
+        "--proposal",
+        proposal_path,
+        "--root",
+        root,
+    ];
+    let mut preview_arguments = arguments.to_vec();
+    preview_arguments.push("--preview");
+    let before_preview = files_beneath(&fixture.root);
+
+    let preview = run_in(&steward, &preview_arguments);
+
+    assert_eq!(preview.status.code(), Some(0), "{preview:?}");
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before_preview,
+        "preview must preserve every fixture byte"
+    );
+    let preview = String::from_utf8(preview.stdout).expect("stdout should be UTF-8");
+    assert!(preview.contains("privacy: private\nevent:\n"), "{preview}");
+    let (_, event) = preview
+        .split_once("event:\n")
+        .expect("preview should contain exact event bytes");
+    fs::write(&override_proposal, event).expect("prepared event should be writable");
+
+    let applied = run_in(&steward, &arguments);
+
+    assert_eq!(applied.status.code(), Some(0), "{applied:?}");
+    assert!(applied.stderr.is_empty(), "{applied:?}");
+    assert_eq!(
+        String::from_utf8(applied.stdout).expect("stdout should be UTF-8"),
+        format!(
+            "authorized early review\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-early-review-authorized.toml\nrevision: 2\nstate: review-ready\nreadiness_basis: early-review-override\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
+        )
+    );
+}
+
+#[test]
+fn review_r3_spec_1_override_refuses_participant_that_became_private_without_writes() {
+    let fixture = Fixture::new("r3-override-current-private-participant");
+    let steward = fixture.repository("steward", STEWARD_ID, "public");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    let second = fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "public");
+    let open_proposal = fixture.proposal(&two_occurrence_proposal());
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            open_proposal
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    let visibility_change = run_in(&second, &["set-visibility", "--visibility", "private"]);
+    assert_eq!(
+        visibility_change.status.code(),
+        Some(0),
+        "{visibility_change:?}"
+    );
+    let override_proposal = fixture.root.join("override.toml");
+    fs::write(&override_proposal, early_review_override_proposal())
+        .expect("override proposal should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "override",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            override_proposal
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        format!(
+            "refusal: public steward `{STEWARD_ID}` cannot authorize early review for private case `{CASE_ID}`\nresolution: run `set-visibility --visibility private` in the steward repository, then preview the early-review override again\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "current private-participant refusal must preserve every fixture byte"
+    );
+}
+
+#[test]
+fn early_review_override_without_reason_refuses_without_writes() {
+    let fixture = Fixture::new("early-review-without-reason");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(
+        &proposal,
+        "review_appetite = \"compare the two contracts for at most one working day\"\n\n[[evidence]]\nkind = \"commit\"\nreference = \"4444444\"\n",
+    )
+    .expect("incomplete early-review proposal should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "override",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            proposal_path,
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        "refusal: early-review override reason is missing\nresolution: provide a concrete reason why waiting for a third occurrence is materially worse\n"
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "a missing early-review reason must preserve every fixture byte"
+    );
+}
+
+#[test]
+fn early_review_override_without_evidence_refuses_without_writes() {
+    let fixture = Fixture::new("early-review-without-evidence");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(
+        &proposal,
+        "reason = \"coordinated compatibility fixes are already required\"\nreview_appetite = \"compare the two contracts for at most one working day\"\n",
+    )
+    .expect("incomplete early-review proposal should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "override",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            proposal_path,
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        "refusal: early-review override evidence is missing\nresolution: add one or more recoverable evidence references bearing why waiting is worse\n"
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "missing early-review evidence must preserve every fixture byte"
+    );
+}
+
+#[test]
+fn early_review_override_without_appetite_refuses_without_writes() {
+    let fixture = Fixture::new("early-review-without-appetite");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(
+        &proposal,
+        "reason = \"coordinated compatibility fixes are already required\"\n\n[[evidence]]\nkind = \"commit\"\nreference = \"4444444\"\n",
+    )
+    .expect("incomplete early-review proposal should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "override",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            proposal_path,
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        "refusal: early-review override review appetite is missing\nresolution: bound the review effort before authorizing early review\n"
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "a missing early-review appetite must preserve every fixture byte"
+    );
+}
+
+#[test]
+fn early_review_override_on_occurrence_count_ready_case_refuses_without_writes() {
+    let fixture = Fixture::new("early-review-on-count-ready-case");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&three_occurrence_proposal().replace(SECOND_CASE_ID, CASE_ID));
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(&proposal, early_review_override_proposal())
+        .expect("early-review proposal should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "override",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            proposal_path,
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        format!(
+            "refusal: case `{CASE_ID}` is already review-ready from 3 recorded occurrences\nresolution: proceed to semantic review; an early-review override cannot change this case's readiness\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "an occurrence-count-ready case refusal must preserve every fixture byte"
+    );
+}
+
+#[test]
+fn early_review_override_with_stale_revision_refuses_without_writes() {
+    let fixture = Fixture::new("early-review-stale-revision");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(&proposal, early_review_override_proposal())
+        .expect("early-review proposal should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "override",
+            CASE_ID,
+            "--expected-revision",
+            "2",
+            "--proposal",
+            proposal_path,
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        format!(
+            "refusal: expected revision 2 does not match case `{CASE_ID}` current revision 1\nresolution: run `case show {CASE_ID}` and retry `case override {CASE_ID}` with `--expected-revision 1` and the approved proposal\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "a stale early-review revision must preserve every fixture byte"
+    );
+}
+
+#[test]
+fn early_review_override_on_unknown_case_refuses_and_creates_nothing() {
+    let fixture = Fixture::new("early-review-unknown-case");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    let proposal = fixture.proposal(&early_review_override_proposal());
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "override",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            proposal.to_str().expect("fixture path should be UTF-8"),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        format!(
+            "refusal: case identity `{CASE_ID}` is not stewarded by repository `{STEWARD_ID}`\nresolution: run `case list` in this steward repository and retry `case override` with a recorded watching case identity\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "an unknown early-review case must create no case directory or other file"
+    );
+}
+
+#[test]
+fn early_review_override_requires_declared_expected_revision_without_writes() {
+    let fixture = Fixture::new("early-review-missing-expected-revision");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(&proposal, early_review_override_proposal())
+        .expect("early-review proposal should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &["case", "override", CASE_ID, "--proposal", proposal_path],
+    );
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        format!(
+            "refusal: missing required `--expected-revision`\nresolution: run `case show {CASE_ID}` to recover the current revision, then rerun `case override {CASE_ID} --expected-revision <REVISION>`\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "a missing expected revision must preserve every fixture byte"
+    );
+}
+
+#[test]
+fn early_review_override_with_empty_evidence_refuses_without_writes() {
+    let fixture = Fixture::new("early-review-empty-evidence");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(
+        &proposal,
+        "reason = \"coordinated compatibility fixes are already required\"\nreview_appetite = \"compare the two contracts for at most one working day\"\nevidence = []\n",
+    )
+    .expect("empty-evidence early-review proposal should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "override",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            proposal_path,
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        "refusal: early-review override requires at least one evidence reference\nresolution: add one or more recoverable evidence references bearing why waiting is worse\n"
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "an empty early-review evidence collection must preserve every fixture byte"
+    );
+}
+
+#[test]
+fn second_early_review_override_refuses_without_writes() {
+    let fixture = Fixture::new("second-early-review-override");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(&proposal, early_review_override_proposal())
+        .expect("early-review proposal should be writable");
+    let first = run_in(
+        &steward,
+        &[
+            "case",
+            "override",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            proposal_path,
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(first.status.code(), Some(0), "{first:?}");
+    fs::write(
+        &proposal,
+        early_review_override_proposal().replace(
+            "coordinated compatibility fixes are already required",
+            "the published contract is diverging",
+        ),
+    )
+    .expect("second early-review proposal should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "override",
+            CASE_ID,
+            "--expected-revision",
+            "2",
+            "--proposal",
+            proposal_path,
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        format!(
+            "refusal: case `{CASE_ID}` is already review-ready from its recorded early-review override\nresolution: proceed to semantic review; do not record another early-review override\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "a second early-review override must preserve every fixture byte"
+    );
 }
 
 #[test]
@@ -1234,7 +2538,7 @@ fn approved_append_preview_is_byte_exact_and_retry_is_idempotent() {
     assert_eq!(
         receipt,
         format!(
-            "case append preview\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-occurrence-appended.toml\nrevision: 2\nstate: review-ready\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
+            "case append preview\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-occurrence-appended.toml\nrevision: 2\nstate: review-ready\nreadiness_basis: occurrence-count\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
         )
     );
     fs::write(&append_proposal, event).expect("the exact previewed append should be approvable");
@@ -1261,7 +2565,7 @@ fn approved_append_preview_is_byte_exact_and_retry_is_idempotent() {
     assert_eq!(
         String::from_utf8(retry.stdout).expect("stdout should be UTF-8"),
         format!(
-            "occurrence already recorded\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-occurrence-appended.toml\nrevision: 2\nstate: review-ready\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
+            "occurrence already recorded\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-occurrence-appended.toml\nrevision: 2\nstate: review-ready\nreadiness_basis: occurrence-count\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
         )
     );
     assert_eq!(
@@ -1333,7 +2637,7 @@ fn review_r3_spec_1_idempotent_append_retry_reports_complete_case_privacy() {
     assert_eq!(
         String::from_utf8(applied.stdout).expect("stdout should be UTF-8"),
         format!(
-            "appended occurrence\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-occurrence-appended.toml\nrevision: 2\nstate: review-ready\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
+            "appended occurrence\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-occurrence-appended.toml\nrevision: 2\nstate: review-ready\nreadiness_basis: occurrence-count\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
         )
     );
     let before_retry = files_beneath(&fixture.root);
@@ -1345,7 +2649,7 @@ fn review_r3_spec_1_idempotent_append_retry_reports_complete_case_privacy() {
     assert_eq!(
         String::from_utf8(retry.stdout).expect("stdout should be UTF-8"),
         format!(
-            "occurrence already recorded\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-occurrence-appended.toml\nrevision: 2\nstate: review-ready\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
+            "occurrence already recorded\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-occurrence-appended.toml\nrevision: 2\nstate: review-ready\nreadiness_basis: occurrence-count\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
         )
     );
     assert_eq!(

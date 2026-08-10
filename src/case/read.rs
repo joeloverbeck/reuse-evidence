@@ -7,8 +7,8 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use super::{
-    CASE_SCHEMA_VERSION, CaseOpenedEvent, EventType, OPENING_SEQUENCE, Occurrence,
-    OccurrenceAppendedEvent, REVIEW_ONLY_NOTICE, find_repository_root, read_steward,
+    CASE_SCHEMA_VERSION, CaseOpenedEvent, EarlyReviewAuthorizedEvent, EventType, OPENING_SEQUENCE,
+    Occurrence, OccurrenceAppendedEvent, REVIEW_ONLY_NOTICE, find_repository_root, read_steward,
     validate_case_storage_path,
 };
 use crate::{TerminalFailure, Visibility, portfolio};
@@ -16,13 +16,14 @@ use crate::{TerminalFailure, Visibility, portfolio};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Readiness {
     Watching,
-    ReviewReady,
+    ReviewReadyByOccurrenceCount,
+    ReviewReadyByEarlyReviewOverride,
 }
 
 impl Readiness {
     pub(super) const fn from_occurrence_count(occurrence_count: usize) -> Self {
         if occurrence_count >= 3 {
-            Self::ReviewReady
+            Self::ReviewReadyByOccurrenceCount
         } else {
             Self::Watching
         }
@@ -31,7 +32,21 @@ impl Readiness {
     pub(super) const fn label(self) -> &'static str {
         match self {
             Self::Watching => "watching",
-            Self::ReviewReady => "review-ready",
+            Self::ReviewReadyByOccurrenceCount | Self::ReviewReadyByEarlyReviewOverride => {
+                "review-ready"
+            }
+        }
+    }
+
+    pub(super) const fn authorizes_review(self) -> bool {
+        !matches!(self, Self::Watching)
+    }
+
+    pub(super) const fn basis(self) -> Option<&'static str> {
+        match self {
+            Self::Watching => None,
+            Self::ReviewReadyByOccurrenceCount => Some("occurrence-count"),
+            Self::ReviewReadyByEarlyReviewOverride => Some("early-review-override"),
         }
     }
 }
@@ -42,12 +57,14 @@ pub(super) struct CaseRecord {
     pub(super) revision: i64,
     pub(super) privacy: Visibility,
     pub(super) occurrences: Vec<Occurrence>,
+    early_review: Option<EarlyReviewAuthorizedEvent>,
     conditions: Conditions,
 }
 
 enum CaseEvent {
     Opened(CaseOpenedEvent),
     OccurrenceAppended(OccurrenceAppendedEvent),
+    EarlyReviewAuthorized(EarlyReviewAuthorizedEvent),
 }
 
 #[derive(Deserialize)]
@@ -77,8 +94,24 @@ fn render_condition(value: Option<bool>) -> &'static str {
 }
 
 impl CaseRecord {
-    fn readiness(&self) -> Readiness {
-        Readiness::from_occurrence_count(self.occurrences.len())
+    pub(super) fn readiness(&self) -> Readiness {
+        if self.early_review.is_some() {
+            Readiness::ReviewReadyByEarlyReviewOverride
+        } else {
+            Readiness::from_occurrence_count(self.occurrences.len())
+        }
+    }
+
+    pub(super) fn readiness_after_appending_occurrence(&self) -> Readiness {
+        if self.early_review.is_some() {
+            Readiness::ReviewReadyByEarlyReviewOverride
+        } else {
+            Readiness::from_occurrence_count(self.occurrences.len() + 1)
+        }
+    }
+
+    pub(super) const fn has_early_review(&self) -> bool {
+        self.early_review.is_some()
     }
 }
 
@@ -99,15 +132,20 @@ impl ShowOutcome {
     #[must_use]
     pub fn render(&self) -> String {
         let case = &self.case;
+        let readiness = case.readiness();
         let mut output = format!(
             "case\ncase_id: {}\nresponsibility: {}\nrevision: {}\noccurrence_count: {}\nstate: {}\n",
             case.case_id,
             case.responsibility,
             case.revision,
             case.occurrences.len(),
-            case.readiness().label()
+            readiness.label()
         );
-        if case.readiness() == Readiness::ReviewReady {
+        if let Some(basis) = readiness.basis() {
+            writeln!(&mut output, "readiness_basis: {basis}")
+                .expect("writing to a String cannot fail");
+        }
+        if readiness.authorizes_review() {
             writeln!(&mut output, "readiness: {REVIEW_ONLY_NOTICE}")
                 .expect("writing to a String cannot fail");
         }
@@ -141,6 +179,29 @@ impl ShowOutcome {
                 }
             }
         }
+        if let Some(early_review) = &case.early_review {
+            writeln!(
+                &mut output,
+                "early_review:\n  reason: {}\n  review_appetite: {}\n  evidence:",
+                early_review.reason, early_review.review_appetite
+            )
+            .expect("writing to a String cannot fail");
+            for evidence in &early_review.evidence {
+                let kind = match evidence.kind {
+                    super::EvidenceKind::Commit => "commit",
+                };
+                writeln!(
+                    &mut output,
+                    "  - kind: {kind}\n    reference: {}",
+                    evidence.reference
+                )
+                .expect("writing to a String cannot fail");
+                if let Some(path) = &evidence.path {
+                    writeln!(&mut output, "    path: {path}")
+                        .expect("writing to a String cannot fail");
+                }
+            }
+        }
         if !self.portfolio_available {
             output.push_str(
                 "portfolio conditions unavailable: configure portfolio roots or supply `--root <PATH>` to derive privacy conflicts and staleness\n",
@@ -156,16 +217,21 @@ impl ListOutcome {
     pub fn render(&self) -> String {
         let mut output = String::from("cases\n");
         for case in &self.cases {
+            let readiness = case.readiness();
             writeln!(
                 &mut output,
                 "- case_id: {}\n  revision: {}\n  occurrence_count: {}\n  state: {}",
                 case.case_id,
                 case.revision,
                 case.occurrences.len(),
-                case.readiness().label()
+                readiness.label()
             )
             .expect("writing to a String cannot fail");
-            if case.readiness() == Readiness::ReviewReady {
+            if let Some(basis) = readiness.basis() {
+                writeln!(&mut output, "  readiness_basis: {basis}")
+                    .expect("writing to a String cannot fail");
+            }
+            if readiness.authorizes_review() {
                 writeln!(&mut output, "  readiness: {REVIEW_ONLY_NOTICE}")
                     .expect("writing to a String cannot fail");
             }
@@ -364,7 +430,7 @@ fn read_case(
                     "make every recorded event in the case readable before retrying",
                 )
             })?;
-            if is_append_temporary(&entry.file_name()) {
+            if is_later_event_temporary(&entry.file_name()) {
                 let file_type = entry.file_type().map_err(|error| {
                     TerminalFailure::refusal(
                         format!("an event in case `{case_id}` cannot be read: {error}"),
@@ -393,6 +459,7 @@ fn read_case(
     let mut opening = None;
     let mut revision = 0;
     let mut occurrences = Vec::new();
+    let mut early_review = None;
     for event_path in event_paths {
         let (file_sequence, event) =
             read_case_event(repository_root, &event_path, case_id, steward_repository_id)?;
@@ -403,6 +470,14 @@ fn read_case(
                 opening = Some(event);
             }
             CaseEvent::OccurrenceAppended(event) => occurrences.push(event.occurrence),
+            CaseEvent::EarlyReviewAuthorized(event) => {
+                if early_review.replace(event).is_some() {
+                    return Err(TerminalFailure::refusal(
+                        format!("case `{case_id}` records more than one early-review override"),
+                        "restore exactly one early-review authorization event before reading the case",
+                    ));
+                }
+            }
         }
     }
 
@@ -415,6 +490,7 @@ fn read_case(
         revision,
         privacy: opening.privacy,
         occurrences,
+        early_review,
         conditions: Conditions::UNKNOWN,
     })
 }
@@ -455,6 +531,32 @@ pub(super) fn read_case_for_append(
                 "case identity `{case_id}` is not stewarded by repository `{steward_repository_id}`"
             ),
             "run `case list` in this steward repository and retry with a recorded case identity",
+        ));
+    }
+    read_case(
+        repository_root,
+        relative_case_directory,
+        case_id,
+        steward_repository_id,
+    )
+}
+
+pub(super) fn read_case_for_early_review(
+    repository_root: &Path,
+    relative_case_directory: &Path,
+    case_id: Uuid,
+    steward_repository_id: Uuid,
+) -> Result<CaseRecord, TerminalFailure> {
+    let case_directory = repository_root.join(relative_case_directory);
+    if matches!(
+        fs::metadata(&case_directory),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    ) {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case identity `{case_id}` is not stewarded by repository `{steward_repository_id}`"
+            ),
+            "run `case list` in this steward repository and retry `case override` with a recorded watching case identity",
         ));
     }
     read_case(
@@ -544,31 +646,87 @@ fn read_case_event(
             super::validate_recorded_opening(&event)?;
             Ok((file_sequence, CaseEvent::Opened(event)))
         }
-        EventType::OccurrenceAppended => {
-            let event = toml::from_str::<OccurrenceAppendedEvent>(&event_text)
-                .map_err(|error| invalid_event(event_path, &error))?;
-            validate_body_sequence(event_path, event.sequence, file_sequence)?;
-            if event.sequence == OPENING_SEQUENCE {
-                return Err(TerminalFailure::refusal(
-                    format!(
-                        "case event `{}` records `occurrence_appended` at opening sequence 1",
-                        event_path.display()
-                    ),
-                    "restore `case_opened` as sequence 1 and append occurrences only after it",
-                ));
-            }
-            validate_file_event_type(
-                case_id,
-                file_name,
-                file_sequence,
-                file_event_type,
-                "occurrence_appended",
-                "occurrence-appended",
-            )?;
-            super::validate_recorded_append(&event)?;
-            Ok((file_sequence, CaseEvent::OccurrenceAppended(event)))
-        }
+        EventType::OccurrenceAppended => read_occurrence_appended_event(
+            event_path,
+            &event_text,
+            case_id,
+            file_sequence,
+            file_name,
+            file_event_type,
+        ),
+        EventType::EarlyReviewAuthorized => read_early_review_event(
+            event_path,
+            &event_text,
+            case_id,
+            file_sequence,
+            file_name,
+            file_event_type,
+        ),
     }
+}
+
+fn read_occurrence_appended_event(
+    event_path: &Path,
+    event_text: &str,
+    case_id: Uuid,
+    file_sequence: i64,
+    file_name: &str,
+    file_event_type: &str,
+) -> Result<(i64, CaseEvent), TerminalFailure> {
+    let event = toml::from_str::<OccurrenceAppendedEvent>(event_text)
+        .map_err(|error| invalid_event(event_path, &error))?;
+    validate_body_sequence(event_path, event.sequence, file_sequence)?;
+    if event.sequence == OPENING_SEQUENCE {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case event `{}` records `occurrence_appended` at opening sequence 1",
+                event_path.display()
+            ),
+            "restore `case_opened` as sequence 1 and append occurrences only after it",
+        ));
+    }
+    validate_file_event_type(
+        case_id,
+        file_name,
+        file_sequence,
+        file_event_type,
+        "occurrence_appended",
+        "occurrence-appended",
+    )?;
+    super::validate_recorded_append(&event)?;
+    Ok((file_sequence, CaseEvent::OccurrenceAppended(event)))
+}
+
+fn read_early_review_event(
+    event_path: &Path,
+    event_text: &str,
+    case_id: Uuid,
+    file_sequence: i64,
+    file_name: &str,
+    file_event_type: &str,
+) -> Result<(i64, CaseEvent), TerminalFailure> {
+    let event = toml::from_str::<EarlyReviewAuthorizedEvent>(event_text)
+        .map_err(|error| invalid_event(event_path, &error))?;
+    validate_body_sequence(event_path, event.sequence, file_sequence)?;
+    if event.sequence == OPENING_SEQUENCE {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case event `{}` records `early_review_authorized` at opening sequence 1",
+                event_path.display()
+            ),
+            "restore `case_opened` as sequence 1 and authorize early review only after it",
+        ));
+    }
+    validate_file_event_type(
+        case_id,
+        file_name,
+        file_sequence,
+        file_event_type,
+        "early_review_authorized",
+        "early-review-authorized",
+    )?;
+    super::validate_recorded_early_review(&event)?;
+    Ok((file_sequence, CaseEvent::EarlyReviewAuthorized(event)))
 }
 
 fn invalid_event(event_path: &Path, error: &toml::de::Error) -> TerminalFailure {
@@ -680,7 +838,7 @@ fn event_sequence_from_file_name(file_name: &str) -> Option<i64> {
     event_file_identity(file_name).map(|(sequence, _)| sequence)
 }
 
-fn is_append_temporary(file_name: &std::ffi::OsStr) -> bool {
+fn is_later_event_temporary(file_name: &std::ffi::OsStr) -> bool {
     let Some(file_name) = file_name.to_str() else {
         return false;
     };
@@ -695,7 +853,11 @@ fn is_append_temporary(file_name: &std::ffi::OsStr) -> bool {
     };
     Uuid::parse_str(identity).is_ok()
         && event_file_identity(event_file_name).is_some_and(|(sequence, event_type)| {
-            sequence > OPENING_SEQUENCE && event_type == "occurrence-appended"
+            sequence > OPENING_SEQUENCE
+                && matches!(
+                    event_type,
+                    "occurrence-appended" | "early-review-authorized"
+                )
         })
 }
 
