@@ -68,6 +68,20 @@ enum CaseCommand {
         #[arg(long)]
         preview: bool,
     },
+    /// List every case stewarded by the current repository.
+    List {
+        /// Portfolio root for current participant conditions; overrides configuration.
+        #[arg(long)]
+        root: Vec<PathBuf>,
+    },
+    /// Show one stewarded case and its complete recorded occurrences.
+    Show {
+        /// Opaque case identity to show.
+        case_id: String,
+        /// Portfolio root for current participant conditions; overrides configuration.
+        #[arg(long)]
+        root: Vec<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -130,6 +144,16 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
                 )
             })?;
             let outcome = case::open(Path::new("."), &proposal, &root, preview)?;
+            print!("{}", outcome.render());
+            Ok(())
+        }
+        CaseCommand::List { root } => {
+            let outcome = case::list(Path::new("."), &root)?;
+            print!("{}", outcome.render());
+            Ok(())
+        }
+        CaseCommand::Show { case_id, root } => {
+            let outcome = case::show(Path::new("."), &case_id, &root)?;
             print!("{}", outcome.render());
             Ok(())
         }

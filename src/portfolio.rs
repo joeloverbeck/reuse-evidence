@@ -71,6 +71,11 @@ struct StateLock {
     path: PathBuf,
 }
 
+enum RootSelection {
+    Selected(Vec<PathBuf>),
+    Unconfigured(PathBuf),
+}
+
 /// Rescans enrolled repositories and renders the current portfolio report.
 ///
 /// # Errors
@@ -549,15 +554,40 @@ fn replace_state_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 pub(crate) fn selected_roots(root_overrides: &[PathBuf]) -> Result<Vec<PathBuf>, TerminalFailure> {
+    match root_selection(root_overrides)? {
+        RootSelection::Selected(roots) => Ok(roots),
+        RootSelection::Unconfigured(config_path) => Err(no_roots_message(&config_path)),
+    }
+}
+
+pub(crate) fn selected_roots_if_configured(
+    root_overrides: &[PathBuf],
+) -> Result<Option<Vec<PathBuf>>, TerminalFailure> {
     if !root_overrides.is_empty() {
-        return Ok(root_overrides.to_vec());
+        return Ok(Some(root_overrides.to_vec()));
+    }
+    let Some(config_path) = optional_config_path() else {
+        return Ok(None);
+    };
+    match root_selection_from_config(config_path)? {
+        RootSelection::Selected(roots) => Ok(Some(roots)),
+        RootSelection::Unconfigured(_) => Ok(None),
+    }
+}
+
+fn root_selection(root_overrides: &[PathBuf]) -> Result<RootSelection, TerminalFailure> {
+    if !root_overrides.is_empty() {
+        return Ok(RootSelection::Selected(root_overrides.to_vec()));
     }
 
-    let config_path = config_path()?;
+    root_selection_from_config(config_path()?)
+}
+
+fn root_selection_from_config(config_path: PathBuf) -> Result<RootSelection, TerminalFailure> {
     let config_bytes = match fs::read(&config_path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(no_roots_message(&config_path));
+            return Ok(RootSelection::Unconfigured(config_path));
         }
         Err(error) => {
             return Err(TerminalFailure::refusal(
@@ -588,9 +618,9 @@ pub(crate) fn selected_roots(root_overrides: &[PathBuf]) -> Result<Vec<PathBuf>,
         )
     })?;
     if config.portfolio_roots.is_empty() {
-        return Err(no_roots_message(&config_path));
+        return Ok(RootSelection::Unconfigured(config_path));
     }
-    Ok(config.portfolio_roots)
+    Ok(RootSelection::Selected(config.portfolio_roots))
 }
 
 fn no_roots_message(config_path: &Path) -> TerminalFailure {
@@ -707,12 +737,17 @@ fn inspect_marker(repository: &Path) -> MarkerInspection {
 }
 
 fn config_path() -> Result<PathBuf, TerminalFailure> {
-    platform_config_directory()
-        .map(|directory| directory.join("reuse-evidence").join("config.toml"))
-        .ok_or_else(|| TerminalFailure::refusal(
+    optional_config_path().ok_or_else(|| {
+        TerminalFailure::refusal(
             "the user-local configuration directory cannot be determined",
             "set `APPDATA` on Windows, or `XDG_CONFIG_HOME` or `HOME` on Unix-like systems; alternatively rerun with `--root <PATH>`",
-        ))
+        )
+    })
+}
+
+fn optional_config_path() -> Option<PathBuf> {
+    platform_config_directory()
+        .map(|directory| directory.join("reuse-evidence").join("config.toml"))
 }
 
 fn state_path() -> Result<PathBuf, TerminalFailure> {

@@ -1,5 +1,9 @@
 //! Durable case-opening mechanics.
 
+mod read;
+
+pub use read::{ListOutcome, ShowOutcome, list, show};
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -482,13 +486,19 @@ fn read_proposal(path: &Path) -> Result<OpenProposal, TerminalFailure> {
             "provide a complete TOML case-opening proposal",
         )
     })?;
-    let (case_id, responsibility, occurrences, prepared) = match document {
+    let (case_id, responsibility, occurrences, prepared, content_validated) = match document {
         OpenProposalDocument::Human(document) => {
             let case_id = parse_case_id(&document.case_id)?;
-            (case_id, document.responsibility, document.occurrences, None)
+            (
+                case_id,
+                document.responsibility,
+                document.occurrences,
+                None,
+                false,
+            )
         }
         OpenProposalDocument::Prepared(event) => {
-            validate_prepared_event(&event)?;
+            validate_recorded_opening(&event)?;
             let prepared = PreparedOpening {
                 steward_repository_id: event.steward_repository_id,
                 privacy: event.privacy,
@@ -499,6 +509,7 @@ fn read_proposal(path: &Path) -> Result<OpenProposal, TerminalFailure> {
                 event.responsibility,
                 event.occurrences,
                 Some(prepared),
+                true,
             )
         }
     };
@@ -508,7 +519,9 @@ fn read_proposal(path: &Path) -> Result<OpenProposal, TerminalFailure> {
         occurrences,
         prepared,
     };
-    validate_proposal(&proposal)?;
+    if !content_validated {
+        validate_proposal(&proposal)?;
+    }
     Ok(proposal)
 }
 
@@ -560,19 +573,31 @@ fn validate_prepared_event(event: &CaseOpenedEvent) -> Result<(), TerminalFailur
     Ok(())
 }
 
+fn validate_recorded_opening(event: &CaseOpenedEvent) -> Result<(), TerminalFailure> {
+    validate_prepared_event(event)?;
+    validate_opening_content(&event.responsibility, &event.occurrences)
+}
+
 fn validate_proposal(proposal: &OpenProposal) -> Result<(), TerminalFailure> {
-    require_nonempty("responsibility", &proposal.responsibility)?;
-    if proposal.occurrences.len() < 2 {
+    validate_opening_content(&proposal.responsibility, &proposal.occurrences)
+}
+
+fn validate_opening_content(
+    responsibility: &str,
+    occurrences: &[Occurrence],
+) -> Result<(), TerminalFailure> {
+    require_nonempty("responsibility", responsibility)?;
+    if occurrences.len() < 2 {
         return Err(TerminalFailure::refusal(
             format!(
                 "case opening requires at least two occurrences, but the proposal contains {}",
-                proposal.occurrences.len()
+                occurrences.len()
             ),
             "add a second independently evidenced occurrence before opening the case",
         ));
     }
     let mut observed_consumers = BTreeSet::new();
-    for (index, occurrence) in proposal.occurrences.iter().enumerate() {
+    for (index, occurrence) in occurrences.iter().enumerate() {
         if occurrence.consumer.trim().is_empty() {
             return Err(TerminalFailure::refusal(
                 format!("occurrence {} consumer is empty", index + 1),
