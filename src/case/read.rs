@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
+use std::fmt::{self, Display, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -49,6 +49,25 @@ impl Readiness {
             Self::ReviewReadyByOccurrenceCount => Some("occurrence-count"),
             Self::ReviewReadyByEarlyReviewOverride => Some("early-review-override"),
         }
+    }
+
+    /// Writes the `state:` line and the readiness lines a review-ready case adds.
+    ///
+    /// `indent` prefixes every line, because a case listing nests what a case
+    /// receipt and `case show` print flush.
+    pub(super) fn write_receipt_lines(
+        self,
+        formatter: &mut Formatter<'_>,
+        indent: &str,
+    ) -> fmt::Result {
+        writeln!(formatter, "{indent}state: {}", self.label())?;
+        if let Some(basis) = self.basis() {
+            writeln!(formatter, "{indent}readiness_basis: {basis}")?;
+        }
+        if self.authorizes_review() {
+            writeln!(formatter, "{indent}readiness: {REVIEW_ONLY_NOTICE}")?;
+        }
+        Ok(())
     }
 }
 
@@ -128,124 +147,96 @@ pub struct ShowOutcome {
     portfolio_available: bool,
 }
 
-impl ShowOutcome {
-    /// Renders the case and every recorded occurrence deterministically.
-    #[must_use]
-    pub fn render(&self) -> String {
+/// Renders the case and every recorded occurrence deterministically.
+impl Display for ShowOutcome {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         let case = &self.case;
-        let readiness = case.readiness();
-        let mut output = format!(
-            "case\ncase_id: {}\nresponsibility: {}\nrevision: {}\noccurrence_count: {}\nstate: {}\n",
+        writeln!(
+            formatter,
+            "case\ncase_id: {}\nresponsibility: {}\nrevision: {}\noccurrence_count: {}",
             case.case_id,
             case.responsibility,
             case.revision,
-            case.occurrences.len(),
-            readiness.label()
-        );
-        if let Some(basis) = readiness.basis() {
-            writeln!(&mut output, "readiness_basis: {basis}")
-                .expect("writing to a String cannot fail");
-        }
-        if readiness.authorizes_review() {
-            writeln!(&mut output, "readiness: {REVIEW_ONLY_NOTICE}")
-                .expect("writing to a String cannot fail");
-        }
+            case.occurrences.len()
+        )?;
+        case.readiness().write_receipt_lines(formatter, "")?;
         writeln!(
-            &mut output,
+            formatter,
             "privacy_conflicted: {}\nstale: {}\noccurrences:",
             render_condition(case.conditions.privacy_conflicted),
             render_condition(case.conditions.stale)
-        )
-        .expect("writing to a String cannot fail");
+        )?;
         for occurrence in &case.occurrences {
             writeln!(
-                &mut output,
+                formatter,
                 "- repository_id: {}\n  consumer: {}\n  independence: {}\n  evidence:",
                 occurrence.repository_id, occurrence.consumer, occurrence.independence
-            )
-            .expect("writing to a String cannot fail");
+            )?;
             for evidence in &occurrence.evidence {
                 let kind = match evidence.kind {
                     super::EvidenceKind::Commit => "commit",
                 };
                 writeln!(
-                    &mut output,
+                    formatter,
                     "  - kind: {kind}\n    reference: {}",
                     evidence.reference
-                )
-                .expect("writing to a String cannot fail");
+                )?;
                 if let Some(path) = &evidence.path {
-                    writeln!(&mut output, "    path: {path}")
-                        .expect("writing to a String cannot fail");
+                    writeln!(formatter, "    path: {path}")?;
                 }
             }
         }
         if let Some(early_review) = &case.early_review {
             writeln!(
-                &mut output,
+                formatter,
                 "early_review:\n  reason: {}\n  review_appetite: {}\n  evidence:",
                 early_review.reason, early_review.review_appetite
-            )
-            .expect("writing to a String cannot fail");
+            )?;
             for evidence in &early_review.evidence {
                 let kind = match evidence.kind {
                     super::EvidenceKind::Commit => "commit",
                 };
                 writeln!(
-                    &mut output,
+                    formatter,
                     "  - kind: {kind}\n    reference: {}",
                     evidence.reference
-                )
-                .expect("writing to a String cannot fail");
+                )?;
                 if let Some(path) = &evidence.path {
-                    writeln!(&mut output, "    path: {path}")
-                        .expect("writing to a String cannot fail");
+                    writeln!(formatter, "    path: {path}")?;
                 }
             }
         }
         if !self.portfolio_available {
-            output.push_str(super::PORTFOLIO_UNAVAILABLE_FOOTER);
+            formatter.write_str(super::PORTFOLIO_UNAVAILABLE_FOOTER)?;
         }
-        output
+        Ok(())
     }
 }
 
-impl ListOutcome {
-    /// Renders a deterministic steward-local case listing.
-    #[must_use]
-    pub fn render(&self) -> String {
-        let mut output = String::from("cases\n");
+/// Renders a deterministic steward-local case listing.
+impl Display for ListOutcome {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str("cases\n")?;
         for case in &self.cases {
-            let readiness = case.readiness();
             writeln!(
-                &mut output,
-                "- case_id: {}\n  revision: {}\n  occurrence_count: {}\n  state: {}",
+                formatter,
+                "- case_id: {}\n  revision: {}\n  occurrence_count: {}",
                 case.case_id,
                 case.revision,
-                case.occurrences.len(),
-                readiness.label()
-            )
-            .expect("writing to a String cannot fail");
-            if let Some(basis) = readiness.basis() {
-                writeln!(&mut output, "  readiness_basis: {basis}")
-                    .expect("writing to a String cannot fail");
-            }
-            if readiness.authorizes_review() {
-                writeln!(&mut output, "  readiness: {REVIEW_ONLY_NOTICE}")
-                    .expect("writing to a String cannot fail");
-            }
+                case.occurrences.len()
+            )?;
+            case.readiness().write_receipt_lines(formatter, "  ")?;
             writeln!(
-                &mut output,
+                formatter,
                 "  privacy_conflicted: {}\n  stale: {}",
                 render_condition(case.conditions.privacy_conflicted),
                 render_condition(case.conditions.stale)
-            )
-            .expect("writing to a String cannot fail");
+            )?;
         }
         if !self.portfolio_available {
-            output.push_str(super::PORTFOLIO_UNAVAILABLE_FOOTER);
+            formatter.write_str(super::PORTFOLIO_UNAVAILABLE_FOOTER)?;
         }
-        output
+        Ok(())
     }
 }
 

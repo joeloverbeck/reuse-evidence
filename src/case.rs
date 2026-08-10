@@ -9,7 +9,7 @@ pub use instant::RecordedInstant;
 pub use read::{ListOutcome, ShowOutcome, list, show};
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
+use std::fmt::{self, Display, Formatter};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -225,18 +225,16 @@ enum ReportedPrivacy {
 
 impl ReportedPrivacy {
     /// Writes the `privacy:` line, followed by the footer explaining an underivable privacy.
-    fn write_receipt_line(self, receipt: &mut String) {
+    fn write_receipt_line(self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Derived(privacy) => {
-                writeln!(receipt, "privacy: {privacy}").expect("writing to a String cannot fail");
-            }
+            Self::Derived(privacy) => writeln!(formatter, "privacy: {privacy}"),
             Self::PortfolioUnconfigured => {
-                receipt.push_str("privacy: unknown\n");
-                receipt.push_str(PORTFOLIO_UNAVAILABLE_FOOTER);
+                formatter.write_str("privacy: unknown\n")?;
+                formatter.write_str(PORTFOLIO_UNAVAILABLE_FOOTER)
             }
             Self::ParticipantsUnresolved => {
-                receipt.push_str("privacy: unknown\n");
-                receipt.push_str(PARTICIPANTS_UNRESOLVED_FOOTER);
+                formatter.write_str("privacy: unknown\n")?;
+                formatter.write_str(PARTICIPANTS_UNRESOLVED_FOOTER)
             }
         }
     }
@@ -267,84 +265,105 @@ enum EarlyReviewEffect {
     Existing,
 }
 
-impl OpenOutcome {
-    /// Renders the receipt followed by the exact event bytes.
-    #[must_use]
-    pub fn render(&self) -> String {
+/// The spine every event-type receipt prints, in order.
+///
+/// Which fields an event type supplies stays that event type's decision under
+/// ADR 0010; the spine fixes only their order and spelling. `readiness` is
+/// absent for an event that reports none, and `preview_event` carries the exact
+/// event bytes a preview appends.
+struct EventReceipt<'a> {
+    heading: &'a str,
+    case_id: Uuid,
+    event_path: &'a Path,
+    revision: i64,
+    readiness: Option<read::Readiness>,
+    privacy: ReportedPrivacy,
+    preview_event: Option<&'a str>,
+}
+
+impl Display for EventReceipt<'_> {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(formatter, "{}", self.heading)?;
+        writeln!(formatter, "case_id: {}", self.case_id)?;
+        writeln!(formatter, "file: {}", self.event_path.display())?;
+        writeln!(formatter, "revision: {}", self.revision)?;
+        if let Some(readiness) = self.readiness {
+            readiness.write_receipt_lines(formatter, "")?;
+        }
+        self.privacy.write_receipt_line(formatter)?;
+        if let Some(event) = self.preview_event {
+            formatter.write_str("event:\n")?;
+            formatter.write_str(event)?;
+        }
+        Ok(())
+    }
+}
+
+/// Renders the receipt followed by the exact event bytes for a preview.
+impl Display for OpenOutcome {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         let heading = match self.effect {
             OpenEffect::Preview => "case open preview",
             OpenEffect::Created => "opened case",
             OpenEffect::Existing => "existing case",
         };
-        let mut receipt = format!(
-            "{heading}\ncase_id: {}\nfile: {}\nrevision: {OPENING_SEQUENCE}\nprivacy: {}\n",
-            self.case_id,
-            self.event_path.display(),
-            self.privacy
-        );
-        if self.effect == OpenEffect::Preview {
-            receipt.push_str("event:\n");
-            receipt.push_str(&self.event);
+        EventReceipt {
+            heading,
+            case_id: self.case_id,
+            event_path: &self.event_path,
+            revision: OPENING_SEQUENCE,
+            readiness: None,
+            // Opening derives privacy once and has no retry path, so its stored
+            // privacy stays a `Visibility` the spine widens only in passing.
+            privacy: ReportedPrivacy::Derived(self.privacy),
+            preview_event: (self.effect == OpenEffect::Preview).then_some(self.event.as_str()),
         }
-        receipt
+        .fmt(formatter)
     }
 }
 
-impl AppendOutcome {
-    /// Renders the receipt followed by exact event bytes for a preview.
-    #[must_use]
-    pub fn render(&self) -> String {
+/// Renders the receipt followed by the exact event bytes for a preview.
+impl Display for AppendOutcome {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         let heading = match self.effect {
             AppendEffect::Preview => "case append preview",
             AppendEffect::Created => "appended occurrence",
             AppendEffect::Existing => "occurrence already recorded",
         };
-        let mut receipt = format!(
-            "{heading}\ncase_id: {}\nfile: {}\nrevision: {}\nstate: {}\n",
-            self.case_id,
-            self.event_path.display(),
-            self.revision,
-            self.readiness.label()
-        );
-        if let Some(basis) = self.readiness.basis() {
-            writeln!(&mut receipt, "readiness_basis: {basis}")
-                .expect("writing to a String cannot fail");
+        EventReceipt {
+            heading,
+            case_id: self.case_id,
+            event_path: &self.event_path,
+            revision: self.revision,
+            readiness: Some(self.readiness),
+            privacy: self.privacy,
+            preview_event: (self.effect == AppendEffect::Preview).then_some(self.event.as_str()),
         }
-        if self.readiness.authorizes_review() {
-            receipt.push_str("readiness: ");
-            receipt.push_str(REVIEW_ONLY_NOTICE);
-            receipt.push('\n');
-        }
-        self.privacy.write_receipt_line(&mut receipt);
-        if self.effect == AppendEffect::Preview {
-            receipt.push_str("event:\n");
-            receipt.push_str(&self.event);
-        }
-        receipt
+        .fmt(formatter)
     }
 }
 
-impl EarlyReviewOutcome {
-    /// Renders the receipt followed by exact event bytes for a preview.
-    #[must_use]
-    pub fn render(&self) -> String {
+/// Renders the receipt followed by the exact event bytes for a preview.
+impl Display for EarlyReviewOutcome {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         let heading = match self.effect {
             EarlyReviewEffect::Preview => "early-review override preview",
             EarlyReviewEffect::Created => "authorized early review",
             EarlyReviewEffect::Existing => "early review already authorized",
         };
-        let mut receipt = format!(
-            "{heading}\ncase_id: {}\nfile: {}\nrevision: {}\nstate: review-ready\nreadiness_basis: early-review-override\nreadiness: {REVIEW_ONLY_NOTICE}\n",
-            self.case_id,
-            self.event_path.display(),
-            self.revision
-        );
-        self.privacy.write_receipt_line(&mut receipt);
-        if self.effect == EarlyReviewEffect::Preview {
-            receipt.push_str("event:\n");
-            receipt.push_str(&self.event);
+        EventReceipt {
+            heading,
+            case_id: self.case_id,
+            event_path: &self.event_path,
+            revision: self.revision,
+            // Stated as a constant rather than derived from the recorded
+            // occurrence count, as ADR 0010 records.
+            readiness: Some(read::Readiness::ReviewReadyByEarlyReviewOverride),
+            privacy: self.privacy,
+            preview_event: (self.effect == EarlyReviewEffect::Preview)
+                .then_some(self.event.as_str()),
         }
-        receipt
+        .fmt(formatter)
     }
 }
 

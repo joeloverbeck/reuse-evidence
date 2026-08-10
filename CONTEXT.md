@@ -18,6 +18,7 @@ This glossary is the shared language for `reuse-evidence`. Use these terms consi
 | **Case revision** | The highest contiguous event sequence number recorded for a case. Opening a case creates revision 1. |
 | **Later case event** | Any case event after the one that opened the case. Later events extend or correct history; the opening event is never replaced or reordered. |
 | **Publication** | The act of recording exactly one later case event against an expected case revision. It records one new event or nothing at all, an identical retry changes nothing, and opening a case is not a publication. |
+| **Receipt** | The inspectable terminal record a command prints for what it did. An *event receipt* reports one case event and prints one spine: heading, `case_id`, `file`, `revision`, readiness where present, privacy, then the exact event bytes on a preview. Case queries print their own shape for a different question and are not event receipts. |
 | **Watching** | The normal state after a second independent occurrence: remember the pressure, but do not yet require a reuse review. |
 | **Review-ready** | The normal state after a third independent occurrence, or after a human accepts a documented early-review reason. It authorizes semantic review, not extraction. |
 | **Early-review override** | A human-authorized decision to review after the second occurrence because concrete cost or risk makes waiting materially worse. It is not permission to extract automatically. |

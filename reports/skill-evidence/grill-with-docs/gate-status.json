@@ -1,10 +1,11 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-10T18:54:28.664413456Z",
+  "generated_at": "2026-08-10T19:58:12.233093503Z",
   "target_content_hash": "50ae74251f72b370e4b226fa12169ffaa18cac49a814ca5a5725460fe4e3063a",
-  "qualifying_uses_on_current_hash": 4,
+  "qualifying_uses_on_current_hash": 5,
   "open_incident_ids": [
-    "evt_166c1b46-6a7a-44e0-aea0-352caca372e3"
+    "evt_166c1b46-6a7a-44e0-aea0-352caca372e3",
+    "evt_1e1cdc1b-2144-48f1-8007-5b2ac55f31c4"
   ],
   "candidate_clusters": [
     {
@@ -14,6 +15,14 @@
       ],
       "independent_incidents": 1,
       "max_severity": "friction"
+    },
+    {
+      "symptom_key": "execution",
+      "open_event_ids": [
+        "evt_1e1cdc1b-2144-48f1-8007-5b2ac55f31c4"
+      ],
+      "independent_incidents": 1,
+      "max_severity": "material_failure"
     }
   ],
   "state": "collecting",
@@ -27,5 +36,5 @@
   "review_reentry_basis": null,
   "target_name": "grill-with-docs",
   "target_repo_relative_path": ".claude/skills/grill-with-docs",
-  "derivation_session_id": "f1ce61cb-3739-42df-b4f6-b686010913ba"
+  "derivation_session_id": "d631b35e-9ff4-468a-b1a7-c6de89314681"
 }

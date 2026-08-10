@@ -19,6 +19,8 @@ The project's own thresholds bear directly on that recommendation. `FOUNDATIONS.
 
 Applied to this crate's own internals, the protocol has two occurrences and a rule already written down as one rule. The surrounding concerns have two occurrences and visibly different shapes: `append`'s eligibility check derives privacy as part of validating the proposed occurrence, while `authorize_early_review` derives privacy separately and before the revision check; `append` derives its receipt's readiness from the recorded occurrence count, while `authorize_early_review` states it as a constant.
 
+Amended 2026-08-10: the receipt half of that last observation did not support the conclusion drawn from it. The two do derive readiness differently, but their receipts already printed the same fields in the same order, and `Readiness::ReviewReadyByEarlyReviewOverride` renders byte-identically to the constants `authorize_early_review` states. The difference was in the derivation upstream of the receipt, not in the receipt. The eligibility and privacy-timing differences are real and still govern; the receipt-shape difference was not, and this decision's own implementation then gave `privacy:` and its footers one owner across both event types (`ReportedPrivacy`, `src/case.rs:226`) without the text following.
+
 Without this decision recorded, the restraint leaves no trace. A module owning half the pipeline, with duplicated proposal readers, recorded-event validators, and outcome types standing beside it, reads as unfinished work rather than as a boundary.
 
 ## Decision
@@ -27,10 +29,11 @@ A shared internal publication module absorbs only the behavior ADR 0009 already 
 
 - The module owns sequence selection from an expected revision, the exclusive lock on the opening event, the re-read under that lock, the expected-revision check, exclusive creation of the typed event file, the occupied-path outcome, and the idempotent-retry comparison by recorded event identity and exact bytes.
 - The retry comparison reads a permissive recorded envelope. It takes no per-event-type parameter.
-- Proposal documents and their content validation, eligibility rules against the current case, when and how case privacy is derived, and receipt fields remain owned by each event type.
+- Proposal documents and their content validation, eligibility rules against the current case, and when and how case privacy is derived remain owned by each event type.
+- Which fields a receipt prints stays the event type's decision. A receipt field or field group may take one owner where it has one authority and one reason to change, as `ReportedPrivacy` already does for `privacy:` and its footers. The three event-type receipts share one spine — heading, `case_id`, `file`, `revision`, the readiness fields where present, privacy, then the exact event bytes on a preview — and that spine may have one owner. Opening's privacy is derived once and has no retry path; sharing the spine must not widen it into states it cannot reach.
 - Opening a case is not a publication and is not absorbed. It takes no lock, has no expected revision, and compares an existing record by semantic fields rather than by event identity and bytes.
 - The publication ordering is enforced structurally: creating an event file is reachable only from a value that holds the lock and has re-read the case.
-- This authorizes sharing the protocol. It does not authorize unifying proposal parsing, eligibility, privacy derivation, or receipts across event types, and it does not authorize extracting anything from this crate into a shared package.
+- This authorizes sharing the protocol and the receipt spine. It does not authorize unifying proposal parsing, eligibility, or privacy derivation across event types; it does not authorize collapsing the case queries' output and the event-type receipts into one value, because the queries print a different shape for a different question; and it does not authorize extracting anything from this crate into a shared package.
 
 This records a boundary on internal sharing only. It makes no claim about a user's portfolio and creates no new consumer-facing surface.
 
@@ -45,7 +48,7 @@ This records a boundary on internal sharing only. It makes no claim about a user
 
 ### Negative and risks
 
-- Duplication remains in proposal readers, recorded-event validators, and outcome types. This is deliberate and will look like incompleteness.
+- Duplication remains in proposal readers and recorded-event validators. This is deliberate and will look like incompleteness.
 - If the third later event type turns out to match the existing two on every remaining axis, the restraint will have cost one extra round of consolidation.
 - A boundary defined by "what ADR 0009 already states" needs re-reading whenever ADR 0009 is amended.
 
@@ -61,7 +64,8 @@ No recorded evidence changes. Event files, filenames, sequence semantics, and sc
 
 | Alternative | Disposition | Reason |
 |---|---|---|
-| Collapse the whole pipeline behind one parameterized module | Rejected | The eligibility, privacy-timing, and receipt shapes would be parameterized from two occurrences that already differ in those respects, against `FOUNDATIONS.md` §4 and §9. |
+| Collapse the whole pipeline behind one parameterized module | Rejected | The eligibility and privacy-timing shapes would be parameterized from two occurrences that already differ in those respects, against `FOUNDATIONS.md` §4 and §9. Amended 2026-08-10: the receipts were named in this reason and did not belong in it; they did not differ. |
+| Collapse every case renderer, queries included, into one receipt value | Rejected | `case show` and `case list` answer a different question and print a different shape: no `file:` or `privacy:`, but `responsibility`, `occurrence_count`, `privacy_conflicted`, `stale`, and nested occurrence and evidence trees, one of them indented. Forcing those into the event-receipt spine is the same `FOUNDATIONS.md` §4 error mirrored. Shared readiness vocabulary may still take one owner. |
 | Leave both implementations and fix only the divergence | Rejected | The protocol stays duplicated, so the next later event type can drift in the same way and nothing prevents it. |
 | Defer all sharing until a third later event type exists | Rejected | The divergence is present and untested now, and the protocol's authority is already written as one rule. Waiting means a third copy is written before it is removed. |
 | Record the restraint in the implementing issue instead of an ADR | Rejected | `docs/adr/README.md` ranks ADRs authoritative over issues, and an issue closes. A restraint whose only on-disk evidence is an absence would be reversed without anyone knowing it existed. |
@@ -71,7 +75,7 @@ No recorded evidence changes. Event files, filenames, sequence semantics, and sc
 
 The decision is fit if a third later event type is implemented by supplying its own proposal, eligibility, privacy, and receipt while reusing the publication protocol unchanged, and if the retry-privacy question has exactly one answer afterwards.
 
-Reopen when a third later event type exists and its proposal shape, eligibility rule, privacy timing, and receipt fields match the existing two closely enough that a parameterization would couple nothing that changes for different reasons. At that point the wider collapse has three occurrences behind it and should be reconsidered on its merits.
+Reopen when a third later event type exists and its proposal shape, eligibility rule, and privacy timing match the existing two closely enough that a parameterization would couple nothing that changes for different reasons. At that point the wider collapse has three occurrences behind it and should be reconsidered on its merits. The receipt question is settled by the 2026-08-10 amendment and is no longer part of this trigger.
 
 Falsify this decision if implementing the protocol module forces any event type's eligibility or privacy derivation to move to a point in the sequence it does not belong, or if the shared retry comparison cannot be expressed without a per-event-type parameter. Either result would mean the protocol is less invariant than ADR 0009 states, and the duplication is the cheaper cost.
 

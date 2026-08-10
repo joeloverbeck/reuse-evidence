@@ -46,7 +46,7 @@ One internal module owns case event naming.
 
 This decision does not re-cut the boundary between `src/case.rs` and `src/case/read.rs`. Repository-root discovery, steward reading, storage-path validation, recorded-event body validation, readiness derivation, and receipt strings stay where they are, and the two modules continue to cross in both directions.
 
-It authorizes nothing ADR 0010 withholds. Proposal documents, content validation, eligibility rules, privacy derivation, and receipt fields remain owned by each event type.
+It authorizes nothing ADR 0010 withholds. Proposal documents, content validation, eligibility rules, and privacy derivation remain owned by each event type.
 
 It changes no recorded evidence. The same file names are written and read, byte for byte, so `CONSUMER-CONTRACT.md` §3 is not engaged.
 

@@ -184,7 +184,7 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
                 RecordedInstant::now()?,
                 preview,
             )?;
-            print!("{}", outcome.render());
+            print!("{outcome}");
             Ok(())
         }
         CaseCommand::Append {
@@ -215,7 +215,7 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
                 RecordedInstant::now()?,
                 preview,
             )?;
-            print!("{}", outcome.render());
+            print!("{outcome}");
             Ok(())
         }
         CaseCommand::Override {
@@ -248,17 +248,17 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
                 RecordedInstant::now()?,
                 preview,
             )?;
-            print!("{}", outcome.render());
+            print!("{outcome}");
             Ok(())
         }
         CaseCommand::List { root } => {
             let outcome = case::list(Path::new("."), &root)?;
-            print!("{}", outcome.render());
+            print!("{outcome}");
             Ok(())
         }
         CaseCommand::Show { case_id, root } => {
             let outcome = case::show(Path::new("."), &case_id, &root)?;
-            print!("{}", outcome.render());
+            print!("{outcome}");
             Ok(())
         }
     }
