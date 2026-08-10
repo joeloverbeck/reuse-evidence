@@ -16,6 +16,36 @@ struct Fixture {
     root: PathBuf,
 }
 
+struct WriteProtection {
+    entries: Vec<(PathBuf, fs::Permissions)>,
+}
+
+impl WriteProtection {
+    fn for_file_and_parent(path: &Path) -> Self {
+        let parent = path.parent().expect("protected event should have a parent");
+        let mut entries = Vec::new();
+        for protected in [path, parent] {
+            let original = fs::metadata(protected)
+                .expect("protected path should have metadata")
+                .permissions();
+            let mut read_only = original.clone();
+            read_only.set_readonly(true);
+            fs::set_permissions(protected, read_only)
+                .expect("existing event retry target should become read-only");
+            entries.push((protected.to_path_buf(), original));
+        }
+        Self { entries }
+    }
+}
+
+impl Drop for WriteProtection {
+    fn drop(&mut self) {
+        for (path, permissions) in self.entries.drain(..).rev() {
+            let _ = fs::set_permissions(path, permissions);
+        }
+    }
+}
+
 impl Fixture {
     fn new(name: &str) -> Self {
         let nonce = SystemTime::now()
@@ -1410,6 +1440,8 @@ fn approved_early_review_preview_is_byte_exact_and_retry_is_idempotent() {
         "1",
         "--proposal",
         override_proposal_path,
+        "--root",
+        root,
     ];
     let retry = run_in(&steward, &retry_arguments);
 
@@ -1425,6 +1457,90 @@ fn approved_early_review_preview_is_byte_exact_and_retry_is_idempotent() {
         files_beneath(&fixture.root),
         before_retry,
         "retrying the same early-review event identity must preserve every fixture byte"
+    );
+}
+
+#[test]
+fn exact_early_review_retry_without_portfolio_reports_unknown_privacy_without_writes() {
+    let fixture = Fixture::new("early-review-retry-without-portfolio");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    let open_proposal = fixture.proposal(&two_occurrence_proposal());
+    let open_proposal_path = open_proposal
+        .to_str()
+        .expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            open_proposal_path,
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    let proposal = fixture.root.join("early-review.toml");
+    fs::write(&proposal, early_review_override_proposal())
+        .expect("early-review proposal should be writable");
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let arguments = [
+        "case",
+        "override",
+        CASE_ID,
+        "--expected-revision",
+        "1",
+        "--proposal",
+        proposal_path,
+        "--root",
+        root,
+        "--preview",
+    ];
+    let preview = run_in(&steward, &arguments);
+    assert_eq!(preview.status.code(), Some(0), "{preview:?}");
+    let preview = String::from_utf8(preview.stdout).expect("stdout should be UTF-8");
+    let (_, event) = preview
+        .split_once("event:\n")
+        .expect("preview should contain the exact event");
+    fs::write(&proposal, event).expect("prepared early-review event should be writable");
+    let applied = run_in(&steward, &arguments[..arguments.len() - 1]);
+    assert_eq!(applied.status.code(), Some(0), "{applied:?}");
+    let before_retry = files_beneath(&fixture.root);
+    let event_path = steward
+        .join("reuse-evidence/cases")
+        .join(CASE_ID)
+        .join("0002-early-review-authorized.toml");
+    let _write_protection = WriteProtection::for_file_and_parent(&event_path);
+
+    let retry = run_without_portfolio_configuration(
+        &fixture,
+        &steward,
+        &[
+            "case",
+            "override",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            proposal_path,
+        ],
+    );
+
+    assert_eq!(retry.status.code(), Some(0), "{retry:?}");
+    assert!(retry.stderr.is_empty(), "{retry:?}");
+    assert_eq!(
+        String::from_utf8(retry.stdout).expect("stdout should be UTF-8"),
+        format!(
+            "early review already authorized\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-early-review-authorized.toml\nrevision: 2\nstate: review-ready\nreadiness_basis: early-review-override\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: unknown\nportfolio conditions unavailable: configure portfolio roots or supply `--root <PATH>` to derive privacy conflicts and staleness\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before_retry,
+        "an exact retry without portfolio configuration must write nothing"
     );
 }
 
@@ -2579,6 +2695,79 @@ fn approved_append_preview_is_byte_exact_and_retry_is_idempotent() {
         &steward,
         &open_arguments,
         &append_arguments,
+    );
+}
+
+#[test]
+fn exact_append_retry_without_portfolio_reports_unknown_privacy_without_writes() {
+    let fixture = Fixture::new("append-retry-without-portfolio");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(&proposal, append_occurrence_proposal()).expect("append proposal should be writable");
+    let arguments = [
+        "case",
+        "append",
+        CASE_ID,
+        "--expected-revision",
+        "1",
+        "--proposal",
+        proposal_path,
+        "--root",
+        root,
+        "--preview",
+    ];
+    let preview = run_in(&steward, &arguments);
+    assert_eq!(preview.status.code(), Some(0), "{preview:?}");
+    let preview = String::from_utf8(preview.stdout).expect("stdout should be UTF-8");
+    let (_, event) = preview
+        .split_once("event:\n")
+        .expect("preview should contain the exact event");
+    fs::write(&proposal, event).expect("prepared append event should be writable");
+    let applied = run_in(&steward, &arguments[..arguments.len() - 1]);
+    assert_eq!(applied.status.code(), Some(0), "{applied:?}");
+    let before_retry = files_beneath(&fixture.root);
+    let event_path = steward
+        .join("reuse-evidence/cases")
+        .join(CASE_ID)
+        .join("0002-occurrence-appended.toml");
+    let _write_protection = WriteProtection::for_file_and_parent(&event_path);
+
+    let retry = run_without_portfolio_configuration(
+        &fixture,
+        &steward,
+        &[
+            "case",
+            "append",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            proposal_path,
+        ],
+    );
+
+    assert_eq!(retry.status.code(), Some(0), "{retry:?}");
+    assert!(retry.stderr.is_empty(), "{retry:?}");
+    assert_eq!(
+        String::from_utf8(retry.stdout).expect("stdout should be UTF-8"),
+        format!(
+            "occurrence already recorded\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-occurrence-appended.toml\nrevision: 2\nstate: review-ready\nreadiness_basis: occurrence-count\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: unknown\nportfolio conditions unavailable: configure portfolio roots or supply `--root <PATH>` to derive privacy conflicts and staleness\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before_retry,
+        "an exact retry without portfolio configuration must write nothing"
     );
 }
 

@@ -1,12 +1,13 @@
 //! Durable case recording and inspection mechanics.
 
+mod publication;
 mod read;
 
 pub use read::{ListOutcome, ShowOutcome, list, show};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
-use std::fs::{self, File};
+use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,15 +16,12 @@ use uuid::Uuid;
 
 use crate::marker::{self, MarkerRead};
 use crate::portfolio;
-use crate::{
-    CreateFileOutcome, TerminalFailure, Visibility, create_file_atomically,
-    create_file_atomically_if_absent,
-};
+use crate::{TerminalFailure, Visibility, create_file_atomically};
 
 const CASE_SCHEMA_VERSION: i64 = 1;
 const OPENING_SEQUENCE: i64 = 1;
-const MAX_CASE_SEQUENCE: i64 = 9_999;
 const REVIEW_ONLY_NOTICE: &str = "authorizes semantic review; does not authorize extraction";
+const PORTFOLIO_UNAVAILABLE_FOOTER: &str = "portfolio conditions unavailable: configure portfolio roots or supply `--root <PATH>` to derive privacy conflicts and staleness\n";
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -182,6 +180,12 @@ enum EventType {
     EarlyReviewAuthorized,
 }
 
+impl publication::RevisionedCase for read::CaseRecord {
+    fn revision(&self) -> i64 {
+        self.revision
+    }
+}
+
 /// The complete observable result of opening or previewing a case.
 #[derive(Debug)]
 pub struct OpenOutcome {
@@ -207,7 +211,7 @@ pub struct AppendOutcome {
     event_path: PathBuf,
     revision: i64,
     readiness: read::Readiness,
-    privacy: Visibility,
+    privacy: Option<Visibility>,
     event: String,
 }
 
@@ -225,7 +229,7 @@ pub struct EarlyReviewOutcome {
     case_id: Uuid,
     event_path: PathBuf,
     revision: i64,
-    privacy: Visibility,
+    privacy: Option<Visibility>,
     event: String,
 }
 
@@ -284,8 +288,12 @@ impl AppendOutcome {
             receipt.push_str(REVIEW_ONLY_NOTICE);
             receipt.push('\n');
         }
-        writeln!(&mut receipt, "privacy: {}", self.privacy)
-            .expect("writing to a String cannot fail");
+        if let Some(privacy) = self.privacy {
+            writeln!(&mut receipt, "privacy: {privacy}").expect("writing to a String cannot fail");
+        } else {
+            receipt.push_str("privacy: unknown\n");
+            receipt.push_str(PORTFOLIO_UNAVAILABLE_FOOTER);
+        }
         if self.effect == AppendEffect::Preview {
             receipt.push_str("event:\n");
             receipt.push_str(&self.event);
@@ -304,12 +312,17 @@ impl EarlyReviewOutcome {
             EarlyReviewEffect::Existing => "early review already authorized",
         };
         let mut receipt = format!(
-            "{heading}\ncase_id: {}\nfile: {}\nrevision: {}\nstate: review-ready\nreadiness_basis: early-review-override\nreadiness: {REVIEW_ONLY_NOTICE}\nprivacy: {}\n",
+            "{heading}\ncase_id: {}\nfile: {}\nrevision: {}\nstate: review-ready\nreadiness_basis: early-review-override\nreadiness: {REVIEW_ONLY_NOTICE}\n",
             self.case_id,
             self.event_path.display(),
-            self.revision,
-            self.privacy
+            self.revision
         );
+        if let Some(privacy) = self.privacy {
+            writeln!(&mut receipt, "privacy: {privacy}").expect("writing to a String cannot fail");
+        } else {
+            receipt.push_str("privacy: unknown\n");
+            receipt.push_str(PORTFOLIO_UNAVAILABLE_FOOTER);
+        }
         if self.effect == EarlyReviewEffect::Preview {
             receipt.push_str("event:\n");
             receipt.push_str(&self.event);
@@ -408,18 +421,204 @@ pub fn append(
     preview: bool,
 ) -> Result<AppendOutcome, TerminalFailure> {
     let case_id = parse_case_id(case_id)?;
-    let sequence = next_append_sequence(expected_revision)?;
+    let publication = publication::Publication::new(expected_revision)?;
+    let sequence = publication.sequence();
     let repository_root = find_repository_root(working_directory)?;
     let steward = read_steward(&repository_root)?;
     let relative_case_directory = Path::new("reuse-evidence/cases").join(case_id.to_string());
     validate_case_storage_path(&repository_root, &relative_case_directory)?;
-    let mut case = read::read_case_for_append(
+    let case = read::read_case_for_append(
         &repository_root,
         &relative_case_directory,
         case_id,
         steward.repository_id(),
     )?;
     let proposal = read_append_proposal(proposal_path)?;
+    validate_prepared_append_sequence(&proposal, expected_revision, sequence)?;
+    let relative_event_path =
+        relative_case_directory.join(format!("{sequence:04}-occurrence-appended.toml"));
+    validate_case_storage_path(&repository_root, &relative_event_path)?;
+    let absolute_event_path = repository_root.join(&relative_event_path);
+    let event = append_event_bytes(&proposal, sequence)?;
+    let prepared_event_id = proposal.prepared.as_ref().map(|prepared| prepared.event_id);
+    if preview {
+        if absolute_event_path.exists() {
+            let existing =
+                publication::existing_event(&case, &absolute_event_path, prepared_event_id, &event)
+                    .map_err(|failure| append_existing_event_failure(case_id, failure))?;
+            return append_retry_outcome(
+                case_id,
+                relative_event_path,
+                &case,
+                existing,
+                &steward,
+                root_overrides,
+            );
+        }
+        if case.revision != expected_revision {
+            return Err(TerminalFailure::refusal(
+                format!(
+                    "expected revision {expected_revision} does not match case `{case_id}` current revision {}",
+                    case.revision
+                ),
+                format!(
+                    "run `case show {case_id}` and retry with `--expected-revision {}`",
+                    case.revision
+                ),
+            ));
+        }
+        let privacy = validate_new_append(&case, &proposal, &steward, root_overrides)?;
+        return Ok(AppendOutcome {
+            effect: AppendEffect::Preview,
+            case_id,
+            event_path: relative_event_path,
+            revision: sequence,
+            readiness: case.readiness_after_appending_occurrence(),
+            privacy: Some(privacy),
+            event,
+        });
+    }
+
+    match publication
+        .publish(
+            publication::PublicationTarget {
+                repository_root: &repository_root,
+                relative_case_directory: &relative_case_directory,
+                relative_event_path: &relative_event_path,
+            },
+            publication::PreparedEvent {
+                event_id: prepared_event_id,
+                bytes: &event,
+            },
+            || {
+                read::read_case_for_append(
+                    &repository_root,
+                    &relative_case_directory,
+                    case_id,
+                    steward.repository_id(),
+                )
+            },
+            |_| Ok(()),
+            |case, ()| validate_new_append(case, &proposal, &steward, root_overrides),
+        )
+        .map_err(|failure| append_publication_failure(case_id, failure))?
+    {
+        publication::PublicationOutcome::Created { case, validation } => Ok(AppendOutcome {
+            effect: AppendEffect::Created,
+            case_id,
+            event_path: relative_event_path,
+            revision: sequence,
+            readiness: case.readiness_after_appending_occurrence(),
+            privacy: Some(validation),
+            event,
+        }),
+        publication::PublicationOutcome::Existing { case, event } => append_retry_outcome(
+            case_id,
+            relative_event_path,
+            &case,
+            event,
+            &steward,
+            root_overrides,
+        ),
+    }
+}
+
+fn append_retry_outcome(
+    case_id: Uuid,
+    event_path: PathBuf,
+    case: &read::CaseRecord,
+    event: publication::ExistingEvent,
+    steward: &marker::Marker,
+    root_overrides: &[PathBuf],
+) -> Result<AppendOutcome, TerminalFailure> {
+    Ok(AppendOutcome {
+        effect: AppendEffect::Existing,
+        case_id,
+        event_path,
+        revision: event.sequence,
+        readiness: case.readiness(),
+        privacy: append_retry_privacy(case, steward, root_overrides)?,
+        event: event.bytes,
+    })
+}
+
+fn append_publication_failure(
+    case_id: Uuid,
+    failure: publication::PublicationFailure,
+) -> TerminalFailure {
+    match failure {
+        publication::PublicationFailure::Protocol(failure) => failure,
+        publication::PublicationFailure::ExistingEvent(failure) => {
+            append_existing_event_failure(case_id, failure)
+        }
+        publication::PublicationFailure::RevisionConflict {
+            expected_revision,
+            current_revision,
+        } => TerminalFailure::refusal(
+            format!(
+                "expected revision {expected_revision} does not match case `{case_id}` current revision {current_revision}"
+            ),
+            format!(
+                "run `case show {case_id}` and retry with `--expected-revision {current_revision}`"
+            ),
+        ),
+    }
+}
+
+fn append_existing_event_failure(
+    case_id: Uuid,
+    failure: publication::ExistingEventFailure,
+) -> TerminalFailure {
+    match failure {
+        publication::ExistingEventFailure::Unreadable { path, error } => TerminalFailure::refusal(
+            format!(
+                "recorded append event `{}` cannot be read: {error}",
+                path.display()
+            ),
+            "restore the recorded event before retrying the append",
+        ),
+        publication::ExistingEventFailure::Invalid { path, error } => TerminalFailure::refusal(
+            format!(
+                "recorded append event `{}` is invalid: {error}",
+                path.display()
+            ),
+            "restore the supported recorded event before retrying the append",
+        ),
+        publication::ExistingEventFailure::IdentityConflict {
+            recorded_sequence,
+            recorded_event_id,
+            prepared_event_id,
+            current_revision,
+        } => {
+            let proposed = prepared_event_id.map_or_else(
+                || "a newly prepared event".to_owned(),
+                |event_id| format!("event `{event_id}`"),
+            );
+            TerminalFailure::refusal(
+                format!(
+                    "case `{case_id}` has a revision conflict at sequence {recorded_sequence}: event `{recorded_event_id}` is recorded instead of {proposed}"
+                ),
+                format!(
+                    "inspect sequence {recorded_sequence}; retry its recorded identity if it is the intended append, or prepare a distinct occurrence against revision {current_revision}"
+                ),
+            )
+        }
+        publication::ExistingEventFailure::ContentDrift { recorded_event_id } => {
+            TerminalFailure::refusal(
+                format!(
+                    "append event identity `{recorded_event_id}` is already recorded with different content"
+                ),
+                "restore the exact previewed append event before retrying",
+            )
+        }
+    }
+}
+
+fn validate_prepared_append_sequence(
+    proposal: &AppendProposal,
+    expected_revision: i64,
+    sequence: i64,
+) -> Result<(), TerminalFailure> {
     if let Some(prepared) = &proposal.prepared
         && prepared.sequence != sequence
     {
@@ -431,80 +630,7 @@ pub fn append(
             "preview the append again against the current expected revision",
         ));
     }
-    let relative_event_path =
-        relative_case_directory.join(format!("{sequence:04}-occurrence-appended.toml"));
-    validate_case_storage_path(&repository_root, &relative_event_path)?;
-    let absolute_event_path = repository_root.join(&relative_event_path);
-    let event = append_event_bytes(&proposal, sequence)?;
-    let _case_write_lock = if preview {
-        None
-    } else {
-        let lock = lock_case_for_later_event(&repository_root, &relative_case_directory)?;
-        case = read::read_case_for_append(
-            &repository_root,
-            &relative_case_directory,
-            case_id,
-            steward.repository_id(),
-        )?;
-        Some(lock)
-    };
-    if absolute_event_path.exists() {
-        return existing_append(
-            &absolute_event_path,
-            relative_event_path,
-            &case,
-            &proposal,
-            &event,
-            &steward,
-            root_overrides,
-        );
-    }
-    if case.revision != expected_revision {
-        return Err(TerminalFailure::refusal(
-            format!(
-                "expected revision {expected_revision} does not match case `{case_id}` current revision {}",
-                case.revision
-            ),
-            format!(
-                "run `case show {case_id}` and retry with `--expected-revision {}`",
-                case.revision
-            ),
-        ));
-    }
-    let privacy = validate_new_append(&case, &proposal, &steward, root_overrides)?;
-    let effect = if preview {
-        AppendEffect::Preview
-    } else {
-        match create_file_atomically_if_absent(&absolute_event_path, event.as_bytes())? {
-            CreateFileOutcome::Created => AppendEffect::Created,
-            CreateFileOutcome::Occupied => {
-                let refreshed = read::read_case_for_append(
-                    &repository_root,
-                    &relative_case_directory,
-                    case_id,
-                    steward.repository_id(),
-                )?;
-                return existing_append(
-                    &absolute_event_path,
-                    relative_event_path,
-                    &refreshed,
-                    &proposal,
-                    &event,
-                    &steward,
-                    root_overrides,
-                );
-            }
-        }
-    };
-    Ok(AppendOutcome {
-        effect,
-        case_id,
-        event_path: relative_event_path,
-        revision: sequence,
-        readiness: case.readiness_after_appending_occurrence(),
-        privacy,
-        event,
-    })
+    Ok(())
 }
 
 /// Records or previews a human-authorized early-review override.
@@ -522,18 +648,249 @@ pub fn authorize_early_review(
     preview: bool,
 ) -> Result<EarlyReviewOutcome, TerminalFailure> {
     let case_id = parse_case_id(case_id)?;
-    let sequence = next_append_sequence(expected_revision)?;
+    let publication = publication::Publication::new(expected_revision)?;
+    let sequence = publication.sequence();
     let repository_root = find_repository_root(working_directory)?;
     let steward = read_steward(&repository_root)?;
     let relative_case_directory = Path::new("reuse-evidence/cases").join(case_id.to_string());
     validate_case_storage_path(&repository_root, &relative_case_directory)?;
-    let mut case = read::read_case_for_early_review(
+    let case = read::read_case_for_early_review(
         &repository_root,
         &relative_case_directory,
         case_id,
         steward.repository_id(),
     )?;
     let proposal = read_early_review_proposal(proposal_path)?;
+    validate_prepared_early_review_sequence(&proposal, expected_revision, sequence)?;
+    let relative_event_path =
+        relative_case_directory.join(format!("{sequence:04}-early-review-authorized.toml"));
+    validate_case_storage_path(&repository_root, &relative_event_path)?;
+    let event = early_review_event_bytes(&proposal, sequence)?;
+    if preview {
+        if let Some(outcome) = early_review_preview_retry(
+            &repository_root.join(&relative_event_path),
+            &relative_event_path,
+            &case,
+            &proposal,
+            &event,
+            &steward,
+            root_overrides,
+        )? {
+            return Ok(outcome);
+        }
+        let privacy = derive_complete_case_privacy(&case, &steward, root_overrides)?;
+        validate_early_review_privacy(&case, &steward, privacy)?;
+        if case.revision != expected_revision {
+            return Err(TerminalFailure::refusal(
+                format!(
+                    "expected revision {expected_revision} does not match case `{case_id}` current revision {}",
+                    case.revision
+                ),
+                format!(
+                    "run `case show {case_id}` and retry `case override {case_id}` with `--expected-revision {}` and the approved proposal",
+                    case.revision
+                ),
+            ));
+        }
+        validate_new_early_review(&case)?;
+        return Ok(EarlyReviewOutcome {
+            effect: EarlyReviewEffect::Preview,
+            case_id,
+            event_path: relative_event_path,
+            revision: sequence,
+            privacy: Some(privacy),
+            event,
+        });
+    }
+
+    match publication
+        .publish(
+            publication::PublicationTarget {
+                repository_root: &repository_root,
+                relative_case_directory: &relative_case_directory,
+                relative_event_path: &relative_event_path,
+            },
+            publication::PreparedEvent {
+                event_id: proposal.prepared.as_ref().map(|prepared| prepared.event_id),
+                bytes: &event,
+            },
+            || {
+                read::read_case_for_early_review(
+                    &repository_root,
+                    &relative_case_directory,
+                    case_id,
+                    steward.repository_id(),
+                )
+            },
+            |case| {
+                let privacy = derive_complete_case_privacy(case, &steward, root_overrides)?;
+                validate_early_review_privacy(case, &steward, privacy)?;
+                Ok(privacy)
+            },
+            |case, privacy| {
+                validate_new_early_review(case)?;
+                Ok(privacy)
+            },
+        )
+        .map_err(|failure| early_review_publication_failure(case_id, failure))?
+    {
+        publication::PublicationOutcome::Created { validation, .. } => Ok(
+            early_review_created_outcome(case_id, relative_event_path, sequence, validation, event),
+        ),
+        publication::PublicationOutcome::Existing { case, event } => {
+            Ok(early_review_retry_outcome(
+                case_id,
+                relative_event_path,
+                &case,
+                event,
+                &steward,
+                root_overrides,
+            ))
+        }
+    }
+}
+
+fn early_review_created_outcome(
+    case_id: Uuid,
+    event_path: PathBuf,
+    revision: i64,
+    privacy: Visibility,
+    event: String,
+) -> EarlyReviewOutcome {
+    EarlyReviewOutcome {
+        effect: EarlyReviewEffect::Created,
+        case_id,
+        event_path,
+        revision,
+        privacy: Some(privacy),
+        event,
+    }
+}
+
+fn early_review_retry_outcome(
+    case_id: Uuid,
+    event_path: PathBuf,
+    case: &read::CaseRecord,
+    event: publication::ExistingEvent,
+    steward: &marker::Marker,
+    root_overrides: &[PathBuf],
+) -> EarlyReviewOutcome {
+    EarlyReviewOutcome {
+        effect: EarlyReviewEffect::Existing,
+        case_id,
+        event_path,
+        revision: event.sequence,
+        privacy: early_review_retry_privacy(case, steward, root_overrides),
+        event: event.bytes,
+    }
+}
+
+fn early_review_publication_failure(
+    case_id: Uuid,
+    failure: publication::PublicationFailure,
+) -> TerminalFailure {
+    match failure {
+        publication::PublicationFailure::Protocol(failure) => failure,
+        publication::PublicationFailure::ExistingEvent(failure) => {
+            early_review_existing_event_failure(case_id, failure)
+        }
+        publication::PublicationFailure::RevisionConflict {
+            expected_revision,
+            current_revision,
+        } => TerminalFailure::refusal(
+            format!(
+                "expected revision {expected_revision} does not match case `{case_id}` current revision {current_revision}"
+            ),
+            format!(
+                "run `case show {case_id}` and retry `case override {case_id}` with `--expected-revision {current_revision}` and the approved proposal"
+            ),
+        ),
+    }
+}
+
+fn early_review_existing_event_failure(
+    case_id: Uuid,
+    failure: publication::ExistingEventFailure,
+) -> TerminalFailure {
+    match failure {
+        publication::ExistingEventFailure::Unreadable { path, error } => TerminalFailure::refusal(
+            format!(
+                "recorded early-review event `{}` cannot be read: {error}",
+                path.display()
+            ),
+            "restore the recorded event before retrying the early-review override",
+        ),
+        publication::ExistingEventFailure::Invalid { path, error } => TerminalFailure::refusal(
+            format!(
+                "recorded early-review event `{}` is invalid: {error}",
+                path.display()
+            ),
+            "restore the supported recorded event before retrying the early-review override",
+        ),
+        publication::ExistingEventFailure::IdentityConflict {
+            recorded_sequence,
+            recorded_event_id,
+            prepared_event_id,
+            current_revision,
+        } => {
+            let proposed = prepared_event_id.map_or_else(
+                || "a newly prepared event".to_owned(),
+                |event_id| format!("event `{event_id}`"),
+            );
+            TerminalFailure::refusal(
+                format!(
+                    "case `{case_id}` has a revision conflict at sequence {recorded_sequence}: event `{recorded_event_id}` is recorded instead of {proposed}"
+                ),
+                format!(
+                    "inspect sequence {recorded_sequence}; retry its recorded identity if it is the intended early-review override, or prepare a new operation against revision {current_revision}"
+                ),
+            )
+        }
+        publication::ExistingEventFailure::ContentDrift { recorded_event_id } => {
+            TerminalFailure::refusal(
+                format!(
+                    "early-review event identity `{recorded_event_id}` is already recorded with different content"
+                ),
+                "restore the exact previewed early-review event before retrying",
+            )
+        }
+    }
+}
+
+fn early_review_preview_retry(
+    absolute_event_path: &Path,
+    relative_event_path: &Path,
+    case: &read::CaseRecord,
+    proposal: &EarlyReviewProposal,
+    event: &str,
+    steward: &marker::Marker,
+    root_overrides: &[PathBuf],
+) -> Result<Option<EarlyReviewOutcome>, TerminalFailure> {
+    if !absolute_event_path.exists() {
+        return Ok(None);
+    }
+    let existing = publication::existing_event(
+        case,
+        absolute_event_path,
+        proposal.prepared.as_ref().map(|prepared| prepared.event_id),
+        event,
+    )
+    .map_err(|failure| early_review_existing_event_failure(case.case_id, failure))?;
+    Ok(Some(early_review_retry_outcome(
+        case.case_id,
+        relative_event_path.to_path_buf(),
+        case,
+        existing,
+        steward,
+        root_overrides,
+    )))
+}
+
+fn validate_prepared_early_review_sequence(
+    proposal: &EarlyReviewProposal,
+    expected_revision: i64,
+    sequence: i64,
+) -> Result<(), TerminalFailure> {
     if let Some(prepared) = &proposal.prepared
         && prepared.sequence != sequence
     {
@@ -545,217 +902,7 @@ pub fn authorize_early_review(
             "preview the early-review override again against the current expected revision",
         ));
     }
-    let relative_event_path =
-        relative_case_directory.join(format!("{sequence:04}-early-review-authorized.toml"));
-    validate_case_storage_path(&repository_root, &relative_event_path)?;
-    let absolute_event_path = repository_root.join(&relative_event_path);
-    let event = early_review_event_bytes(&proposal, sequence)?;
-    let _case_write_lock = if preview {
-        None
-    } else {
-        let lock = lock_case_for_later_event(&repository_root, &relative_case_directory)?;
-        case = read::read_case_for_early_review(
-            &repository_root,
-            &relative_case_directory,
-            case_id,
-            steward.repository_id(),
-        )?;
-        Some(lock)
-    };
-    if absolute_event_path.exists() {
-        return existing_early_review(
-            &absolute_event_path,
-            relative_event_path,
-            &case,
-            &proposal,
-            &event,
-            &steward,
-            root_overrides,
-        );
-    }
-    let privacy = derive_complete_case_privacy(&case, &steward, root_overrides)?;
-    validate_early_review_privacy(&case, &steward, privacy)?;
-    if case.revision != expected_revision {
-        return Err(TerminalFailure::refusal(
-            format!(
-                "expected revision {expected_revision} does not match case `{case_id}` current revision {}",
-                case.revision
-            ),
-            format!(
-                "run `case show {case_id}` and retry `case override {case_id}` with `--expected-revision {}` and the approved proposal",
-                case.revision
-            ),
-        ));
-    }
-    validate_new_early_review(&case)?;
-    let effect = if preview {
-        EarlyReviewEffect::Preview
-    } else {
-        match create_file_atomically_if_absent(&absolute_event_path, event.as_bytes())? {
-            CreateFileOutcome::Created => EarlyReviewEffect::Created,
-            CreateFileOutcome::Occupied => {
-                let refreshed = read::read_case_for_early_review(
-                    &repository_root,
-                    &relative_case_directory,
-                    case_id,
-                    steward.repository_id(),
-                )?;
-                return existing_early_review(
-                    &absolute_event_path,
-                    relative_event_path,
-                    &refreshed,
-                    &proposal,
-                    &event,
-                    &steward,
-                    root_overrides,
-                );
-            }
-        }
-    };
-    Ok(EarlyReviewOutcome {
-        effect,
-        case_id,
-        event_path: relative_event_path,
-        revision: sequence,
-        privacy,
-        event,
-    })
-}
-
-fn existing_early_review(
-    absolute_event_path: &Path,
-    relative_event_path: PathBuf,
-    case: &read::CaseRecord,
-    proposal: &EarlyReviewProposal,
-    proposed_event: &str,
-    steward: &marker::Marker,
-    root_overrides: &[PathBuf],
-) -> Result<EarlyReviewOutcome, TerminalFailure> {
-    let recorded_bytes = fs::read_to_string(absolute_event_path).map_err(|error| {
-        TerminalFailure::refusal(
-            format!(
-                "recorded early-review event `{}` cannot be read: {error}",
-                absolute_event_path.display()
-            ),
-            "restore the recorded event before retrying the early-review override",
-        )
-    })?;
-    let recorded =
-        toml::from_str::<EarlyReviewAuthorizedEvent>(&recorded_bytes).map_err(|error| {
-            TerminalFailure::refusal(
-                format!(
-                    "recorded early-review event `{}` is invalid: {error}",
-                    absolute_event_path.display()
-                ),
-                "restore the supported recorded event before retrying the early-review override",
-            )
-        })?;
-    let Some(prepared) = &proposal.prepared else {
-        return Err(early_review_revision_conflict(
-            case.case_id,
-            recorded.sequence,
-            recorded.event_id,
-            None,
-            case.revision,
-        ));
-    };
-    if recorded.event_id != prepared.event_id {
-        return Err(early_review_revision_conflict(
-            case.case_id,
-            recorded.sequence,
-            recorded.event_id,
-            Some(prepared.event_id),
-            case.revision,
-        ));
-    }
-    if recorded_bytes != proposed_event {
-        return Err(TerminalFailure::refusal(
-            format!(
-                "early-review event identity `{}` is already recorded with different content",
-                recorded.event_id
-            ),
-            "restore the exact previewed early-review event before retrying",
-        ));
-    }
-    // An exact retry writes nothing. If current portfolio conditions are
-    // unavailable, preserve idempotent success and avoid a false public claim.
-    let privacy =
-        derive_complete_case_privacy(case, steward, root_overrides).unwrap_or(Visibility::Private);
-    Ok(EarlyReviewOutcome {
-        effect: EarlyReviewEffect::Existing,
-        case_id: case.case_id,
-        event_path: relative_event_path,
-        revision: recorded.sequence,
-        privacy,
-        event: recorded_bytes,
-    })
-}
-
-fn early_review_revision_conflict(
-    case_id: Uuid,
-    sequence: i64,
-    recorded_event_id: Uuid,
-    proposed_event_id: Option<Uuid>,
-    current_revision: i64,
-) -> TerminalFailure {
-    let proposed = proposed_event_id.map_or_else(
-        || "a newly prepared event".to_owned(),
-        |event_id| format!("event `{event_id}`"),
-    );
-    TerminalFailure::refusal(
-        format!(
-            "case `{case_id}` has a revision conflict at sequence {sequence}: event `{recorded_event_id}` is recorded instead of {proposed}"
-        ),
-        format!(
-            "inspect sequence {sequence}; retry its recorded identity if it is the intended early-review override, or prepare a new operation against revision {current_revision}"
-        ),
-    )
-}
-
-fn next_append_sequence(expected_revision: i64) -> Result<i64, TerminalFailure> {
-    if expected_revision < OPENING_SEQUENCE {
-        return Err(TerminalFailure::refusal(
-            format!("expected revision `{expected_revision}` is not a recorded case revision"),
-            "use the positive revision reported by `case show`",
-        ));
-    }
-    if expected_revision >= MAX_CASE_SEQUENCE {
-        return Err(TerminalFailure::refusal(
-            format!(
-                "expected revision {expected_revision} cannot be appended because the accepted `NNNN` event layout ends at revision {MAX_CASE_SEQUENCE}"
-            ),
-            "preserve the case unchanged and obtain an accepted event-layout amendment before appending another occurrence",
-        ));
-    }
-    Ok(expected_revision + 1)
-}
-
-fn lock_case_for_later_event(
-    repository_root: &Path,
-    relative_case_directory: &Path,
-) -> Result<File, TerminalFailure> {
-    let opening_event_path = repository_root
-        .join(relative_case_directory)
-        .join("0001-case-opened.toml");
-    let opening_event = File::open(&opening_event_path).map_err(|error| {
-        TerminalFailure::refusal(
-            format!(
-                "case opening event `{}` cannot be opened for write serialization: {error}",
-                opening_event_path.display()
-            ),
-            "restore the immutable opening event and retry the later case event",
-        )
-    })?;
-    opening_event.lock().map_err(|error| {
-        TerminalFailure::refusal(
-            format!(
-                "case opening event `{}` cannot serialize a later case event: {error}",
-                opening_event_path.display()
-            ),
-            "make the immutable opening event lockable and retry the later case event",
-        )
-    })?;
-    Ok(opening_event)
+    Ok(())
 }
 
 fn validate_early_review_privacy(
@@ -857,71 +1004,6 @@ fn validate_new_append(
     }
 }
 
-fn existing_append(
-    absolute_event_path: &Path,
-    relative_event_path: PathBuf,
-    case: &read::CaseRecord,
-    proposal: &AppendProposal,
-    proposed_event: &str,
-    steward: &marker::Marker,
-    root_overrides: &[PathBuf],
-) -> Result<AppendOutcome, TerminalFailure> {
-    let recorded_bytes = fs::read_to_string(absolute_event_path).map_err(|error| {
-        TerminalFailure::refusal(
-            format!(
-                "recorded append event `{}` cannot be read: {error}",
-                absolute_event_path.display()
-            ),
-            "restore the recorded event before retrying the append",
-        )
-    })?;
-    let recorded = toml::from_str::<OccurrenceAppendedEvent>(&recorded_bytes).map_err(|error| {
-        TerminalFailure::refusal(
-            format!(
-                "recorded append event `{}` is invalid: {error}",
-                absolute_event_path.display()
-            ),
-            "restore the supported recorded event before retrying the append",
-        )
-    })?;
-    let Some(prepared) = &proposal.prepared else {
-        return Err(append_revision_conflict(
-            case.case_id,
-            recorded.sequence,
-            recorded.event_id,
-            None,
-            case.revision,
-        ));
-    };
-    if recorded.event_id != prepared.event_id {
-        return Err(append_revision_conflict(
-            case.case_id,
-            recorded.sequence,
-            recorded.event_id,
-            Some(prepared.event_id),
-            case.revision,
-        ));
-    }
-    if recorded_bytes != proposed_event {
-        return Err(TerminalFailure::refusal(
-            format!(
-                "append event identity `{}` is already recorded with different content",
-                recorded.event_id
-            ),
-            "restore the exact previewed append event before retrying",
-        ));
-    }
-    Ok(AppendOutcome {
-        effect: AppendEffect::Existing,
-        case_id: case.case_id,
-        event_path: relative_event_path,
-        revision: recorded.sequence,
-        readiness: case.readiness(),
-        privacy: derive_complete_case_privacy(case, steward, root_overrides)?,
-        event: recorded_bytes,
-    })
-}
-
 fn derive_complete_case_privacy(
     case: &read::CaseRecord,
     steward: &marker::Marker,
@@ -940,25 +1022,29 @@ fn derive_complete_case_privacy(
     }
 }
 
-fn append_revision_conflict(
-    case_id: Uuid,
-    sequence: i64,
-    recorded_event_id: Uuid,
-    proposed_event_id: Option<Uuid>,
-    current_revision: i64,
-) -> TerminalFailure {
-    let proposed = proposed_event_id.map_or_else(
-        || "a newly prepared event".to_owned(),
-        |event_id| format!("event `{event_id}`"),
-    );
-    TerminalFailure::refusal(
-        format!(
-            "case `{case_id}` has a revision conflict at sequence {sequence}: event `{recorded_event_id}` is recorded instead of {proposed}"
-        ),
-        format!(
-            "inspect sequence {sequence}; retry its recorded identity if it is the intended append, or prepare a distinct occurrence against revision {current_revision}"
-        ),
-    )
+fn append_retry_privacy(
+    case: &read::CaseRecord,
+    steward: &marker::Marker,
+    root_overrides: &[PathBuf],
+) -> Result<Option<Visibility>, TerminalFailure> {
+    if portfolio::selected_roots_if_configured(root_overrides)?.is_none() {
+        return Ok(None);
+    }
+    derive_complete_case_privacy(case, steward, root_overrides).map(Some)
+}
+
+fn early_review_retry_privacy(
+    case: &read::CaseRecord,
+    steward: &marker::Marker,
+    root_overrides: &[PathBuf],
+) -> Option<Visibility> {
+    if matches!(
+        portfolio::selected_roots_if_configured(root_overrides),
+        Ok(None)
+    ) {
+        return None;
+    }
+    Some(derive_complete_case_privacy(case, steward, root_overrides).unwrap_or(Visibility::Private))
 }
 
 fn append_event_bytes(proposal: &AppendProposal, sequence: i64) -> Result<String, TerminalFailure> {

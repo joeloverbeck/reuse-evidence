@@ -203,9 +203,7 @@ impl ShowOutcome {
             }
         }
         if !self.portfolio_available {
-            output.push_str(
-                "portfolio conditions unavailable: configure portfolio roots or supply `--root <PATH>` to derive privacy conflicts and staleness\n",
-            );
+            output.push_str(super::PORTFOLIO_UNAVAILABLE_FOOTER);
         }
         output
     }
@@ -244,9 +242,7 @@ impl ListOutcome {
             .expect("writing to a String cannot fail");
         }
         if !self.portfolio_available {
-            output.push_str(
-                "portfolio conditions unavailable: configure portfolio roots or supply `--root <PATH>` to derive privacy conflicts and staleness\n",
-            );
+            output.push_str(super::PORTFOLIO_UNAVAILABLE_FOOTER);
         }
         output
     }
