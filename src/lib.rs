@@ -2,7 +2,11 @@
 
 //! Evidence-gated reuse decisions for repository portfolios.
 
+#[cfg(feature = "cli")]
+pub mod case;
 pub mod marker;
+#[cfg(feature = "cli")]
+pub mod portfolio;
 
 use std::fmt;
 use std::fs::{self, OpenOptions};
@@ -370,7 +374,7 @@ fn malformed_marker_error(
     )
 }
 
-fn create_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), EnrollmentError> {
+pub(crate) fn create_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), EnrollmentError> {
     let temporary_path = temporary_path_for(path);
     let result = (|| {
         write_temporary_file(&temporary_path, bytes)?;
@@ -415,7 +419,11 @@ fn write_temporary_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 fn temporary_path_for(path: &Path) -> PathBuf {
-    path.with_file_name(format!(".{MARKER_FILE}.{}.tmp", Uuid::new_v4()))
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(MARKER_FILE);
+    path.with_file_name(format!(".{file_name}.{}.tmp", Uuid::new_v4()))
 }
 
 fn sync_parent(path: &Path) -> std::io::Result<()> {
@@ -426,16 +434,17 @@ fn sync_parent(path: &Path) -> std::io::Result<()> {
 }
 
 fn find_repository_root(working_directory: &Path) -> Result<PathBuf, EnrollmentError> {
-    let working_directory = working_directory.canonicalize().map_err(|error| {
-        EnrollmentError::refusal(
-            format!(
-                "working directory `{}` cannot be inspected: {error}",
-                working_directory.display()
-            ),
-            "rerun from an existing directory inside the repository",
-        )
-    })?;
-    let repository_root = repository_root(&working_directory).ok_or_else(|| {
+    let (working_directory, repository_root) =
+        locate_repository_root(working_directory).map_err(|error| {
+            EnrollmentError::refusal(
+                format!(
+                    "working directory `{}` cannot be inspected: {error}",
+                    working_directory.display()
+                ),
+                "rerun from an existing directory inside the repository",
+            )
+        })?;
+    repository_root.ok_or_else(|| {
         EnrollmentError::refusal(
             format!(
                 "`{}` is not inside a repository root",
@@ -443,12 +452,16 @@ fn find_repository_root(working_directory: &Path) -> Result<PathBuf, EnrollmentE
             ),
             "rerun inside a repository containing `.git`",
         )
-    })?;
-    Ok(repository_root.to_path_buf())
+    })
 }
 
-fn repository_root(working_directory: &Path) -> Option<&Path> {
-    working_directory
+pub(crate) fn locate_repository_root(
+    working_directory: &Path,
+) -> std::io::Result<(PathBuf, Option<PathBuf>)> {
+    let working_directory = working_directory.canonicalize()?;
+    let repository_root = working_directory
         .ancestors()
         .find(|candidate| marker::is_repository_root(candidate))
+        .map(Path::to_path_buf);
+    Ok((working_directory, repository_root))
 }

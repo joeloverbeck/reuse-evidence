@@ -5,9 +5,9 @@ use std::fs::{self, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+use crate::marker::{self, MarkerRead, UnreadableMarker, UnsupportedMarker};
+use crate::{TerminalFailure, Visibility};
 use atomic_write_file::AtomicWriteFile;
-use reuse_evidence::marker::{self, MarkerRead, UnreadableMarker, UnsupportedMarker};
-use reuse_evidence::{TerminalFailure, Visibility};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -18,11 +18,11 @@ struct Config {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct Enrollment {
-    repository_id: Uuid,
+pub(crate) struct Enrollment {
+    pub(crate) repository_id: Uuid,
     ecosystem_id: String,
-    path: PathBuf,
-    visibility: Visibility,
+    pub(crate) path: PathBuf,
+    pub(crate) visibility: Visibility,
 }
 
 #[derive(Default, Deserialize, Serialize)]
@@ -32,10 +32,10 @@ struct PortfolioState {
 }
 
 #[derive(Debug)]
-struct Scan {
+pub(crate) struct Scan {
     roots: Vec<PathBuf>,
     inspected_repositories: BTreeSet<PathBuf>,
-    enrollments: Vec<Enrollment>,
+    pub(crate) enrollments: Vec<Enrollment>,
     unsupported_markers: Vec<UnsupportedMarker>,
     unreadable_markers: Vec<UnreadableMarker>,
 }
@@ -53,8 +53,10 @@ enum MarkerInspection {
     Ignore,
 }
 
-pub(crate) enum PortfolioReport {
+pub enum PortfolioReport {
+    /// A complete unambiguous portfolio observation.
     Complete(String),
+    /// A report that found at least one duplicate stable repository identity.
     IdentityConflict(String),
 }
 
@@ -69,7 +71,13 @@ struct StateLock {
     path: PathBuf,
 }
 
-pub(crate) fn report(root_overrides: &[PathBuf]) -> Result<PortfolioReport, TerminalFailure> {
+/// Rescans enrolled repositories and renders the current portfolio report.
+///
+/// # Errors
+///
+/// Returns a classified terminal failure when roots, markers, or derived state
+/// cannot be inspected safely.
+pub fn report(root_overrides: &[PathBuf]) -> Result<PortfolioReport, TerminalFailure> {
     let roots = selected_roots(root_overrides)?;
     let scan = scan(&roots)?;
     let identity_paths = duplicate_identity_paths(&scan.enrollments);
@@ -540,7 +548,7 @@ fn replace_state_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     temporary.commit()
 }
 
-fn selected_roots(root_overrides: &[PathBuf]) -> Result<Vec<PathBuf>, TerminalFailure> {
+pub(crate) fn selected_roots(root_overrides: &[PathBuf]) -> Result<Vec<PathBuf>, TerminalFailure> {
     if !root_overrides.is_empty() {
         return Ok(root_overrides.to_vec());
     }
@@ -595,7 +603,7 @@ fn no_roots_message(config_path: &Path) -> TerminalFailure {
     )
 }
 
-fn scan(roots: &[PathBuf]) -> Result<Scan, TerminalFailure> {
+pub(crate) fn scan(roots: &[PathBuf]) -> Result<Scan, TerminalFailure> {
     let mut canonical_roots = Vec::new();
     for root in roots {
         let root = root.canonicalize().map_err(|error| {

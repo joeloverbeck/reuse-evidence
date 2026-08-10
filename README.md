@@ -8,11 +8,11 @@ The project is deliberately not a clone detector and not an automatic refactorin
 
 ## Status
 
-**Repository enrollment, marker-only portfolio reporting with derived change state, and skill governance implemented.**
+**Repository enrollment, marker-only portfolio reporting with derived change state, durable case opening, and skill governance implemented.**
 
 The public Rust crate and standalone `reuse-evidence` binary can enroll a Git repository, including an npm workspace with no Cargo project. Enrollment writes a human-readable version 1 TOML marker at the nearest repository root, safely revalidates an existing marker without minting another identity, and uses the binary's shared success, unsafe-failure, and refusal exit meanings.
 
-Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, unsupported or unreadable markers, and new, moved, unavailable, or visibility-changed repositories. The binary also mounts the published `skill-evidence` lifecycle under `reuse-evidence skills` and this repository commits the four operator packages it installs. The reuse-case lifecycle, capture, review, verification, and this project's own `reuse-evidence-*` skill packages are not implemented yet.
+Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, unsupported or unreadable markers, and new, moved, unavailable, or visibility-changed repositories. The case command can preview and atomically open a steward-local case from two or more evidenced occurrences while enforcing enrollment, stable identity, idempotency, and private dominance. The binary also mounts the published `skill-evidence` lifecycle under `reuse-evidence skills` and this repository commits the four operator packages it installs. Appending or reading cases, deriving readiness, capture, review, verification, and this project's own `reuse-evidence-*` skill packages are not implemented yet.
 
 The selected delivery constraints are:
 
@@ -110,6 +110,55 @@ The delta file is derived user-local state at:
 The file is disposable and contains the absolute local paths needed to compare observations. Deleting it does not change the current enrolled set; the next successful run rebuilds it and reports the current repositories as new because no prior observation remains. The command refuses if the selected state path resolves inside any inspected repository or another recognizable Git worktree, so the derived file is excluded from repository version control by construction. It is not authoritative evidence and has no committed compatibility promise.
 
 Portfolio reporting remains read-only with respect to every repository it inspects: only an unambiguous successful report may update the user-local delta file. State updates are serialized by a user-local lock and published atomically; an unchanged observation preserves the existing state file. The command performs no network access and emits no score, ranking, percentage, or health metric. Paths shown in the interactive portfolio report are local operational context; they are not recorded case evidence.
+
+## Open a case
+
+Prepare a TOML proposal that contains a generated UUID version 4 case identity, the proposed responsibility, and at least two occurrences:
+
+```toml
+case_id = "00000000-0000-4000-8000-000000000011"
+responsibility = "normalize durable event identities"
+
+[[occurrences]]
+repository_id = "00000000-0000-4000-8000-000000000013"
+consumer = "rust-release-tool"
+independence = "separate release lifecycle"
+
+[[occurrences.evidence]]
+kind = "commit"
+reference = "1111111"
+path = "src/event.rs"
+
+[[occurrences]]
+repository_id = "00000000-0000-4000-8000-000000000014"
+consumer = "web-deployment-tool"
+independence = "independent npm workspace and owner"
+
+[[occurrences.evidence]]
+kind = "commit"
+reference = "2222222"
+path = "packages/events/src/id.ts"
+```
+
+`commit` is the version 1 evidence kind. Its `reference` is required; `path` is optional and, when present, must be repository-relative without `..`. The proposal carries no Cargo-specific field.
+
+Preview the exact event and computed privacy consequence without writing:
+
+```console
+reuse-evidence case open --proposal open-case.toml --root /home/alice/src --preview
+```
+
+The `event:` section is itself an accepted prepared proposal. Save those exact event bytes after approval, then omit `--preview` to create `reuse-evidence/cases/<case-id>/0001-case-opened.toml` in the enrolled repository containing the current directory:
+
+```console
+reuse-evidence case open --proposal approved-case-opened.toml --root /home/alice/src
+```
+
+One or more `--root` values select the portfolio roots used to resolve every participant's stable identity and declared visibility. With no override, the command uses the same user-local portfolio configuration as `portfolio`. It scans markers without updating the derived portfolio state and writes only the opening event in the steward repository.
+
+The event is open TOML with schema version 1, sequence 1, a generated event UUID, a command-supplied `recorded_at` UTC RFC 3339 timestamp, the case identity, proposed responsibility, steward identity, privacy consequence, and the complete occurrences. Applying a prepared preview validates its envelope against the current steward and participant visibility, then preserves the approved bytes exactly. Absolute local paths are refused. A public steward with any private participant is refused before writing; a private steward records the case as private.
+
+Repeating the exact proposal reports the existing case with success and preserves every byte. Reusing its case identity for different proposed content refuses. The opening event is published by exclusive atomic create, so interruption cannot expose a partial file at the authoritative event path. Case append, read, readiness, decisions, and verification remain outside this command.
 
 ## Skill governance
 

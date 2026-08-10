@@ -13,6 +13,8 @@ This glossary is the shared language for `reuse-evidence`. Use these terms consi
 | **Independent** | Arising from a distinct consumer need rather than a retry, coordinated variant, generated copy, or internal duplication created by one implementation episode. |
 | **Reuse pressure** | Accumulated evidence that several independent consumers require the same responsibility or that an existing shared abstraction is serving consumers that now change for different reasons. |
 | **Case** | The durable evidence and decision history for one proposed shared responsibility. A case begins only when at least two plausible independent occurrences exist. |
+| **Case event** | One immutable, sequence-numbered fact in a case's authoritative history. Each event is stored as its own TOML file and later events correct or extend history without rewriting it. |
+| **Case revision** | The highest contiguous event sequence number recorded for a case. Opening a case creates revision 1. |
 | **Watching** | The normal state after a second independent occurrence: remember the pressure, but do not yet require a reuse review. |
 | **Review-ready** | The normal state after a third independent occurrence, or after a human accepts a documented early-review reason. It authorizes semantic review, not extraction. |
 | **Early-review override** | A human-authorized decision to review after the second occurrence because concrete cost or risk makes waiting materially worse. It is not permission to extract automatically. |

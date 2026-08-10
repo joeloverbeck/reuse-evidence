@@ -6,12 +6,10 @@ use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand, error::ErrorKind};
 use reuse_evidence::{
-    EnrollmentEffect, ExitMeaning, TerminalFailure, Visibility, enroll_with_expected_repository_id,
-    set_visibility,
+    EnrollmentEffect, ExitMeaning, TerminalFailure, Visibility, case,
+    enroll_with_expected_repository_id, portfolio, set_visibility,
 };
 use uuid::Uuid;
-
-mod portfolio;
 
 #[derive(Debug, Parser)]
 #[command(name = "reuse-evidence")]
@@ -47,8 +45,29 @@ enum Command {
         #[arg(long)]
         root: Vec<PathBuf>,
     },
+    /// Record and inspect durable reuse cases.
+    Case {
+        #[command(subcommand)]
+        command: CaseCommand,
+    },
     /// Govern this repository's installed agent skills.
     Skills(skill_evidence::cli::SkillsArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum CaseCommand {
+    /// Open a case from a prepared two-occurrence proposal.
+    Open {
+        /// TOML proposal containing the case identity and occurrences.
+        #[arg(long)]
+        proposal: Option<PathBuf>,
+        /// Portfolio root for participant resolution; overrides configuration.
+        #[arg(long)]
+        root: Vec<PathBuf>,
+        /// Render the exact event and privacy consequence without writing.
+        #[arg(long)]
+        preview: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -82,6 +101,7 @@ fn run(cli: Cli) -> ExitCode {
         }) => run_enroll(ecosystem_id, visibility, expected_repository_id),
         Some(Command::SetVisibility { visibility }) => run_set_visibility(visibility),
         Some(Command::Portfolio { root }) => run_portfolio(&root),
+        Some(Command::Case { command }) => run_case(command),
         Some(Command::Skills(args)) => return run_skills(args),
         None => {
             let mut command = Cli::command();
@@ -94,6 +114,26 @@ fn run(cli: Cli) -> ExitCode {
     };
 
     terminal_exit(result)
+}
+
+fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
+    match command {
+        CaseCommand::Open {
+            proposal,
+            root,
+            preview,
+        } => {
+            let proposal = proposal.ok_or_else(|| {
+                TerminalFailure::refusal(
+                    "missing required `--proposal`",
+                    "rerun with `case open --proposal <PATH>`",
+                )
+            })?;
+            let outcome = case::open(Path::new("."), &proposal, &root, preview)?;
+            print!("{}", outcome.render());
+            Ok(())
+        }
+    }
 }
 
 fn terminal_exit(result: Result<(), TerminalFailure>) -> ExitCode {
