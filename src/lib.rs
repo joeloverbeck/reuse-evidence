@@ -374,24 +374,50 @@ fn malformed_marker_error(
     )
 }
 
-pub(crate) fn create_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), EnrollmentError> {
+pub(crate) enum CreateFileOutcome {
+    Created,
+    Occupied,
+}
+
+pub(crate) fn create_file_atomically_if_absent(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<CreateFileOutcome, EnrollmentError> {
     let temporary_path = temporary_path_for(path);
     let result = (|| {
         write_temporary_file(&temporary_path, bytes)?;
-        fs::hard_link(&temporary_path, path)?;
+        if let Err(error) = fs::hard_link(&temporary_path, path) {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                fs::remove_file(&temporary_path)?;
+                return Ok(CreateFileOutcome::Occupied);
+            }
+            return Err(error);
+        }
         sync_parent(path)?;
         fs::remove_file(&temporary_path)?;
         sync_parent(path)?;
-        Ok::<(), std::io::Error>(())
+        Ok(CreateFileOutcome::Created)
     })();
-    if let Err(error) = result {
-        let _ = fs::remove_file(&temporary_path);
-        return Err(EnrollmentError::unsafe_failure(format!(
-            "could not atomically create `{}`: {error}",
-            path.display()
-        )));
+    match result {
+        Ok(outcome) => Ok(outcome),
+        Err(error) => {
+            let _ = fs::remove_file(&temporary_path);
+            Err(EnrollmentError::unsafe_failure(format!(
+                "could not atomically create `{}`: {error}",
+                path.display()
+            )))
+        }
     }
-    Ok(())
+}
+
+pub(crate) fn create_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), EnrollmentError> {
+    match create_file_atomically_if_absent(path, bytes)? {
+        CreateFileOutcome::Created => Ok(()),
+        CreateFileOutcome::Occupied => Err(EnrollmentError::unsafe_failure(format!(
+            "could not atomically create `{}`: target already exists",
+            path.display()
+        ))),
+    }
 }
 
 fn replace_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), EnrollmentError> {

@@ -10,6 +10,7 @@ const STEWARD_ID: &str = "00000000-0000-4000-8000-000000000012";
 const FIRST_PARTICIPANT_ID: &str = "00000000-0000-4000-8000-000000000013";
 const SECOND_PARTICIPANT_ID: &str = "00000000-0000-4000-8000-000000000014";
 const THIRD_PARTICIPANT_ID: &str = "00000000-0000-4000-8000-000000000015";
+const DIFFERENT_APPEND_EVENT_ID: &str = "00000000-0000-4000-8000-000000000099";
 
 struct Fixture {
     root: PathBuf,
@@ -88,6 +89,50 @@ fn run_without_portfolio_configuration(
         .expect("compiled reuse-evidence binary should run")
 }
 
+fn recover_case_revision(fixture: &Fixture, steward: &Path, case_id: &str) -> String {
+    let recovered =
+        run_without_portfolio_configuration(fixture, steward, &["case", "show", case_id]);
+    assert_eq!(recovered.status.code(), Some(0), "{recovered:?}");
+    String::from_utf8(recovered.stdout)
+        .expect("stdout should be UTF-8")
+        .lines()
+        .find_map(|line| line.strip_prefix("revision: "))
+        .expect("fresh case read should report a recoverable revision")
+        .to_owned()
+}
+
+fn assert_repeated_open_append_is_idempotent(
+    fixture: &Fixture,
+    steward: &Path,
+    open_arguments: &[&str],
+    append_arguments: &[&str],
+) {
+    let before = files_beneath(&fixture.root);
+    let repeated_open = run_in(steward, open_arguments);
+    let repeated_append = run_in(steward, append_arguments);
+    assert_eq!(repeated_open.status.code(), Some(0), "{repeated_open:?}");
+    assert_eq!(
+        repeated_append.status.code(),
+        Some(0),
+        "{repeated_append:?}"
+    );
+    assert!(
+        String::from_utf8(repeated_open.stdout)
+            .expect("stdout should be UTF-8")
+            .starts_with("existing case\n")
+    );
+    assert!(
+        String::from_utf8(repeated_append.stdout)
+            .expect("stdout should be UTF-8")
+            .starts_with("occurrence already recorded\n")
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "repeating the complete open-then-append sequence must add no case or event"
+    );
+}
+
 fn files_beneath(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     fn visit(root: &Path, directory: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
         for entry in fs::read_dir(directory).expect("fixture directory should be readable") {
@@ -116,6 +161,18 @@ fn files_beneath(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 fn two_occurrence_proposal() -> String {
     format!(
         "case_id = \"{CASE_ID}\"\nresponsibility = \"normalize durable event identities\"\n\n[[occurrences]]\nrepository_id = \"{FIRST_PARTICIPANT_ID}\"\nconsumer = \"rust-release-tool\"\nindependence = \"separate release lifecycle\"\n\n[[occurrences.evidence]]\nkind = \"commit\"\nreference = \"1111111\"\npath = \"src/event.rs\"\n\n[[occurrences]]\nrepository_id = \"{SECOND_PARTICIPANT_ID}\"\nconsumer = \"web-deployment-tool\"\nindependence = \"independent npm workspace and owner\"\n\n[[occurrences.evidence]]\nkind = \"commit\"\nreference = \"2222222\"\npath = \"packages/events/src/id.ts\"\n"
+    )
+}
+
+fn append_occurrence_proposal() -> String {
+    format!(
+        "[occurrence]\nrepository_id = \"{THIRD_PARTICIPANT_ID}\"\nconsumer = \"desktop-packager\"\nindependence = \"separate distribution contract\"\n\n[[occurrence.evidence]]\nkind = \"commit\"\nreference = \"3333333\"\npath = \"src/package.rs\"\n"
+    )
+}
+
+fn duplicate_occurrence_append_proposal() -> String {
+    format!(
+        "[occurrence]\nrepository_id = \"{FIRST_PARTICIPANT_ID}\"\nconsumer = \"rust-release-tool\"\nindependence = \"a repository move is not a new consumer need\"\n\n[[occurrence.evidence]]\nkind = \"commit\"\nreference = \"3333333\"\npath = \"src/event.rs\"\n"
     )
 }
 
@@ -454,6 +511,67 @@ fn case_read_refuses_duplicated_sequence_number_without_writes() {
         files_beneath(&fixture.root),
         before_read,
         "a duplicated sequence refusal must write nothing"
+    );
+}
+
+#[test]
+fn review_r1_case_read_refuses_duplicate_occurrence_across_events_without_writes() {
+    let fixture = Fixture::new("duplicate-occurrence-across-events");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(&proposal, append_occurrence_proposal()).expect("append proposal should be writable");
+    let appended = run_in(
+        &steward,
+        &[
+            "case",
+            "append",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            proposal_path,
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(appended.status.code(), Some(0), "{appended:?}");
+    let append_event = steward
+        .join("reuse-evidence/cases")
+        .join(CASE_ID)
+        .join("0002-occurrence-appended.toml");
+    let duplicate_event = fs::read_to_string(&append_event)
+        .expect("append event should be readable")
+        .replace(THIRD_PARTICIPANT_ID, FIRST_PARTICIPANT_ID)
+        .replace("desktop-packager", "rust-release-tool");
+    fs::write(&append_event, duplicate_event)
+        .expect("damaged duplicate-occurrence fixture should be writable");
+    let before_read = files_beneath(&fixture.root);
+
+    let output =
+        run_without_portfolio_configuration(&fixture, &steward, &["case", "show", CASE_ID]);
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        format!(
+            "refusal: case `{CASE_ID}` records participant `{FIRST_PARTICIPANT_ID}` and consumer `rust-release-tool` more than once\nresolution: restore the authoritative event stream so each participant repository and consumer pair occurs once before reading the case\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before_read,
+        "a duplicate occurrence in recorded history must write nothing"
     );
 }
 
@@ -953,6 +1071,764 @@ fn opening_creates_one_case_event_and_reports_the_exact_consequence() {
             .expect("event should contain occurrences")
             .len(),
         2
+    );
+}
+
+#[test]
+fn appending_third_occurrence_creates_one_event_and_derives_review_ready() {
+    let fixture = Fixture::new("append-third-occurrence");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(&proposal, append_occurrence_proposal()).expect("append proposal should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "append",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            proposal_path,
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("stdout should be UTF-8"),
+        format!(
+            "appended occurrence\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-occurrence-appended.toml\nrevision: 2\nstate: review-ready\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
+        )
+    );
+
+    let relative_event = PathBuf::from("steward")
+        .join("reuse-evidence/cases")
+        .join(CASE_ID)
+        .join("0002-occurrence-appended.toml");
+    let mut after = files_beneath(&fixture.root);
+    let event = after
+        .remove(&relative_event)
+        .expect("append should create its one event file");
+    assert_eq!(after, before, "append must add only its event file");
+    let event = String::from_utf8(event).expect("event should be UTF-8");
+    let parsed = event
+        .parse::<toml::Table>()
+        .expect("appended occurrence event should be valid TOML");
+    assert_eq!(parsed["schema_version"].as_integer(), Some(1));
+    assert_eq!(parsed["sequence"].as_integer(), Some(2));
+    assert_eq!(parsed["event_type"].as_str(), Some("occurrence_appended"));
+    assert_eq!(
+        uuid::Uuid::parse_str(
+            parsed["event_id"]
+                .as_str()
+                .expect("event identity should be a string")
+        )
+        .expect("event identity should be an opaque UUID")
+        .get_version_num(),
+        4
+    );
+    assert_eq!(
+        parsed["occurrence"]["repository_id"].as_str(),
+        Some(THIRD_PARTICIPANT_ID)
+    );
+    assert_eq!(
+        parsed["occurrence"]["consumer"].as_str(),
+        Some("desktop-packager")
+    );
+    assert_eq!(
+        parsed["occurrence"]["independence"].as_str(),
+        Some("separate distribution contract")
+    );
+    assert_eq!(
+        parsed["occurrence"]["evidence"][0]["reference"].as_str(),
+        Some("3333333")
+    );
+
+    let shown = run_without_portfolio_configuration(&fixture, &steward, &["case", "show", CASE_ID]);
+    assert_eq!(shown.status.code(), Some(0), "{shown:?}");
+    let shown = String::from_utf8(shown.stdout).expect("stdout should be UTF-8");
+    assert!(shown.contains("revision: 2\noccurrence_count: 3\nstate: review-ready\n"));
+    assert!(
+        shown.contains("readiness: authorizes semantic review; does not authorize extraction\n")
+    );
+    assert!(shown.contains(
+        "- repository_id: 00000000-0000-4000-8000-000000000015\n  consumer: desktop-packager\n  independence: separate distribution contract\n"
+    ));
+}
+
+#[test]
+fn approved_append_preview_is_byte_exact_and_retry_is_idempotent() {
+    let fixture = Fixture::new("preview-and-retry-append");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let open_proposal = fixture.proposal(&two_occurrence_proposal());
+    let open_proposal_path = open_proposal
+        .to_str()
+        .expect("fixture path should be UTF-8");
+    let append_proposal = fixture.root.join("append-case.toml");
+    fs::write(&append_proposal, append_occurrence_proposal())
+        .expect("append proposal should be writable");
+    let append_proposal_path = append_proposal
+        .to_str()
+        .expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let open_arguments = [
+        "case",
+        "open",
+        "--proposal",
+        open_proposal_path,
+        "--root",
+        root,
+    ];
+    let opened = run_in(&steward, &open_arguments);
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+
+    let recovered_revision = recover_case_revision(&fixture, &steward, CASE_ID);
+    assert_eq!(recovered_revision, "1");
+
+    let before_preview = files_beneath(&fixture.root);
+    let append_arguments = [
+        "case",
+        "append",
+        CASE_ID,
+        "--expected-revision",
+        recovered_revision.as_str(),
+        "--proposal",
+        append_proposal_path,
+        "--root",
+        root,
+    ];
+    let mut preview_arguments = append_arguments.to_vec();
+    preview_arguments.push("--preview");
+
+    let preview = run_in(&steward, &preview_arguments);
+
+    assert_eq!(preview.status.code(), Some(0), "{preview:?}");
+    assert!(preview.stderr.is_empty(), "{preview:?}");
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before_preview,
+        "append preview must preserve every fixture byte"
+    );
+    let preview = String::from_utf8(preview.stdout).expect("stdout should be UTF-8");
+    let (receipt, event) = preview
+        .split_once("event:\n")
+        .expect("preview should separate its receipt from the exact event");
+    assert_eq!(
+        receipt,
+        format!(
+            "case append preview\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-occurrence-appended.toml\nrevision: 2\nstate: review-ready\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
+        )
+    );
+    fs::write(&append_proposal, event).expect("the exact previewed append should be approvable");
+
+    let applied = run_in(&steward, &append_arguments);
+    assert_eq!(applied.status.code(), Some(0), "{applied:?}");
+    assert_eq!(
+        fs::read_to_string(
+            steward
+                .join("reuse-evidence/cases")
+                .join(CASE_ID)
+                .join("0002-occurrence-appended.toml")
+        )
+        .expect("approved append event should be recorded"),
+        event,
+        "applying an approved append preview must preserve its exact bytes"
+    );
+    let before_retry = files_beneath(&fixture.root);
+
+    let retry = run_in(&steward, &append_arguments);
+
+    assert_eq!(retry.status.code(), Some(0), "{retry:?}");
+    assert!(retry.stderr.is_empty(), "{retry:?}");
+    assert_eq!(
+        String::from_utf8(retry.stdout).expect("stdout should be UTF-8"),
+        format!(
+            "occurrence already recorded\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-occurrence-appended.toml\nrevision: 2\nstate: review-ready\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before_retry,
+        "retrying the same append event identity must preserve every fixture byte"
+    );
+
+    assert_repeated_open_append_is_idempotent(
+        &fixture,
+        &steward,
+        &open_arguments,
+        &append_arguments,
+    );
+}
+
+#[test]
+fn review_r3_spec_1_idempotent_append_retry_reports_complete_case_privacy() {
+    let fixture = Fixture::new("retry-complete-case-privacy");
+    let steward = fixture.repository("steward", STEWARD_ID, "public");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "public");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    assert!(
+        String::from_utf8(opened.stdout)
+            .expect("stdout should be UTF-8")
+            .ends_with("privacy: public\n")
+    );
+    let visibility_change = run_in(&steward, &["set-visibility", "--visibility", "private"]);
+    assert_eq!(
+        visibility_change.status.code(),
+        Some(0),
+        "{visibility_change:?}"
+    );
+    fs::write(&proposal, append_occurrence_proposal()).expect("append proposal should be writable");
+    let arguments = [
+        "case",
+        "append",
+        CASE_ID,
+        "--expected-revision",
+        "1",
+        "--proposal",
+        proposal_path,
+        "--root",
+        root,
+    ];
+    let mut preview_arguments = arguments.to_vec();
+    preview_arguments.push("--preview");
+    let preview = run_in(&steward, &preview_arguments);
+    assert_eq!(preview.status.code(), Some(0), "{preview:?}");
+    let preview = String::from_utf8(preview.stdout).expect("stdout should be UTF-8");
+    let (_, event) = preview
+        .split_once("event:\n")
+        .expect("preview should contain the exact event");
+    fs::write(&proposal, event).expect("prepared append event should be writable");
+
+    let applied = run_in(&steward, &arguments);
+
+    assert_eq!(applied.status.code(), Some(0), "{applied:?}");
+    assert!(applied.stderr.is_empty(), "{applied:?}");
+    assert_eq!(
+        String::from_utf8(applied.stdout).expect("stdout should be UTF-8"),
+        format!(
+            "appended occurrence\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-occurrence-appended.toml\nrevision: 2\nstate: review-ready\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
+        )
+    );
+    let before_retry = files_beneath(&fixture.root);
+
+    let retry = run_in(&steward, &arguments);
+
+    assert_eq!(retry.status.code(), Some(0), "{retry:?}");
+    assert!(retry.stderr.is_empty(), "{retry:?}");
+    assert_eq!(
+        String::from_utf8(retry.stdout).expect("stdout should be UTF-8"),
+        format!(
+            "occurrence already recorded\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/0002-occurrence-appended.toml\nrevision: 2\nstate: review-ready\nreadiness: authorizes semantic review; does not authorize extraction\nprivacy: private\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before_retry,
+        "idempotent retry must preserve the private case byte-for-byte"
+    );
+}
+
+#[test]
+fn review_r1_interrupted_append_staging_leaves_case_readable_and_retryable() {
+    let fixture = Fixture::new("interrupted-append-staging");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(&proposal, append_occurrence_proposal()).expect("append proposal should be writable");
+    let arguments = [
+        "case",
+        "append",
+        CASE_ID,
+        "--expected-revision",
+        "1",
+        "--proposal",
+        proposal_path,
+        "--root",
+        root,
+    ];
+    let mut preview_arguments = arguments.to_vec();
+    preview_arguments.push("--preview");
+    let preview = run_in(&steward, &preview_arguments);
+    assert_eq!(preview.status.code(), Some(0), "{preview:?}");
+    let preview = String::from_utf8(preview.stdout).expect("stdout should be UTF-8");
+    let (_, event) = preview
+        .split_once("event:\n")
+        .expect("preview should contain the exact event");
+    fs::write(&proposal, event).expect("prepared append event should be writable");
+    let case_directory = steward.join("reuse-evidence/cases").join(CASE_ID);
+    fs::write(
+        case_directory
+            .join(".0002-occurrence-appended.toml.00000000-0000-4000-8000-000000000088.tmp"),
+        event,
+    )
+    .expect("interrupted append staging should be reproducible");
+    let before_read = files_beneath(&fixture.root);
+
+    let shown = run_without_portfolio_configuration(&fixture, &steward, &["case", "show", CASE_ID]);
+
+    assert_eq!(shown.status.code(), Some(0), "{shown:?}");
+    assert!(shown.stderr.is_empty(), "{shown:?}");
+    assert!(
+        String::from_utf8(shown.stdout)
+            .expect("stdout should be UTF-8")
+            .contains("revision: 1\noccurrence_count: 2\nstate: watching\n")
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before_read,
+        "reading through interrupted append staging must write nothing"
+    );
+
+    let applied = run_in(&steward, &arguments);
+
+    assert_eq!(applied.status.code(), Some(0), "{applied:?}");
+    assert!(applied.stderr.is_empty(), "{applied:?}");
+    assert_eq!(
+        fs::read_to_string(case_directory.join("0002-occurrence-appended.toml"))
+            .expect("the retried append should publish its authoritative event"),
+        event,
+    );
+    let recovered = recover_case_revision(&fixture, &steward, CASE_ID);
+    assert_eq!(recovered, "2");
+}
+
+#[test]
+fn append_with_mismatched_expected_revision_refuses_without_writes() {
+    let fixture = Fixture::new("append-stale-revision");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(&proposal, append_occurrence_proposal()).expect("append proposal should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "append",
+            CASE_ID,
+            "--expected-revision",
+            "2",
+            "--proposal",
+            proposal_path,
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        format!(
+            "refusal: expected revision 2 does not match case `{CASE_ID}` current revision 1\nresolution: run `case show {CASE_ID}` and retry with `--expected-revision 1`\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "an expected-revision refusal must preserve every fixture byte"
+    );
+}
+
+#[test]
+fn review_r1_append_refuses_revision_beyond_four_digit_event_layout_without_writes() {
+    let fixture = Fixture::new("append-four-digit-revision-limit");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(&proposal, append_occurrence_proposal()).expect("append proposal should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "append",
+            CASE_ID,
+            "--expected-revision",
+            "9999",
+            "--proposal",
+            proposal_path,
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        "refusal: expected revision 9999 cannot be appended because the accepted `NNNN` event layout ends at revision 9999\nresolution: preserve the case unchanged and obtain an accepted event-layout amendment before appending another occurrence\n"
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "an unsupported successor revision must preserve every fixture byte"
+    );
+}
+
+#[test]
+fn occupied_append_sequence_with_different_event_identity_is_a_revision_conflict() {
+    let fixture = Fixture::new("append-event-identity-conflict");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(&proposal, append_occurrence_proposal()).expect("append proposal should be writable");
+    let arguments = [
+        "case",
+        "append",
+        CASE_ID,
+        "--expected-revision",
+        "1",
+        "--proposal",
+        proposal_path,
+        "--root",
+        root,
+    ];
+    let mut preview_arguments = arguments.to_vec();
+    preview_arguments.push("--preview");
+    let preview = run_in(&steward, &preview_arguments);
+    assert_eq!(preview.status.code(), Some(0), "{preview:?}");
+    let preview = String::from_utf8(preview.stdout).expect("stdout should be UTF-8");
+    let (_, event) = preview
+        .split_once("event:\n")
+        .expect("preview should contain the exact event");
+    let recorded_event_id = event
+        .parse::<toml::Table>()
+        .expect("previewed event should be TOML")["event_id"]
+        .as_str()
+        .expect("event identity should be a string")
+        .to_owned();
+    fs::write(&proposal, event).expect("approved append should be writable");
+    let applied = run_in(&steward, &arguments);
+    assert_eq!(applied.status.code(), Some(0), "{applied:?}");
+    fs::write(
+        &proposal,
+        event.replacen(&recorded_event_id, DIFFERENT_APPEND_EVENT_ID, 1),
+    )
+    .expect("conflicting prepared event should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(&steward, &arguments);
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        format!(
+            "refusal: case `{CASE_ID}` has a revision conflict at sequence 2: event `{recorded_event_id}` is recorded instead of event `{DIFFERENT_APPEND_EVENT_ID}`\nresolution: inspect sequence 2; retry its recorded identity if it is the intended append, or prepare a distinct occurrence against revision 2\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "a different event identity at an occupied sequence must write nothing"
+    );
+}
+
+#[test]
+fn append_to_unknown_case_identity_refuses_and_creates_nothing() {
+    let fixture = Fixture::new("append-unknown-case");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&append_occurrence_proposal());
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "append",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            proposal.to_str().expect("fixture path should be UTF-8"),
+            "--root",
+            fixture.root.to_str().expect("fixture path should be UTF-8"),
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        format!(
+            "refusal: case identity `{CASE_ID}` is not stewarded by repository `{STEWARD_ID}`\nresolution: run `case list` in this steward repository and retry with a recorded case identity\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "an unknown case refusal must create no case directory or other file"
+    );
+}
+
+#[test]
+fn duplicate_participant_and_consumer_append_refuses_without_writes() {
+    let fixture = Fixture::new("append-duplicate-occurrence");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(&proposal, duplicate_occurrence_append_proposal())
+        .expect("duplicate append proposal should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "append",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            proposal_path,
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        format!(
+            "refusal: case `{CASE_ID}` already records participant `{FIRST_PARTICIPANT_ID}` and consumer `rust-release-tool`\nresolution: change either the participant repository or consumer so the pair is distinct, or keep the existing occurrence\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "a duplicate occurrence refusal must preserve every fixture byte"
+    );
+}
+
+#[test]
+fn public_steward_refuses_private_appended_participant_without_writes() {
+    let fixture = Fixture::new("append-private-participant");
+    let steward = fixture.repository("steward", STEWARD_ID, "public");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "public");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "private");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(&proposal, append_occurrence_proposal())
+        .expect("private append proposal should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "append",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            proposal_path,
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        format!(
+            "refusal: public steward `{STEWARD_ID}` cannot append private participant `{THIRD_PARTICIPANT_ID}`\nresolution: run `set-visibility --visibility private` in the steward repository, then preview the append again\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "private dominance refusal must preserve every fixture byte"
+    );
+}
+
+#[test]
+fn review_r1_append_rechecks_recorded_participant_visibility_before_writing() {
+    let fixture = Fixture::new("append-recorded-participant-became-private");
+    let steward = fixture.repository("steward", STEWARD_ID, "public");
+    let first_participant = fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "public");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(
+        first_participant.join("reuse-evidence.toml"),
+        format!(
+            "schema_version = 1\nrepository_id = \"{FIRST_PARTICIPANT_ID}\"\necosystem_id = \"products\"\nvisibility = \"private\"\n"
+        ),
+    )
+    .expect("recorded participant visibility should be changeable in the fixture");
+    fs::write(&proposal, append_occurrence_proposal()).expect("append proposal should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "append",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            proposal_path,
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        format!(
+            "refusal: public steward `{STEWARD_ID}` cannot append private participant `{FIRST_PARTICIPANT_ID}`\nresolution: run `set-visibility --visibility private` in the steward repository, then preview the append again\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "current private dominance must refuse the append without writes"
+    );
+}
+
+#[test]
+fn appended_occurrence_without_evidence_refuses_without_writes() {
+    let fixture = Fixture::new("append-without-evidence");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(
+        &proposal,
+        format!(
+            "[occurrence]\nrepository_id = \"{THIRD_PARTICIPANT_ID}\"\nconsumer = \"desktop-packager\"\nindependence = \"separate distribution contract\"\nevidence = []\n"
+        ),
+    )
+    .expect("incomplete append proposal should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(
+        &steward,
+        &[
+            "case",
+            "append",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            proposal_path,
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        "refusal: occurrence 1 carries no evidence reference\nresolution: add at least one recoverable `occurrence.evidence` reference\n"
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "an incomplete appended occurrence must preserve every fixture byte"
     );
 }
 

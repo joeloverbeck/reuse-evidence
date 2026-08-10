@@ -1,10 +1,11 @@
-//! Durable case-opening mechanics.
+//! Durable case recording and inspection mechanics.
 
 mod read;
 
 pub use read::{ListOutcome, ShowOutcome, list, show};
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -14,10 +15,15 @@ use uuid::Uuid;
 
 use crate::marker::{self, MarkerRead};
 use crate::portfolio;
-use crate::{TerminalFailure, Visibility, create_file_atomically};
+use crate::{
+    CreateFileOutcome, TerminalFailure, Visibility, create_file_atomically,
+    create_file_atomically_if_absent,
+};
 
 const CASE_SCHEMA_VERSION: i64 = 1;
 const OPENING_SEQUENCE: i64 = 1;
+const MAX_CASE_SEQUENCE: i64 = 9_999;
+const REVIEW_ONLY_NOTICE: &str = "authorizes semantic review; does not authorize extraction";
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -27,11 +33,24 @@ enum OpenProposalDocument {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum AppendProposalDocument {
+    Prepared(OccurrenceAppendedEvent),
+    Human(HumanAppendProposalDocument),
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HumanOpenProposalDocument {
     case_id: String,
     responsibility: String,
     occurrences: Vec<Occurrence>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HumanAppendProposalDocument {
+    occurrence: Occurrence,
 }
 
 #[derive(Debug)]
@@ -46,6 +65,19 @@ struct OpenProposal {
 struct PreparedOpening {
     steward_repository_id: Uuid,
     privacy: Visibility,
+    bytes: String,
+}
+
+#[derive(Debug)]
+struct AppendProposal {
+    occurrence: Occurrence,
+    prepared: Option<PreparedAppend>,
+}
+
+#[derive(Debug)]
+struct PreparedAppend {
+    sequence: i64,
+    event_id: Uuid,
     bytes: String,
 }
 
@@ -88,10 +120,22 @@ struct CaseOpenedEvent {
     occurrences: Vec<Occurrence>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OccurrenceAppendedEvent {
+    schema_version: i64,
+    sequence: i64,
+    event_id: Uuid,
+    event_type: EventType,
+    recorded_at: String,
+    occurrence: Occurrence,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum EventType {
     CaseOpened,
+    OccurrenceAppended,
 }
 
 /// The complete observable result of opening or previewing a case.
@@ -106,6 +150,25 @@ pub struct OpenOutcome {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OpenEffect {
+    Preview,
+    Created,
+    Existing,
+}
+
+/// The complete observable result of appending or previewing an occurrence.
+#[derive(Debug)]
+pub struct AppendOutcome {
+    effect: AppendEffect,
+    case_id: Uuid,
+    event_path: PathBuf,
+    revision: i64,
+    occurrence_count: usize,
+    privacy: Visibility,
+    event: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AppendEffect {
     Preview,
     Created,
     Existing,
@@ -127,6 +190,38 @@ impl OpenOutcome {
             self.privacy
         );
         if self.effect == OpenEffect::Preview {
+            receipt.push_str("event:\n");
+            receipt.push_str(&self.event);
+        }
+        receipt
+    }
+}
+
+impl AppendOutcome {
+    /// Renders the receipt followed by exact event bytes for a preview.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let heading = match self.effect {
+            AppendEffect::Preview => "case append preview",
+            AppendEffect::Created => "appended occurrence",
+            AppendEffect::Existing => "occurrence already recorded",
+        };
+        let readiness = read::Readiness::from_occurrence_count(self.occurrence_count);
+        let mut receipt = format!(
+            "{heading}\ncase_id: {}\nfile: {}\nrevision: {}\nstate: {}\n",
+            self.case_id,
+            self.event_path.display(),
+            self.revision,
+            readiness.label()
+        );
+        if readiness == read::Readiness::ReviewReady {
+            receipt.push_str("readiness: ");
+            receipt.push_str(REVIEW_ONLY_NOTICE);
+            receipt.push('\n');
+        }
+        writeln!(&mut receipt, "privacy: {}", self.privacy)
+            .expect("writing to a String cannot fail");
+        if self.effect == AppendEffect::Preview {
             receipt.push_str("event:\n");
             receipt.push_str(&self.event);
         }
@@ -163,7 +258,7 @@ pub fn open(
             preview,
         );
     }
-    let participants = resolve_participants(root_overrides, &proposal)?;
+    let participants = resolve_participants(root_overrides, &proposal.occurrences)?;
     if steward.visibility() == Visibility::Public
         && let Some(repository_id) = participants
             .iter()
@@ -206,6 +301,307 @@ pub fn open(
         event_path,
         privacy,
         event,
+    })
+}
+
+/// Appends or previews one later occurrence against an expected case revision.
+///
+/// # Errors
+///
+/// Returns a classified failure when the steward, case, proposal, revision, or
+/// participant repository cannot be read or validated safely.
+pub fn append(
+    working_directory: &Path,
+    case_id: &str,
+    expected_revision: i64,
+    proposal_path: &Path,
+    root_overrides: &[PathBuf],
+    preview: bool,
+) -> Result<AppendOutcome, TerminalFailure> {
+    let case_id = parse_case_id(case_id)?;
+    let sequence = next_append_sequence(expected_revision)?;
+    let repository_root = find_repository_root(working_directory)?;
+    let steward = read_steward(&repository_root)?;
+    let relative_case_directory = Path::new("reuse-evidence/cases").join(case_id.to_string());
+    validate_case_storage_path(&repository_root, &relative_case_directory)?;
+    let case = read::read_case_for_append(
+        &repository_root,
+        &relative_case_directory,
+        case_id,
+        steward.repository_id(),
+    )?;
+    let proposal = read_append_proposal(proposal_path)?;
+    if let Some(prepared) = &proposal.prepared
+        && prepared.sequence != sequence
+    {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "prepared append event records sequence {}, but expected revision {expected_revision} requires sequence {sequence}",
+                prepared.sequence
+            ),
+            "preview the append again against the current expected revision",
+        ));
+    }
+    let relative_event_path =
+        relative_case_directory.join(format!("{sequence:04}-occurrence-appended.toml"));
+    validate_case_storage_path(&repository_root, &relative_event_path)?;
+    let absolute_event_path = repository_root.join(&relative_event_path);
+    let event = append_event_bytes(&proposal, sequence)?;
+    if absolute_event_path.exists() {
+        return existing_append(
+            &absolute_event_path,
+            relative_event_path,
+            &case,
+            &proposal,
+            &event,
+            &steward,
+            root_overrides,
+        );
+    }
+    if case.revision != expected_revision {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "expected revision {expected_revision} does not match case `{case_id}` current revision {}",
+                case.revision
+            ),
+            format!(
+                "run `case show {case_id}` and retry with `--expected-revision {}`",
+                case.revision
+            ),
+        ));
+    }
+    let privacy = validate_new_append(&case, &proposal, &steward, root_overrides)?;
+    let effect = if preview {
+        AppendEffect::Preview
+    } else {
+        match create_file_atomically_if_absent(&absolute_event_path, event.as_bytes())? {
+            CreateFileOutcome::Created => AppendEffect::Created,
+            CreateFileOutcome::Occupied => {
+                let refreshed = read::read_case_for_append(
+                    &repository_root,
+                    &relative_case_directory,
+                    case_id,
+                    steward.repository_id(),
+                )?;
+                return existing_append(
+                    &absolute_event_path,
+                    relative_event_path,
+                    &refreshed,
+                    &proposal,
+                    &event,
+                    &steward,
+                    root_overrides,
+                );
+            }
+        }
+    };
+    Ok(AppendOutcome {
+        effect,
+        case_id,
+        event_path: relative_event_path,
+        revision: sequence,
+        occurrence_count: case.occurrences.len() + 1,
+        privacy,
+        event,
+    })
+}
+
+fn next_append_sequence(expected_revision: i64) -> Result<i64, TerminalFailure> {
+    if expected_revision < OPENING_SEQUENCE {
+        return Err(TerminalFailure::refusal(
+            format!("expected revision `{expected_revision}` is not a recorded case revision"),
+            "use the positive revision reported by `case show`",
+        ));
+    }
+    if expected_revision >= MAX_CASE_SEQUENCE {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "expected revision {expected_revision} cannot be appended because the accepted `NNNN` event layout ends at revision {MAX_CASE_SEQUENCE}"
+            ),
+            "preserve the case unchanged and obtain an accepted event-layout amendment before appending another occurrence",
+        ));
+    }
+    Ok(expected_revision + 1)
+}
+
+fn validate_new_append(
+    case: &read::CaseRecord,
+    proposal: &AppendProposal,
+    steward: &marker::Marker,
+    root_overrides: &[PathBuf],
+) -> Result<Visibility, TerminalFailure> {
+    if case.occurrences.iter().any(|recorded| {
+        recorded.repository_id == proposal.occurrence.repository_id
+            && recorded.consumer.trim() == proposal.occurrence.consumer.trim()
+    }) {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case `{}` already records participant `{}` and consumer `{}`",
+                case.case_id,
+                proposal.occurrence.repository_id,
+                proposal.occurrence.consumer.trim()
+            ),
+            "change either the participant repository or consumer so the pair is distinct, or keep the existing occurrence",
+        ));
+    }
+    let mut occurrences = case.occurrences.clone();
+    occurrences.push(proposal.occurrence.clone());
+    let participant_visibilities = resolve_participants(root_overrides, &occurrences)?;
+    if steward.visibility() == Visibility::Public && case.privacy == Visibility::Private {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "public steward `{}` cannot append to private case `{}`",
+                steward.repository_id(),
+                case.case_id
+            ),
+            "run `set-visibility --visibility private` in the steward repository, then preview the append again",
+        ));
+    }
+    let private_participant = occurrences.iter().find(|occurrence| {
+        participant_visibilities[&occurrence.repository_id] == Visibility::Private
+    });
+    if steward.visibility() == Visibility::Public
+        && let Some(private_participant) = private_participant
+    {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "public steward `{}` cannot append private participant `{}`",
+                steward.repository_id(),
+                private_participant.repository_id
+            ),
+            "run `set-visibility --visibility private` in the steward repository, then preview the append again",
+        ));
+    }
+    if case.privacy == Visibility::Private
+        || steward.visibility() == Visibility::Private
+        || private_participant.is_some()
+    {
+        Ok(Visibility::Private)
+    } else {
+        Ok(Visibility::Public)
+    }
+}
+
+fn existing_append(
+    absolute_event_path: &Path,
+    relative_event_path: PathBuf,
+    case: &read::CaseRecord,
+    proposal: &AppendProposal,
+    proposed_event: &str,
+    steward: &marker::Marker,
+    root_overrides: &[PathBuf],
+) -> Result<AppendOutcome, TerminalFailure> {
+    let recorded_bytes = fs::read_to_string(absolute_event_path).map_err(|error| {
+        TerminalFailure::refusal(
+            format!(
+                "recorded append event `{}` cannot be read: {error}",
+                absolute_event_path.display()
+            ),
+            "restore the recorded event before retrying the append",
+        )
+    })?;
+    let recorded = toml::from_str::<OccurrenceAppendedEvent>(&recorded_bytes).map_err(|error| {
+        TerminalFailure::refusal(
+            format!(
+                "recorded append event `{}` is invalid: {error}",
+                absolute_event_path.display()
+            ),
+            "restore the supported recorded event before retrying the append",
+        )
+    })?;
+    let Some(prepared) = &proposal.prepared else {
+        return Err(append_revision_conflict(
+            case.case_id,
+            recorded.sequence,
+            recorded.event_id,
+            None,
+            case.revision,
+        ));
+    };
+    if recorded.event_id != prepared.event_id {
+        return Err(append_revision_conflict(
+            case.case_id,
+            recorded.sequence,
+            recorded.event_id,
+            Some(prepared.event_id),
+            case.revision,
+        ));
+    }
+    if recorded_bytes != proposed_event {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "append event identity `{}` is already recorded with different content",
+                recorded.event_id
+            ),
+            "restore the exact previewed append event before retrying",
+        ));
+    }
+    Ok(AppendOutcome {
+        effect: AppendEffect::Existing,
+        case_id: case.case_id,
+        event_path: relative_event_path,
+        revision: recorded.sequence,
+        occurrence_count: case.occurrences.len(),
+        privacy: derive_complete_case_privacy(case, steward, root_overrides)?,
+        event: recorded_bytes,
+    })
+}
+
+fn derive_complete_case_privacy(
+    case: &read::CaseRecord,
+    steward: &marker::Marker,
+    root_overrides: &[PathBuf],
+) -> Result<Visibility, TerminalFailure> {
+    let participant_visibilities = resolve_participants(root_overrides, &case.occurrences)?;
+    if case.privacy == Visibility::Private
+        || steward.visibility() == Visibility::Private
+        || participant_visibilities
+            .values()
+            .any(|visibility| *visibility == Visibility::Private)
+    {
+        Ok(Visibility::Private)
+    } else {
+        Ok(Visibility::Public)
+    }
+}
+
+fn append_revision_conflict(
+    case_id: Uuid,
+    sequence: i64,
+    recorded_event_id: Uuid,
+    proposed_event_id: Option<Uuid>,
+    current_revision: i64,
+) -> TerminalFailure {
+    let proposed = proposed_event_id.map_or_else(
+        || "a newly prepared event".to_owned(),
+        |event_id| format!("event `{event_id}`"),
+    );
+    TerminalFailure::refusal(
+        format!(
+            "case `{case_id}` has a revision conflict at sequence {sequence}: event `{recorded_event_id}` is recorded instead of {proposed}"
+        ),
+        format!(
+            "inspect sequence {sequence}; retry its recorded identity if it is the intended append, or prepare a distinct occurrence against revision {current_revision}"
+        ),
+    )
+}
+
+fn append_event_bytes(proposal: &AppendProposal, sequence: i64) -> Result<String, TerminalFailure> {
+    if let Some(prepared) = &proposal.prepared {
+        return Ok(prepared.bytes.clone());
+    }
+    let event = OccurrenceAppendedEvent {
+        schema_version: CASE_SCHEMA_VERSION,
+        sequence,
+        event_id: Uuid::new_v4(),
+        event_type: EventType::OccurrenceAppended,
+        recorded_at: recording_timestamp()?,
+        occurrence: proposal.occurrence.clone(),
+    };
+    toml::to_string(&event).map_err(|error| {
+        TerminalFailure::unsafe_failure(format!(
+            "occurrence append event could not be encoded: {error}"
+        ))
     })
 }
 
@@ -525,6 +921,43 @@ fn read_proposal(path: &Path) -> Result<OpenProposal, TerminalFailure> {
     Ok(proposal)
 }
 
+fn read_append_proposal(path: &Path) -> Result<AppendProposal, TerminalFailure> {
+    let text = fs::read_to_string(path).map_err(|error| {
+        TerminalFailure::refusal(
+            format!(
+                "append proposal `{}` cannot be read: {error}",
+                path.display()
+            ),
+            "supply a readable UTF-8 TOML proposal with `--proposal <PATH>`",
+        )
+    })?;
+    let document = toml::from_str::<AppendProposalDocument>(&text).map_err(|error| {
+        TerminalFailure::refusal(
+            format!("append proposal `{}` is invalid: {error}", path.display()),
+            "provide a complete TOML occurrence-append proposal",
+        )
+    })?;
+    let proposal = match document {
+        AppendProposalDocument::Human(document) => AppendProposal {
+            occurrence: document.occurrence,
+            prepared: None,
+        },
+        AppendProposalDocument::Prepared(event) => {
+            validate_recorded_append(&event)?;
+            AppendProposal {
+                occurrence: event.occurrence,
+                prepared: Some(PreparedAppend {
+                    sequence: event.sequence,
+                    event_id: event.event_id,
+                    bytes: text,
+                }),
+            }
+        }
+    };
+    validate_occurrence(&proposal.occurrence, 1, "occurrence.evidence")?;
+    Ok(proposal)
+}
+
 fn parse_case_id(value: &str) -> Result<Uuid, TerminalFailure> {
     let case_id = Uuid::parse_str(value).map_err(|error| {
         TerminalFailure::refusal(
@@ -560,7 +993,7 @@ fn validate_prepared_event(event: &CaseOpenedEvent) -> Result<(), TerminalFailur
             "use the exact event rendered by `case open --preview`",
         ));
     }
-    validate_recorded_at(&event.recorded_at)?;
+    validate_recorded_at(&event.recorded_at, "opening", "case open --preview")?;
     if event.case_id.get_version_num() != 4 {
         return Err(TerminalFailure::refusal(
             format!(
@@ -598,42 +1031,7 @@ fn validate_opening_content(
     }
     let mut observed_consumers = BTreeSet::new();
     for (index, occurrence) in occurrences.iter().enumerate() {
-        if occurrence.consumer.trim().is_empty() {
-            return Err(TerminalFailure::refusal(
-                format!("occurrence {} consumer is empty", index + 1),
-                "provide a non-empty consumer label",
-            ));
-        }
-        if occurrence.independence.trim().is_empty() {
-            return Err(TerminalFailure::refusal(
-                format!(
-                    "occurrence {} independence justification is empty",
-                    index + 1
-                ),
-                "explain why this occurrence arose from an independent consumer need",
-            ));
-        }
-        if occurrence.evidence.is_empty() {
-            return Err(TerminalFailure::refusal(
-                format!("occurrence {} carries no evidence reference", index + 1),
-                "add at least one recoverable `occurrences.evidence` reference",
-            ));
-        }
-        for (evidence_index, evidence) in occurrence.evidence.iter().enumerate() {
-            if evidence.reference.trim().is_empty() {
-                return Err(TerminalFailure::refusal(
-                    format!(
-                        "occurrence {} evidence reference {} is empty",
-                        index + 1,
-                        evidence_index + 1
-                    ),
-                    "provide a recoverable commit reference",
-                ));
-            }
-            if let Some(path) = &evidence.path {
-                validate_relative_evidence_path(path)?;
-            }
-        }
+        validate_occurrence(occurrence, index + 1, "occurrences.evidence")?;
         if !observed_consumers.insert((occurrence.repository_id, occurrence.consumer.trim())) {
             return Err(TerminalFailure::refusal(
                 format!(
@@ -648,7 +1046,74 @@ fn validate_opening_content(
     Ok(())
 }
 
-fn validate_recorded_at(value: &str) -> Result<(), TerminalFailure> {
+fn validate_occurrence(
+    occurrence: &Occurrence,
+    index: usize,
+    evidence_field: &str,
+) -> Result<(), TerminalFailure> {
+    if occurrence.consumer.trim().is_empty() {
+        return Err(TerminalFailure::refusal(
+            format!("occurrence {index} consumer is empty"),
+            "provide a non-empty consumer label",
+        ));
+    }
+    if occurrence.independence.trim().is_empty() {
+        return Err(TerminalFailure::refusal(
+            format!("occurrence {index} independence justification is empty"),
+            "explain why this occurrence arose from an independent consumer need",
+        ));
+    }
+    if occurrence.evidence.is_empty() {
+        return Err(TerminalFailure::refusal(
+            format!("occurrence {index} carries no evidence reference"),
+            format!("add at least one recoverable `{evidence_field}` reference"),
+        ));
+    }
+    for (evidence_index, evidence) in occurrence.evidence.iter().enumerate() {
+        if evidence.reference.trim().is_empty() {
+            return Err(TerminalFailure::refusal(
+                format!(
+                    "occurrence {index} evidence reference {} is empty",
+                    evidence_index + 1
+                ),
+                "provide a recoverable commit reference",
+            ));
+        }
+        if let Some(path) = &evidence.path {
+            validate_relative_evidence_path(path)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_recorded_append(event: &OccurrenceAppendedEvent) -> Result<(), TerminalFailure> {
+    if event.schema_version != CASE_SCHEMA_VERSION
+        || event.sequence <= OPENING_SEQUENCE
+        || event.event_type != EventType::OccurrenceAppended
+    {
+        return Err(TerminalFailure::refusal(
+            "prepared append event is not a supported `occurrence_appended` event after revision 1",
+            "use the exact event rendered by `case append --preview`",
+        ));
+    }
+    if event.event_id.get_version_num() != 4 {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "prepared append event identity `{}` is not an opaque UUID version 4",
+                event.event_id
+            ),
+            "use the exact event rendered by `case append --preview`",
+        ));
+    }
+    validate_recorded_at(&event.recorded_at, "append", "case append --preview")?;
+    validate_occurrence(&event.occurrence, 1, "occurrence.evidence")
+}
+
+fn validate_recorded_at(
+    value: &str,
+    event_name: &str,
+    preview_command: &str,
+) -> Result<(), TerminalFailure> {
     let bytes = value.as_bytes();
     let shaped = bytes.len() == 20
         && bytes[4] == b'-'
@@ -662,8 +1127,8 @@ fn validate_recorded_at(value: &str) -> Result<(), TerminalFailure> {
         });
     if !shaped {
         return Err(TerminalFailure::refusal(
-            format!("prepared opening event timestamp `{value}` is not UTC RFC 3339"),
-            "use the exact event rendered by `case open --preview`",
+            format!("prepared {event_name} event timestamp `{value}` is not UTC RFC 3339"),
+            format!("use the exact event rendered by `{preview_command}`"),
         ));
     }
     let component = |range: std::ops::Range<usize>| {
@@ -688,8 +1153,8 @@ fn validate_recorded_at(value: &str) -> Result<(), TerminalFailure> {
     };
     if day == 0 || day > days_in_month || hour > 23 || minute > 59 || second > 59 {
         return Err(TerminalFailure::refusal(
-            format!("prepared opening event timestamp `{value}` is not a valid UTC instant"),
-            "use the exact event rendered by `case open --preview`",
+            format!("prepared {event_name} event timestamp `{value}` is not a valid UTC instant"),
+            format!("use the exact event rendered by `{preview_command}`"),
         ));
     }
     Ok(())
@@ -726,13 +1191,12 @@ fn validate_relative_evidence_path(path: &str) -> Result<(), TerminalFailure> {
 
 fn resolve_participants(
     root_overrides: &[PathBuf],
-    proposal: &OpenProposal,
+    occurrences: &[Occurrence],
 ) -> Result<BTreeMap<Uuid, Visibility>, TerminalFailure> {
     let roots = portfolio::selected_roots(root_overrides)?;
     let scan = portfolio::scan(&roots)?;
     let mut participants = BTreeMap::new();
-    let requested = proposal
-        .occurrences
+    let requested = occurrences
         .iter()
         .map(|occurrence| occurrence.repository_id)
         .collect::<BTreeSet<_>>();

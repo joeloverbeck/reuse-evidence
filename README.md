@@ -8,11 +8,11 @@ The project is deliberately not a clone detector and not an automatic refactorin
 
 ## Status
 
-**Repository enrollment, marker-only portfolio reporting with derived change state, durable case opening and reading, and skill governance implemented.**
+**Repository enrollment, marker-only portfolio reporting with derived change state, durable case opening, growth, and reading, and skill governance implemented.**
 
 The public Rust crate and standalone `reuse-evidence` binary can enroll a Git repository, including an npm workspace with no Cargo project. Enrollment writes a human-readable version 1 TOML marker at the nearest repository root, safely revalidates an existing marker without minting another identity, and uses the binary's shared success, unsafe-failure, and refusal exit meanings.
 
-Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, unsupported or unreadable markers, and new, moved, unavailable, or visibility-changed repositories. The case command can preview and atomically open a steward-local case from two or more evidenced occurrences, list every case stewarded by the current repository, and show one case's complete evidence record with freshly derived readiness, privacy-conflict, and staleness conditions. The binary also mounts the published `skill-evidence` lifecycle under `reuse-evidence skills` and this repository commits the four operator packages it installs. Appending later occurrences, capture, review, decisions, verification, and this project's own `reuse-evidence-*` skill packages are not implemented yet.
+Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, unsupported or unreadable markers, and new, moved, unavailable, or visibility-changed repositories. The case command can preview and atomically open a steward-local case from two or more evidenced occurrences, append a later occurrence against an expected revision, list every case stewarded by the current repository, and show one case's complete evidence record with freshly derived readiness, privacy-conflict, and staleness conditions. The binary also mounts the published `skill-evidence` lifecycle under `reuse-evidence skills` and this repository commits the four operator packages it installs. Early review, capture, reuse review, decisions, verification, and this project's own `reuse-evidence-*` skill packages are not implemented yet.
 
 The selected delivery constraints are:
 
@@ -158,7 +158,35 @@ One or more `--root` values select the portfolio roots used to resolve every par
 
 The event is open TOML with schema version 1, sequence 1, a generated event UUID, a command-supplied `recorded_at` UTC RFC 3339 timestamp, the case identity, proposed responsibility, steward identity, privacy consequence, and the complete occurrences. Applying a prepared preview validates its envelope against the current steward and participant visibility, then preserves the approved bytes exactly. Absolute local paths are refused. A public steward with any private participant is refused before writing; a private steward records the case as private.
 
-Repeating the exact proposal reports the existing case with success and preserves every byte. Reusing its case identity for different proposed content refuses. The opening event is published by exclusive atomic create, so interruption cannot expose a partial file at the authoritative event path. Case append, decisions, and verification remain outside this command.
+Repeating the exact proposal reports the existing case with success and preserves every byte. Reusing its case identity for different proposed content refuses. The opening event is published by exclusive atomic create, so interruption cannot expose a partial file at the authoritative event path. Decisions and verification remain outside this command.
+
+## Append an occurrence
+
+Prepare one later occurrence using the same consumer and evidence fields as an opening proposal:
+
+```toml
+[occurrence]
+repository_id = "00000000-0000-4000-8000-000000000015"
+consumer = "desktop-packager"
+independence = "separate distribution contract"
+
+[[occurrence.evidence]]
+kind = "commit"
+reference = "3333333"
+path = "src/package.rs"
+```
+
+Recover the current revision with `case show`, then preview the exact next event without writing:
+
+```console
+reuse-evidence case append 00000000-0000-4000-8000-000000000011 \
+  --expected-revision 1 --proposal append-occurrence.toml \
+  --root /home/alice/src --preview
+```
+
+Save the exact `event:` bytes after approval and repeat without `--preview`. A successful revision-1 append exclusively creates `0002-occurrence-appended.toml`, modifies no existing event, and reports the case identity, file, resulting revision, derived state, and privacy consequence. A third occurrence derives `review-ready`; the receipt explicitly states that this authorizes semantic review and does not authorize extraction.
+
+An expected revision that does not match refuses without writing. Retrying the exact prepared event at its occupied sequence reports the occurrence as already recorded with success; a different event identity at that sequence is a revision conflict. Unknown cases, a repeated participant-and-consumer pair, and a private participant under a currently public steward also refuse without writing. Participant resolution uses the same `--root` overrides or user-local portfolio configuration as case opening.
 
 ## Read cases
 

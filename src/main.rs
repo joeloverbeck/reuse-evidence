@@ -68,6 +68,23 @@ enum CaseCommand {
         #[arg(long)]
         preview: bool,
     },
+    /// Append one later occurrence against an expected case revision.
+    Append {
+        /// Opaque identity of the stewarded case to grow.
+        case_id: String,
+        /// Revision the caller believes the case currently records.
+        #[arg(long)]
+        expected_revision: Option<i64>,
+        /// TOML proposal containing the occurrence to append.
+        #[arg(long)]
+        proposal: Option<PathBuf>,
+        /// Portfolio root for participant resolution; overrides configuration.
+        #[arg(long)]
+        root: Vec<PathBuf>,
+        /// Render the exact event and privacy consequence without writing.
+        #[arg(long)]
+        preview: bool,
+    },
     /// List every case stewarded by the current repository.
     List {
         /// Portfolio root for current participant conditions; overrides configuration.
@@ -144,6 +161,36 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
                 )
             })?;
             let outcome = case::open(Path::new("."), &proposal, &root, preview)?;
+            print!("{}", outcome.render());
+            Ok(())
+        }
+        CaseCommand::Append {
+            case_id,
+            expected_revision,
+            proposal,
+            root,
+            preview,
+        } => {
+            let expected_revision = expected_revision.ok_or_else(|| {
+                TerminalFailure::refusal(
+                    "missing required `--expected-revision`",
+                    "rerun with `case append <CASE_ID> --expected-revision <REVISION>`",
+                )
+            })?;
+            let proposal = proposal.ok_or_else(|| {
+                TerminalFailure::refusal(
+                    "missing required `--proposal`",
+                    "rerun with `case append <CASE_ID> --proposal <PATH>`",
+                )
+            })?;
+            let outcome = case::append(
+                Path::new("."),
+                &case_id,
+                expected_revision,
+                &proposal,
+                &root,
+                preview,
+            )?;
             print!("{}", outcome.render());
             Ok(())
         }

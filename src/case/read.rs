@@ -1,26 +1,34 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
 use uuid::Uuid;
 
 use super::{
     CASE_SCHEMA_VERSION, CaseOpenedEvent, EventType, OPENING_SEQUENCE, Occurrence,
-    find_repository_root, read_steward, validate_case_storage_path,
+    OccurrenceAppendedEvent, REVIEW_ONLY_NOTICE, find_repository_root, read_steward,
+    validate_case_storage_path,
 };
 use crate::{TerminalFailure, Visibility, portfolio};
 
-const REVIEW_ONLY_NOTICE: &str = "authorizes semantic review; does not authorize extraction";
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Readiness {
+pub(super) enum Readiness {
     Watching,
     ReviewReady,
 }
 
 impl Readiness {
-    const fn label(self) -> &'static str {
+    pub(super) const fn from_occurrence_count(occurrence_count: usize) -> Self {
+        if occurrence_count >= 3 {
+            Self::ReviewReady
+        } else {
+            Self::Watching
+        }
+    }
+
+    pub(super) const fn label(self) -> &'static str {
         match self {
             Self::Watching => "watching",
             Self::ReviewReady => "review-ready",
@@ -28,12 +36,23 @@ impl Readiness {
     }
 }
 
-struct CaseRecord {
-    case_id: Uuid,
-    responsibility: String,
-    revision: i64,
-    occurrences: Vec<Occurrence>,
+pub(super) struct CaseRecord {
+    pub(super) case_id: Uuid,
+    pub(super) responsibility: String,
+    pub(super) revision: i64,
+    pub(super) privacy: Visibility,
+    pub(super) occurrences: Vec<Occurrence>,
     conditions: Conditions,
+}
+
+enum CaseEvent {
+    Opened(CaseOpenedEvent),
+    OccurrenceAppended(OccurrenceAppendedEvent),
+}
+
+#[derive(Deserialize)]
+struct EventDiscriminator {
+    event_type: EventType,
 }
 
 #[derive(Clone, Copy)]
@@ -59,11 +78,7 @@ fn render_condition(value: Option<bool>) -> &'static str {
 
 impl CaseRecord {
     fn readiness(&self) -> Readiness {
-        if self.occurrences.len() >= 3 {
-            Readiness::ReviewReady
-        } else {
-            Readiness::Watching
-        }
+        Readiness::from_occurrence_count(self.occurrences.len())
     }
 }
 
@@ -343,14 +358,29 @@ fn read_case(
     })?;
     let mut event_paths = entries
         .map(|entry| {
-            entry.map(|entry| entry.path()).map_err(|error| {
+            let entry = entry.map_err(|error| {
                 TerminalFailure::refusal(
                     format!("an event in case `{case_id}` cannot be read: {error}"),
                     "make every recorded event in the case readable before retrying",
                 )
-            })
+            })?;
+            if is_append_temporary(&entry.file_name()) {
+                let file_type = entry.file_type().map_err(|error| {
+                    TerminalFailure::refusal(
+                        format!("an event in case `{case_id}` cannot be read: {error}"),
+                        "make every recorded event in the case readable before retrying",
+                    )
+                })?;
+                if file_type.is_file() {
+                    return Ok(None);
+                }
+            }
+            Ok(Some(entry.path()))
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, TerminalFailure>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
     event_paths.sort();
     if event_paths.is_empty() {
         return Err(TerminalFailure::refusal(
@@ -360,26 +390,79 @@ fn read_case(
     }
     validate_event_sequences(&event_paths, case_id)?;
 
-    let mut responsibility = None;
+    let mut opening = None;
     let mut revision = 0;
     let mut occurrences = Vec::new();
     for event_path in event_paths {
         let (file_sequence, event) =
             read_case_event(repository_root, &event_path, case_id, steward_repository_id)?;
         revision = revision.max(file_sequence);
-        if responsibility.is_none() {
-            responsibility = Some(event.responsibility);
+        match event {
+            CaseEvent::Opened(event) => {
+                occurrences.extend(event.occurrences.iter().cloned());
+                opening = Some(event);
+            }
+            CaseEvent::OccurrenceAppended(event) => occurrences.push(event.occurrence),
         }
-        occurrences.extend(event.occurrences);
     }
+
+    let opening = opening.expect("a validated case event set has one opening event");
+    validate_unique_occurrences(case_id, &occurrences)?;
 
     Ok(CaseRecord {
         case_id,
-        responsibility: responsibility.expect("a non-empty parsed event set has responsibility"),
+        responsibility: opening.responsibility,
         revision,
+        privacy: opening.privacy,
         occurrences,
         conditions: Conditions::UNKNOWN,
     })
+}
+
+fn validate_unique_occurrences(
+    case_id: Uuid,
+    occurrences: &[Occurrence],
+) -> Result<(), TerminalFailure> {
+    let mut observed = BTreeSet::new();
+    for occurrence in occurrences {
+        let consumer = occurrence.consumer.trim();
+        if !observed.insert((occurrence.repository_id, consumer.to_owned())) {
+            return Err(TerminalFailure::refusal(
+                format!(
+                    "case `{case_id}` records participant `{}` and consumer `{consumer}` more than once",
+                    occurrence.repository_id
+                ),
+                "restore the authoritative event stream so each participant repository and consumer pair occurs once before reading the case",
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn read_case_for_append(
+    repository_root: &Path,
+    relative_case_directory: &Path,
+    case_id: Uuid,
+    steward_repository_id: Uuid,
+) -> Result<CaseRecord, TerminalFailure> {
+    let case_directory = repository_root.join(relative_case_directory);
+    if matches!(
+        fs::metadata(&case_directory),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    ) {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case identity `{case_id}` is not stewarded by repository `{steward_repository_id}`"
+            ),
+            "run `case list` in this steward repository and retry with a recorded case identity",
+        ));
+    }
+    read_case(
+        repository_root,
+        relative_case_directory,
+        case_id,
+        steward_repository_id,
+    )
 }
 
 fn read_case_event(
@@ -387,7 +470,7 @@ fn read_case_event(
     event_path: &Path,
     case_id: Uuid,
     steward_repository_id: Uuid,
-) -> Result<(i64, CaseOpenedEvent), TerminalFailure> {
+) -> Result<(i64, CaseEvent), TerminalFailure> {
     let relative_event_path = event_path.strip_prefix(repository_root).map_err(|error| {
         TerminalFailure::unsafe_failure(format!(
             "case event path `{}` is not steward-local: {error}",
@@ -404,7 +487,7 @@ fn read_case_event(
             "restore the recorded UTF-8 event before reading the case",
         )
     })?;
-    let event = toml::from_str::<CaseOpenedEvent>(&event_text).map_err(|error| {
+    let discriminator = toml::from_str::<EventDiscriminator>(&event_text).map_err(|error| {
         TerminalFailure::refusal(
             format!("case event `{}` is invalid: {error}", event_path.display()),
             "restore a supported recorded event before reading the case",
@@ -417,59 +500,120 @@ fn read_case_event(
             .expect("validated event paths have UTF-8 sequence filenames"),
     )
     .expect("validated event paths have recognized sequence filenames");
-    if event.sequence != file_sequence {
-        return Err(TerminalFailure::refusal(
-            format!(
-                "case event `{}` records sequence {} but its filename records sequence {file_sequence}",
-                event_path.display(),
-                event.sequence
-            ),
-            "restore the event under the filename matching its recorded sequence before reading the case",
-        ));
-    }
-    if event.sequence != OPENING_SEQUENCE {
-        return Err(TerminalFailure::refusal(
-            format!(
-                "case event `{}` records `case_opened` at sequence {}",
-                event_path.display(),
-                event.sequence
-            ),
-            "restore `case_opened` as the single sequence 1 opening event before reading the case",
-        ));
-    }
-    if event.schema_version != CASE_SCHEMA_VERSION
-        || event.case_id != case_id
-        || event.steward_repository_id != steward_repository_id
-    {
-        return Err(TerminalFailure::refusal(
-            format!(
-                "case event `{}` does not match its steward-local case",
-                event_path.display()
-            ),
-            "restore the event under the case and steward identities it records",
-        ));
-    }
     let file_name = event_path
         .file_name()
         .and_then(|name| name.to_str())
         .expect("validated event paths have UTF-8 sequence filenames");
     let (_, file_event_type) = event_file_identity(file_name)
         .expect("validated event paths have recognized sequence filenames");
-    let recorded_event_type = match event.event_type {
-        EventType::CaseOpened => "case_opened",
-    };
-    if file_event_type != "case-opened" {
+    match discriminator.event_type {
+        EventType::CaseOpened => {
+            let event = toml::from_str::<CaseOpenedEvent>(&event_text)
+                .map_err(|error| invalid_event(event_path, &error))?;
+            validate_body_sequence(event_path, event.sequence, file_sequence)?;
+            if event.sequence != OPENING_SEQUENCE {
+                return Err(TerminalFailure::refusal(
+                    format!(
+                        "case event `{}` records `case_opened` at sequence {}",
+                        event_path.display(),
+                        event.sequence
+                    ),
+                    "restore `case_opened` as the single sequence 1 opening event before reading the case",
+                ));
+            }
+            if event.schema_version != CASE_SCHEMA_VERSION
+                || event.case_id != case_id
+                || event.steward_repository_id != steward_repository_id
+            {
+                return Err(TerminalFailure::refusal(
+                    format!(
+                        "case event `{}` does not match its steward-local case",
+                        event_path.display()
+                    ),
+                    "restore the event under the case and steward identities it records",
+                ));
+            }
+            validate_file_event_type(
+                case_id,
+                file_name,
+                file_sequence,
+                file_event_type,
+                "case_opened",
+                "case-opened",
+            )?;
+            super::validate_recorded_opening(&event)?;
+            Ok((file_sequence, CaseEvent::Opened(event)))
+        }
+        EventType::OccurrenceAppended => {
+            let event = toml::from_str::<OccurrenceAppendedEvent>(&event_text)
+                .map_err(|error| invalid_event(event_path, &error))?;
+            validate_body_sequence(event_path, event.sequence, file_sequence)?;
+            if event.sequence == OPENING_SEQUENCE {
+                return Err(TerminalFailure::refusal(
+                    format!(
+                        "case event `{}` records `occurrence_appended` at opening sequence 1",
+                        event_path.display()
+                    ),
+                    "restore `case_opened` as sequence 1 and append occurrences only after it",
+                ));
+            }
+            validate_file_event_type(
+                case_id,
+                file_name,
+                file_sequence,
+                file_event_type,
+                "occurrence_appended",
+                "occurrence-appended",
+            )?;
+            super::validate_recorded_append(&event)?;
+            Ok((file_sequence, CaseEvent::OccurrenceAppended(event)))
+        }
+    }
+}
+
+fn invalid_event(event_path: &Path, error: &toml::de::Error) -> TerminalFailure {
+    TerminalFailure::refusal(
+        format!("case event `{}` is invalid: {error}", event_path.display()),
+        "restore a supported recorded event before reading the case",
+    )
+}
+
+fn validate_body_sequence(
+    event_path: &Path,
+    body_sequence: i64,
+    file_sequence: i64,
+) -> Result<(), TerminalFailure> {
+    if body_sequence != file_sequence {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case event `{}` records sequence {body_sequence} but its filename records sequence {file_sequence}",
+                event_path.display()
+            ),
+            "restore the event under the filename matching its recorded sequence before reading the case",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_file_event_type(
+    case_id: Uuid,
+    file_name: &str,
+    file_sequence: i64,
+    file_event_type: &str,
+    recorded_event_type: &str,
+    file_event_slug: &str,
+) -> Result<(), TerminalFailure> {
+    if file_event_type != file_event_slug {
         return Err(TerminalFailure::refusal(
             format!(
                 "case `{case_id}` event file `{file_name}` does not match its recorded type `{recorded_event_type}`"
             ),
             format!(
-                "restore the event as `{file_sequence:04}-case-opened.toml` before reading the case"
+                "restore the event as `{file_sequence:04}-{file_event_slug}.toml` before reading the case"
             ),
         ));
     }
-    super::validate_recorded_opening(&event)?;
-    Ok((file_sequence, event))
+    Ok(())
 }
 
 fn validate_event_sequences(event_paths: &[PathBuf], case_id: Uuid) -> Result<(), TerminalFailure> {
@@ -534,6 +678,25 @@ fn validate_event_sequences(event_paths: &[PathBuf], case_id: Uuid) -> Result<()
 
 fn event_sequence_from_file_name(file_name: &str) -> Option<i64> {
     event_file_identity(file_name).map(|(sequence, _)| sequence)
+}
+
+fn is_append_temporary(file_name: &std::ffi::OsStr) -> bool {
+    let Some(file_name) = file_name.to_str() else {
+        return false;
+    };
+    let Some(staged_name) = file_name
+        .strip_prefix('.')
+        .and_then(|name| name.strip_suffix(".tmp"))
+    else {
+        return false;
+    };
+    let Some((event_file_name, identity)) = staged_name.rsplit_once('.') else {
+        return false;
+    };
+    Uuid::parse_str(identity).is_ok()
+        && event_file_identity(event_file_name).is_some_and(|(sequence, event_type)| {
+            sequence > OPENING_SEQUENCE && event_type == "occurrence-appended"
+        })
 }
 
 fn event_file_identity(file_name: &str) -> Option<(i64, &str)> {
