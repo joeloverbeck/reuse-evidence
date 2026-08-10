@@ -6,7 +6,8 @@ use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand, error::ErrorKind};
 use reuse_evidence::{
-    EnrollmentEffect, ExitMeaning, Visibility, enroll_with_expected_repository_id, set_visibility,
+    EnrollmentEffect, ExitMeaning, TerminalFailure, Visibility, enroll_with_expected_repository_id,
+    set_visibility,
 };
 use uuid::Uuid;
 
@@ -62,13 +63,13 @@ fn main() -> ExitCode {
             print!("{error}");
             ExitCode::from(ExitMeaning::Success.status())
         }
-        Err(error) => {
-            eprintln!(
-                "refusal: invalid command line\ncondition: {}\nresolution: rerun with a command and arguments shown in the usage",
+        Err(error) => terminal_exit(Err(TerminalFailure::refusal(
+            format!(
+                "invalid command line\ncondition: {}",
                 error.to_string().trim_end()
-            );
-            ExitCode::from(ExitMeaning::Refusal.status())
-        }
+            ),
+            "rerun with a command and arguments shown in the usage",
+        ))),
     }
 }
 
@@ -85,20 +86,22 @@ fn run(cli: Cli) -> ExitCode {
         None => {
             let mut command = Cli::command();
             let usage = command.render_usage();
-            Err((
-                ExitMeaning::Refusal,
-                format!(
-                    "no command was supplied\nresolution: rerun with a command shown in `{usage}`"
-                ),
+            Err(TerminalFailure::refusal(
+                "no command was supplied",
+                format!("rerun with a command shown in `{usage}`"),
             ))
         }
     };
 
+    terminal_exit(result)
+}
+
+fn terminal_exit(result: Result<(), TerminalFailure>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::from(ExitMeaning::Success.status()),
-        Err((meaning, message)) => {
-            eprintln!("{}: {message}", terminal_name(meaning));
-            ExitCode::from(meaning.status())
+        Err(failure) => {
+            eprintln!("{failure}");
+            ExitCode::from(failure.meaning().status())
         }
     }
 }
@@ -129,18 +132,19 @@ const fn skill_exit_meaning(exit: skill_evidence::cli::Exit) -> ExitMeaning {
     }
 }
 
-fn run_portfolio(roots: &[PathBuf]) -> Result<(), (ExitMeaning, String)> {
-    let report = portfolio::report(roots).map_err(|error| (error.meaning, error.message))?;
+fn run_portfolio(roots: &[PathBuf]) -> Result<(), TerminalFailure> {
+    let report = portfolio::report(roots)?;
     match report {
         portfolio::PortfolioReport::Complete(report) => {
             print!("{report}");
             Ok(())
         }
-        portfolio::PortfolioReport::IdentityConflict(report) => Err((
-            ExitMeaning::Refusal,
+        portfolio::PortfolioReport::IdentityConflict(report) => Err(TerminalFailure::refusal(
             format!(
-                "duplicate repository identities make the portfolio ambiguous\n{report}resolution: restore a unique stable repository identity for every enrolled repository before rerunning the report"
+                "duplicate repository identities make the portfolio ambiguous\n{}",
+                report.trim_end()
             ),
+            "restore a unique stable repository identity for every enrolled repository before rerunning the report",
         )),
     }
 }
@@ -149,31 +153,26 @@ fn run_enroll(
     ecosystem_id: Option<String>,
     visibility: Option<String>,
     expected_repository_id: Option<String>,
-) -> Result<(), (ExitMeaning, String)> {
+) -> Result<(), TerminalFailure> {
     let ecosystem_id = ecosystem_id.ok_or_else(|| {
-        (
-            ExitMeaning::Refusal,
-            "missing required `--ecosystem-id`\nresolution: rerun with `--ecosystem-id <IDENTITY>`"
-                .to_owned(),
+        TerminalFailure::refusal(
+            "missing required `--ecosystem-id`",
+            "rerun with `--ecosystem-id <IDENTITY>`",
         )
     })?;
     let visibility = visibility.ok_or_else(|| {
-        (
-            ExitMeaning::Refusal,
-            "missing required `--visibility`\nresolution: rerun with `--visibility public` or `--visibility private`"
-                .to_owned(),
+        TerminalFailure::refusal(
+            "missing required `--visibility`",
+            "rerun with `--visibility public` or `--visibility private`",
         )
     })?;
-    let visibility =
-        Visibility::parse(&visibility).map_err(|error| (error.meaning(), error.to_string()))?;
+    let visibility = Visibility::parse(&visibility)?;
     let expected_repository_id = expected_repository_id
         .map(|value| {
             Uuid::parse_str(&value).map_err(|error| {
-                (
-                    ExitMeaning::Refusal,
-                    format!(
-                        "expected repository identity `{value}` is invalid: {error}\nresolution: use the UUID recorded in the existing marker or omit the identity guard"
-                    ),
+                TerminalFailure::refusal(
+                    format!("expected repository identity `{value}` is invalid: {error}"),
+                    "use the UUID recorded in the existing marker or omit the identity guard",
                 )
             })
         })
@@ -183,25 +182,21 @@ fn run_enroll(
         &ecosystem_id,
         visibility,
         expected_repository_id,
-    )
-    .map_err(|error| (error.meaning(), error.to_string()))?;
+    )?;
 
     report_enrollment(&enrollment);
     Ok(())
 }
 
-fn run_set_visibility(visibility: Option<String>) -> Result<(), (ExitMeaning, String)> {
+fn run_set_visibility(visibility: Option<String>) -> Result<(), TerminalFailure> {
     let visibility = visibility.ok_or_else(|| {
-        (
-            ExitMeaning::Refusal,
-            "missing required `--visibility`\nresolution: rerun with `--visibility public` or `--visibility private`"
-                .to_owned(),
+        TerminalFailure::refusal(
+            "missing required `--visibility`",
+            "rerun with `--visibility public` or `--visibility private`",
         )
     })?;
-    let visibility =
-        Visibility::parse(&visibility).map_err(|error| (error.meaning(), error.to_string()))?;
-    let enrollment = set_visibility(Path::new("."), visibility)
-        .map_err(|error| (error.meaning(), error.to_string()))?;
+    let visibility = Visibility::parse(&visibility)?;
+    let enrollment = set_visibility(Path::new("."), visibility)?;
     report_enrollment(&enrollment);
     Ok(())
 }
@@ -217,12 +212,4 @@ fn report_enrollment(enrollment: &reuse_evidence::Enrollment) {
     println!("repository_id: {}", enrollment.repository_id);
     println!("ecosystem_id: {}", enrollment.ecosystem_id);
     println!("visibility: {}", enrollment.visibility);
-}
-
-const fn terminal_name(meaning: ExitMeaning) -> &'static str {
-    match meaning {
-        ExitMeaning::Success => "success",
-        ExitMeaning::UnsafeFailure => "unsafe failure",
-        ExitMeaning::Refusal => "refusal",
-    }
 }

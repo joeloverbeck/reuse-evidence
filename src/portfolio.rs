@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use atomic_write_file::AtomicWriteFile;
 use reuse_evidence::marker::{self, MarkerRead, UnreadableMarker, UnsupportedMarker};
-use reuse_evidence::{ExitMeaning, Visibility};
+use reuse_evidence::{TerminalFailure, Visibility};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -58,11 +58,6 @@ pub(crate) enum PortfolioReport {
     IdentityConflict(String),
 }
 
-pub(crate) struct PortfolioError {
-    pub(crate) meaning: ExitMeaning,
-    pub(crate) message: String,
-}
-
 struct PortfolioChanges {
     new_repositories: Vec<Enrollment>,
     moved_repositories: Vec<(Enrollment, PathBuf)>,
@@ -74,9 +69,9 @@ struct StateLock {
     path: PathBuf,
 }
 
-pub(crate) fn report(root_overrides: &[PathBuf]) -> Result<PortfolioReport, PortfolioError> {
-    let roots = selected_roots(root_overrides).map_err(PortfolioError::refusal)?;
-    let scan = scan(&roots).map_err(PortfolioError::refusal)?;
+pub(crate) fn report(root_overrides: &[PathBuf]) -> Result<PortfolioReport, TerminalFailure> {
+    let roots = selected_roots(root_overrides)?;
+    let scan = scan(&roots)?;
     let identity_paths = duplicate_identity_paths(&scan.enrollments);
     let has_identity_conflicts = !identity_paths.is_empty();
 
@@ -88,7 +83,7 @@ pub(crate) fn report(root_overrides: &[PathBuf]) -> Result<PortfolioReport, Port
         )));
     }
 
-    let state_path = state_path().map_err(PortfolioError::refusal)?;
+    let state_path = state_path()?;
     ensure_state_outside_repositories(&state_path, &scan.inspected_repositories)?;
     let _state_lock = acquire_state_lock(&state_path)?;
     let previous_state = load_state(&state_path)?;
@@ -379,51 +374,45 @@ fn next_state(
     }
 }
 
-impl PortfolioError {
-    fn refusal(message: String) -> Self {
-        Self {
-            meaning: ExitMeaning::Refusal,
-            message,
-        }
-    }
-
-    fn unsafe_failure(message: String) -> Self {
-        Self {
-            meaning: ExitMeaning::UnsafeFailure,
-            message,
-        }
-    }
-}
-
 fn ensure_state_outside_repositories(
     state_path: &Path,
     inspected_repositories: &BTreeSet<PathBuf>,
-) -> Result<(), PortfolioError> {
-    let resolved_state_path = resolve_path_through_existing_ancestor(state_path).map_err(|error| {
-        PortfolioError::refusal(format!(
-            "user-local portfolio state path `{}` cannot be resolved: {error}\nresolution: configure an accessible platform state directory outside every Git repository",
-            state_path.display()
-        ))
-    })?;
+) -> Result<(), TerminalFailure> {
+    let resolved_state_path =
+        resolve_path_through_existing_ancestor(state_path).map_err(|error| {
+            TerminalFailure::refusal(
+                format!(
+                    "user-local portfolio state path `{}` cannot be resolved: {error}",
+                    state_path.display()
+                ),
+                "configure an accessible platform state directory outside every Git repository",
+            )
+        })?;
     if let Some(repository) = inspected_repositories
         .iter()
         .find(|repository| resolved_state_path.starts_with(repository))
     {
-        return Err(PortfolioError::refusal(format!(
-            "user-local portfolio state `{}` would be stored inside inspected repository `{}`\nresolution: configure the platform state directory outside every inspected repository",
-            state_path.display(),
-            repository.display()
-        )));
+        return Err(TerminalFailure::refusal(
+            format!(
+                "user-local portfolio state `{}` would be stored inside inspected repository `{}`",
+                state_path.display(),
+                repository.display()
+            ),
+            "configure the platform state directory outside every inspected repository",
+        ));
     }
     if let Some(repository) = resolved_state_path
         .ancestors()
         .find(|ancestor| marker::is_repository_root(ancestor))
     {
-        return Err(PortfolioError::refusal(format!(
-            "user-local portfolio state `{}` would be stored inside Git repository `{}`\nresolution: configure the platform state directory outside every Git repository",
-            state_path.display(),
-            repository.display()
-        )));
+        return Err(TerminalFailure::refusal(
+            format!(
+                "user-local portfolio state `{}` would be stored inside Git repository `{}`",
+                state_path.display(),
+                repository.display()
+            ),
+            "configure the platform state directory outside every Git repository",
+        ));
     }
     Ok(())
 }
@@ -458,14 +447,14 @@ fn resolve_path_through_existing_ancestor(path: &Path) -> std::io::Result<PathBu
     Ok(resolved)
 }
 
-fn load_state(path: &Path) -> Result<PortfolioState, PortfolioError> {
+fn load_state(path: &Path) -> Result<PortfolioState, TerminalFailure> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(PortfolioState::default());
         }
         Err(error) => {
-            return Err(PortfolioError::unsafe_failure(format!(
+            return Err(TerminalFailure::unsafe_failure(format!(
                 "user-local portfolio state `{}` cannot be read: {error}",
                 path.display()
             )));
@@ -477,12 +466,12 @@ fn load_state(path: &Path) -> Result<PortfolioState, PortfolioError> {
     Ok(toml::from_str(text).unwrap_or_default())
 }
 
-fn acquire_state_lock(state_path: &Path) -> Result<StateLock, PortfolioError> {
+fn acquire_state_lock(state_path: &Path) -> Result<StateLock, TerminalFailure> {
     let parent = state_path
         .parent()
         .expect("the user-local state path always has a parent");
     fs::create_dir_all(parent).map_err(|error| {
-        PortfolioError::unsafe_failure(format!(
+        TerminalFailure::unsafe_failure(format!(
             "user-local portfolio state directory `{}` cannot be created: {error}",
             parent.display()
         ))
@@ -495,13 +484,16 @@ fn acquire_state_lock(state_path: &Path) -> Result<StateLock, PortfolioError> {
     {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            return Err(PortfolioError::refusal(format!(
-                "another portfolio state update is in progress at `{}`\nresolution: wait for it to finish, or remove the derived lock after confirming no portfolio command is running",
-                lock_path.display()
-            )));
+            return Err(TerminalFailure::refusal(
+                format!(
+                    "another portfolio state update is in progress at `{}`",
+                    lock_path.display()
+                ),
+                "wait for it to finish, or remove the derived lock after confirming no portfolio command is running",
+            ));
         }
         Err(error) => {
-            return Err(PortfolioError::unsafe_failure(format!(
+            return Err(TerminalFailure::unsafe_failure(format!(
                 "user-local portfolio state lock `{}` cannot be created: {error}",
                 lock_path.display()
             )));
@@ -511,7 +503,7 @@ fn acquire_state_lock(state_path: &Path) -> Result<StateLock, PortfolioError> {
         writeln!(lock_file, "{}", std::process::id()).and_then(|()| lock_file.sync_all())
     {
         let _ = fs::remove_file(&lock_path);
-        return Err(PortfolioError::unsafe_failure(format!(
+        return Err(TerminalFailure::unsafe_failure(format!(
             "user-local portfolio state lock `{}` cannot be initialized: {error}",
             lock_path.display()
         )));
@@ -525,9 +517,9 @@ impl Drop for StateLock {
     }
 }
 
-fn save_state(path: &Path, state: &PortfolioState) -> Result<(), PortfolioError> {
+fn save_state(path: &Path, state: &PortfolioState) -> Result<(), TerminalFailure> {
     let bytes = toml::to_string(state).map_err(|error| {
-        PortfolioError::unsafe_failure(format!(
+        TerminalFailure::unsafe_failure(format!(
             "user-local portfolio state could not be encoded: {error}"
         ))
     })?;
@@ -535,7 +527,7 @@ fn save_state(path: &Path, state: &PortfolioState) -> Result<(), PortfolioError>
         return Ok(());
     }
     replace_state_atomically(path, bytes.as_bytes()).map_err(|error| {
-        PortfolioError::unsafe_failure(format!(
+        TerminalFailure::unsafe_failure(format!(
             "user-local portfolio state `{}` cannot be published atomically: {error}",
             path.display()
         ))
@@ -548,7 +540,7 @@ fn replace_state_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     temporary.commit()
 }
 
-fn selected_roots(root_overrides: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+fn selected_roots(root_overrides: &[PathBuf]) -> Result<Vec<PathBuf>, TerminalFailure> {
     if !root_overrides.is_empty() {
         return Ok(root_overrides.to_vec());
     }
@@ -560,22 +552,31 @@ fn selected_roots(root_overrides: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
             return Err(no_roots_message(&config_path));
         }
         Err(error) => {
-            return Err(format!(
-                "user-local portfolio configuration `{}` cannot be read: {error}\nresolution: make the file readable or rerun with `--root <PATH>`",
-                config_path.display()
+            return Err(TerminalFailure::refusal(
+                format!(
+                    "user-local portfolio configuration `{}` cannot be read: {error}",
+                    config_path.display()
+                ),
+                "make the file readable or rerun with `--root <PATH>`",
             ));
         }
     };
     let config_text = std::str::from_utf8(&config_bytes).map_err(|error| {
-        format!(
-            "user-local portfolio configuration `{}` is not UTF-8: {error}\nresolution: save valid TOML in UTF-8 or rerun with `--root <PATH>`",
-            config_path.display()
+        TerminalFailure::refusal(
+            format!(
+                "user-local portfolio configuration `{}` is not UTF-8: {error}",
+                config_path.display()
+            ),
+            "save valid TOML in UTF-8 or rerun with `--root <PATH>`",
         )
     })?;
     let config = toml::from_str::<Config>(config_text).map_err(|error| {
-        format!(
-            "user-local portfolio configuration `{}` is invalid: {error}\nresolution: define `portfolio_roots` as an array of paths or rerun with `--root <PATH>`",
-            config_path.display()
+        TerminalFailure::refusal(
+            format!(
+                "user-local portfolio configuration `{}` is invalid: {error}",
+                config_path.display()
+            ),
+            "define `portfolio_roots` as an array of paths or rerun with `--root <PATH>`",
         )
     })?;
     if config.portfolio_roots.is_empty() {
@@ -584,26 +585,32 @@ fn selected_roots(root_overrides: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     Ok(config.portfolio_roots)
 }
 
-fn no_roots_message(config_path: &Path) -> String {
-    format!(
-        "no portfolio roots were supplied and `{}` does not configure any\nresolution: add `portfolio_roots = [\"/path/to/root\"]` to that user-local configuration or rerun with `--root <PATH>`",
-        config_path.display()
+fn no_roots_message(config_path: &Path) -> TerminalFailure {
+    TerminalFailure::refusal(
+        format!(
+            "no portfolio roots were supplied and `{}` does not configure any",
+            config_path.display()
+        ),
+        "add `portfolio_roots = [\"/path/to/root\"]` to that user-local configuration or rerun with `--root <PATH>`",
     )
 }
 
-fn scan(roots: &[PathBuf]) -> Result<Scan, String> {
+fn scan(roots: &[PathBuf]) -> Result<Scan, TerminalFailure> {
     let mut canonical_roots = Vec::new();
     for root in roots {
         let root = root.canonicalize().map_err(|error| {
-            format!(
-                "portfolio root `{}` cannot be inspected: {error}\nresolution: supply an existing readable directory with `--root <PATH>` or update the user-local configuration",
-                root.display()
+            TerminalFailure::refusal(
+                format!(
+                    "portfolio root `{}` cannot be inspected: {error}",
+                    root.display()
+                ),
+                "supply an existing readable directory with `--root <PATH>` or update the user-local configuration",
             )
         })?;
         if !root.is_dir() {
-            return Err(format!(
-                "portfolio root `{}` is not a directory\nresolution: supply a directory with `--root <PATH>` or update the user-local configuration",
-                root.display()
+            return Err(TerminalFailure::refusal(
+                format!("portfolio root `{}` is not a directory", root.display()),
+                "supply a directory with `--root <PATH>` or update the user-local configuration",
             ));
         }
         canonical_roots.push(root);
@@ -630,16 +637,22 @@ fn scan(roots: &[PathBuf]) -> Result<Scan, String> {
         }
 
         let entries = fs::read_dir(&directory).map_err(|error| {
-            format!(
-                "portfolio directory `{}` cannot be read: {error}\nresolution: make the configured root readable or choose a narrower `--root <PATH>`",
-                directory.display()
+            TerminalFailure::refusal(
+                format!(
+                    "portfolio directory `{}` cannot be read: {error}",
+                    directory.display()
+                ),
+                "make the configured root readable or choose a narrower `--root <PATH>`",
             )
         })?;
         for entry in entries {
             let entry = entry.map_err(|error| {
-                format!(
-                    "an entry beneath portfolio directory `{}` cannot be read: {error}\nresolution: make the configured root readable or choose a narrower `--root <PATH>`",
-                    directory.display()
+                TerminalFailure::refusal(
+                    format!(
+                        "an entry beneath portfolio directory `{}` cannot be read: {error}",
+                        directory.display()
+                    ),
+                    "make the configured root readable or choose a narrower `--root <PATH>`",
                 )
             })?;
             if entry.file_name() == ".git" {
@@ -648,9 +661,12 @@ fn scan(roots: &[PathBuf]) -> Result<Scan, String> {
             if entry
                 .file_type()
                 .map_err(|error| {
-                    format!(
-                        "portfolio entry `{}` cannot be inspected: {error}\nresolution: make the configured root readable or choose a narrower `--root <PATH>`",
-                        entry.path().display()
+                    TerminalFailure::refusal(
+                        format!(
+                            "portfolio entry `{}` cannot be inspected: {error}",
+                            entry.path().display()
+                        ),
+                        "make the configured root readable or choose a narrower `--root <PATH>`",
                     )
                 })?
                 .is_dir()
@@ -682,19 +698,23 @@ fn inspect_marker(repository: &Path) -> MarkerInspection {
     }
 }
 
-fn config_path() -> Result<PathBuf, String> {
+fn config_path() -> Result<PathBuf, TerminalFailure> {
     platform_config_directory()
         .map(|directory| directory.join("reuse-evidence").join("config.toml"))
-        .ok_or_else(|| {
-            "the user-local configuration directory cannot be determined\nresolution: set `APPDATA` on Windows, or `XDG_CONFIG_HOME` or `HOME` on Unix-like systems; alternatively rerun with `--root <PATH>`".to_owned()
-        })
+        .ok_or_else(|| TerminalFailure::refusal(
+            "the user-local configuration directory cannot be determined",
+            "set `APPDATA` on Windows, or `XDG_CONFIG_HOME` or `HOME` on Unix-like systems; alternatively rerun with `--root <PATH>`",
+        ))
 }
 
-fn state_path() -> Result<PathBuf, String> {
+fn state_path() -> Result<PathBuf, TerminalFailure> {
     platform_state_directory()
         .map(|directory| directory.join("reuse-evidence").join("portfolio.toml"))
         .ok_or_else(|| {
-            "the user-local state directory cannot be determined\nresolution: set `LOCALAPPDATA` on Windows, or `XDG_STATE_HOME` or `HOME` on Unix-like systems".to_owned()
+            TerminalFailure::refusal(
+                "the user-local state directory cannot be determined",
+                "set `LOCALAPPDATA` on Windows, or `XDG_STATE_HOME` or `HOME` on Unix-like systems",
+            )
         })
 }
 

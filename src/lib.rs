@@ -58,9 +58,10 @@ impl Visibility {
         match value {
             "public" => Ok(Self::Public),
             "private" => Ok(Self::Private),
-            _ => Err(EnrollmentError::refusal(format!(
-                "visibility `{value}` is not supported\nresolution: use `public` or `private`"
-            ))),
+            _ => Err(EnrollmentError::refusal(
+                format!("visibility `{value}` is not supported"),
+                "use `public` or `private`",
+            )),
         }
     }
 }
@@ -102,42 +103,69 @@ pub struct Enrollment {
     pub visibility: Visibility,
 }
 
-/// A classified enrollment failure with terminal-contract meaning.
+/// A classified failure carrying the terminal contract for an owned command.
 #[derive(Debug, Eq, PartialEq)]
-pub struct EnrollmentError {
-    meaning: ExitMeaning,
-    message: String,
+pub struct TerminalFailure {
+    condition: String,
+    kind: TerminalFailureKind,
 }
 
-impl EnrollmentError {
-    fn refusal(message: String) -> Self {
+#[derive(Debug, Eq, PartialEq)]
+enum TerminalFailureKind {
+    UnsafeFailure,
+    Refusal { resolution: String },
+}
+
+impl TerminalFailure {
+    /// Creates a safe refusal with its required resolution.
+    #[must_use]
+    pub fn refusal(condition: impl Into<String>, resolution: impl Into<String>) -> Self {
         Self {
-            meaning: ExitMeaning::Refusal,
-            message,
+            condition: condition.into(),
+            kind: TerminalFailureKind::Refusal {
+                resolution: resolution.into(),
+            },
         }
     }
 
-    fn unsafe_failure(message: String) -> Self {
+    /// Creates a failure that does not carry a no-write guarantee.
+    #[must_use]
+    pub fn unsafe_failure(condition: impl Into<String>) -> Self {
         Self {
-            meaning: ExitMeaning::UnsafeFailure,
-            message,
+            condition: condition.into(),
+            kind: TerminalFailureKind::UnsafeFailure,
         }
     }
 
     /// Returns this failure's process-level meaning.
     #[must_use]
     pub const fn meaning(&self) -> ExitMeaning {
-        self.meaning
+        match self.kind {
+            TerminalFailureKind::UnsafeFailure => ExitMeaning::UnsafeFailure,
+            TerminalFailureKind::Refusal { .. } => ExitMeaning::Refusal,
+        }
     }
 }
 
-impl fmt::Display for EnrollmentError {
+impl fmt::Display for TerminalFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
+        match &self.kind {
+            TerminalFailureKind::UnsafeFailure => {
+                write!(formatter, "unsafe failure: {}", self.condition)
+            }
+            TerminalFailureKind::Refusal { resolution } => write!(
+                formatter,
+                "refusal: {}\nresolution: {resolution}",
+                self.condition
+            ),
+        }
     }
 }
 
-impl std::error::Error for EnrollmentError {}
+impl std::error::Error for TerminalFailure {}
+
+/// The terminal failure returned by repository enrollment operations.
+pub type EnrollmentError = TerminalFailure;
 
 /// Enrolls the repository containing `working_directory`.
 ///
@@ -180,26 +208,41 @@ pub fn enroll_with_expected_repository_id(
     );
     if let Some(marker) = marker_for_enrollment(&repository_root, &malformed_resolution)? {
         if marker.visibility() != visibility {
-            return Err(EnrollmentError::refusal(format!(
-                "existing marker declares visibility `{}`, but enrollment requested `{visibility}`\nresolution: use `set-visibility --visibility {visibility}` for a deliberate visibility change",
-                marker.visibility()
-            )));
+            return Err(EnrollmentError::refusal(
+                format!(
+                    "existing marker declares visibility `{}`, but enrollment requested `{visibility}`",
+                    marker.visibility()
+                ),
+                format!(
+                    "use `set-visibility --visibility {visibility}` for a deliberate visibility change"
+                ),
+            ));
         }
         if marker.ecosystem_id() != ecosystem_id {
-            return Err(EnrollmentError::refusal(format!(
-                "existing marker declares ecosystem identity `{}`, but enrollment requested `{ecosystem_id}`\nresolution: rerun with `--ecosystem-id {}`; changing ecosystem identity is not implemented",
-                marker.ecosystem_id(),
-                marker.ecosystem_id()
-            )));
+            return Err(EnrollmentError::refusal(
+                format!(
+                    "existing marker declares ecosystem identity `{}`, but enrollment requested `{ecosystem_id}`",
+                    marker.ecosystem_id()
+                ),
+                format!(
+                    "rerun with `--ecosystem-id {}`; changing ecosystem identity is not implemented",
+                    marker.ecosystem_id()
+                ),
+            ));
         }
         if let Some(expected_repository_id) = expected_repository_id
             && marker.repository_id() != expected_repository_id
         {
-            return Err(EnrollmentError::refusal(format!(
-                "existing marker declares repository identity `{}`, but enrollment expected `{expected_repository_id}`\nresolution: rerun with `--expected-repository-id {}` or omit the identity guard",
-                marker.repository_id(),
-                marker.repository_id()
-            )));
+            return Err(EnrollmentError::refusal(
+                format!(
+                    "existing marker declares repository identity `{}`, but enrollment expected `{expected_repository_id}`",
+                    marker.repository_id()
+                ),
+                format!(
+                    "rerun with `--expected-repository-id {}` or omit the identity guard",
+                    marker.repository_id()
+                ),
+            ));
         }
         return Ok(Enrollment {
             effect: EnrollmentEffect::Existing,
@@ -212,8 +255,8 @@ pub fn enroll_with_expected_repository_id(
 
     if expected_repository_id.is_some() {
         return Err(EnrollmentError::refusal(
-            "a repository identity cannot be assigned during fresh enrollment\nresolution: omit `--expected-repository-id`; fresh enrollment generates the opaque identity"
-                .to_owned(),
+            "a repository identity cannot be assigned during fresh enrollment",
+            "omit `--expected-repository-id`; fresh enrollment generates the opaque identity",
         ));
     }
 
@@ -251,10 +294,13 @@ pub fn set_visibility(
         marker::SUPPORTED_SCHEMA_VERSION
     );
     let Some(mut marker) = marker_for_enrollment(&repository_root, &malformed_resolution)? else {
-        return Err(EnrollmentError::refusal(format!(
-            "repository is not enrolled because `{}` does not exist\nresolution: run `enroll` before changing visibility",
-            marker_path.display()
-        )));
+        return Err(EnrollmentError::refusal(
+            format!(
+                "repository is not enrolled because `{}` does not exist",
+                marker_path.display()
+            ),
+            "run `enroll` before changing visibility",
+        ));
     };
     if marker.visibility() == visibility {
         return Ok(Enrollment {
@@ -288,9 +334,12 @@ fn marker_for_enrollment(
         Some(marker::MarkerRead::Supported(marker)) => Ok(Some(marker)),
         Some(marker::MarkerRead::UnsupportedSchemaVersion(marker)) => {
             let schema_version = marker.schema_version();
-            Err(EnrollmentError::refusal(format!(
-                "marker schema version `{schema_version}` is not supported\nresolution: use a reuse-evidence version that supports marker schema version `{schema_version}`"
-            )))
+            Err(EnrollmentError::refusal(
+                format!("marker schema version `{schema_version}` is not supported"),
+                format!(
+                    "use a reuse-evidence version that supports marker schema version `{schema_version}`"
+                ),
+            ))
         }
         Some(marker::MarkerRead::Unreadable(marker)) if marker.is_read_failure() => {
             Err(EnrollmentError::unsafe_failure(format!(
@@ -312,10 +361,13 @@ fn malformed_marker_error(
     error: &dyn fmt::Display,
     resolution: &str,
 ) -> EnrollmentError {
-    EnrollmentError::refusal(format!(
-        "existing marker `{}` is malformed: {error}\nresolution: {resolution}",
-        marker_path.display()
-    ))
+    EnrollmentError::refusal(
+        format!(
+            "existing marker `{}` is malformed: {error}",
+            marker_path.display()
+        ),
+        resolution,
+    )
 }
 
 fn create_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), EnrollmentError> {
@@ -375,16 +427,22 @@ fn sync_parent(path: &Path) -> std::io::Result<()> {
 
 fn find_repository_root(working_directory: &Path) -> Result<PathBuf, EnrollmentError> {
     let working_directory = working_directory.canonicalize().map_err(|error| {
-        EnrollmentError::refusal(format!(
-            "working directory `{}` cannot be inspected: {error}\nresolution: rerun from an existing directory inside the repository",
-            working_directory.display()
-        ))
+        EnrollmentError::refusal(
+            format!(
+                "working directory `{}` cannot be inspected: {error}",
+                working_directory.display()
+            ),
+            "rerun from an existing directory inside the repository",
+        )
     })?;
     let repository_root = repository_root(&working_directory).ok_or_else(|| {
-        EnrollmentError::refusal(format!(
-            "`{}` is not inside a repository root\nresolution: rerun inside a repository containing `.git`",
-            working_directory.display()
-        ))
+        EnrollmentError::refusal(
+            format!(
+                "`{}` is not inside a repository root",
+                working_directory.display()
+            ),
+            "rerun inside a repository containing `.git`",
+        )
     })?;
     Ok(repository_root.to_path_buf())
 }
