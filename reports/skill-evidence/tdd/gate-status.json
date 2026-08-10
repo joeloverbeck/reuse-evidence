@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-10T04:25:41.519412121Z",
+  "generated_at": "2026-08-10T07:52:45.249753588Z",
   "target_content_hash": "fa4587c9947cd3836cebbf6ebda49196f0b9fb0cef1b7b7ff5d03fc01f20d31f",
-  "qualifying_uses_on_current_hash": 5,
+  "qualifying_uses_on_current_hash": 6,
   "open_incident_ids": [
     "evt_920ddf63-df49-4525-bfc0-366b2975ed73",
     "evt_a86195b4-5a88-408f-a22a-f6ada76d20f5",
@@ -27,7 +27,7 @@
       "max_severity": "material_failure"
     }
   ],
-  "state": "eligible_pending_cooldown",
+  "state": "eligible",
   "authorized_workflow": "skill-evolution",
   "authorization_reason": "material_recurrence:output",
   "trigger_event_ids": [
@@ -41,5 +41,5 @@
   "review_reentry_basis": "first_eligibility",
   "target_name": "tdd",
   "target_repo_relative_path": ".claude/skills/tdd",
-  "derivation_session_id": "019fe910-4151-7731-91b9-4db6388edcca"
+  "derivation_session_id": "019fea09-084e-7602-b31f-40f64c586d2b"
 }
