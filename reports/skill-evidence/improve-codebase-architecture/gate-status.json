@@ -1,11 +1,22 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-09T21:58:53.66031943Z",
+  "generated_at": "2026-08-10T14:33:32.351786965Z",
   "target_content_hash": "74bcaf2b6159d57a0a93f6683837b601afab3dae1e9094ab4b77c15b3f535a63",
-  "qualifying_uses_on_current_hash": 1,
-  "open_incident_ids": [],
-  "candidate_clusters": [],
-  "state": "closed",
+  "qualifying_uses_on_current_hash": 2,
+  "open_incident_ids": [
+    "evt_0704aa15-b98c-4022-9fce-f8fae01bb40e"
+  ],
+  "candidate_clusters": [
+    {
+      "symptom_key": "execution",
+      "open_event_ids": [
+        "evt_0704aa15-b98c-4022-9fce-f8fae01bb40e"
+      ],
+      "independent_incidents": 1,
+      "max_severity": "friction"
+    }
+  ],
+  "state": "collecting",
   "authorized_workflow": null,
   "authorization_reason": null,
   "trigger_event_ids": [],
@@ -16,5 +27,5 @@
   "review_reentry_basis": null,
   "target_name": "improve-codebase-architecture",
   "target_repo_relative_path": ".claude/skills/improve-codebase-architecture",
-  "derivation_session_id": "a2f97592-3daa-4ecf-a609-28b0a4c6fadc"
+  "derivation_session_id": "462e17f5-61ed-4b10-a376-56d8bdf4a244"
 }

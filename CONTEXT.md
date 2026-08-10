@@ -15,6 +15,8 @@ This glossary is the shared language for `reuse-evidence`. Use these terms consi
 | **Case** | The durable evidence and decision history for one proposed shared responsibility. A case begins only when at least two plausible independent occurrences exist. |
 | **Case event** | One immutable, sequence-numbered fact in a case's authoritative history. Each event is stored as its own TOML file and later events correct or extend history without rewriting it. |
 | **Case revision** | The highest contiguous event sequence number recorded for a case. Opening a case creates revision 1. |
+| **Later case event** | Any case event after the one that opened the case. Later events extend or correct history; the opening event is never replaced or reordered. |
+| **Publication** | The act of recording exactly one later case event against an expected case revision. It records one new event or nothing at all, an identical retry changes nothing, and opening a case is not a publication. |
 | **Watching** | The normal state after a second independent occurrence: remember the pressure, but do not yet require a reuse review. |
 | **Review-ready** | The normal state after a third independent occurrence, or after a human accepts a documented early-review reason. It authorizes semantic review, not extraction. |
 | **Early-review override** | A human-authorized decision to review after the second occurrence because concrete cost or risk makes waiting materially worse. It is not permission to extract automatically. |
@@ -39,6 +41,7 @@ This glossary is the shared language for `reuse-evidence`. Use these terms consi
 - A **responsibility** may have several **occurrences**.
 - An **occurrence** belongs to one **reuse consumer** and is supported by **evidence references**.
 - A second independent occurrence may open a **case** in a **steward repository**.
+- A **publication** records one **later case event** and raises the **case revision** by one.
 - Accumulated occurrences derive **watching** or **review-ready** state.
 - A **reuse review** proposes a **reuse decision**.
 - Only the human accepts the decision.

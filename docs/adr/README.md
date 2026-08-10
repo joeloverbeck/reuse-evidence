@@ -24,6 +24,7 @@ Only the human decision owner can accept, supersede, or reject an ADR. Merge, im
 | [0007](0007-language-neutral-evidence-rust-first-delivery.md) | Evidence semantics are language-neutral while delivery is Rust-first. |
 | [0008](0008-published-skill-evidence-dependency.md) | The published `skill-evidence` crate governs this repository's own skills; ADR 0006's package-dependency clause is scoped to engineering-workflow skill sets. |
 | [0009](0009-per-event-case-evidence-files.md) | Case events are sequence-numbered single-event TOML files; exclusive create is the expected-revision check. |
+| [0010](0010-publication-shares-only-the-invariant-protocol.md) | Publication shares only ADR 0009's invariant protocol; proposal, eligibility, privacy, and receipt shapes stay per event type. |
 
 ## Adding or changing an ADR
 
