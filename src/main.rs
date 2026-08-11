@@ -119,6 +119,14 @@ enum CaseCommand {
         #[arg(long)]
         preview: bool,
     },
+    /// Project the implementation handoff from an accepted reuse decision.
+    Brief {
+        /// Opaque identity of the stewarded case whose brief should be projected.
+        case_id: String,
+        /// Portfolio root for current participant privacy; overrides configuration.
+        #[arg(long)]
+        root: Vec<PathBuf>,
+    },
     /// List every case stewarded by the current repository.
     List {
         /// Portfolio root for current participant conditions; overrides configuration.
@@ -265,6 +273,11 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
             &root,
             preview,
         ),
+        CaseCommand::Brief { case_id, root } => {
+            let outcome = case::brief(Path::new("."), &case_id, &root)?;
+            print!("{outcome}");
+            Ok(())
+        }
         CaseCommand::List { root } => {
             let outcome = case::list(Path::new("."), &root)?;
             print!("{outcome}");

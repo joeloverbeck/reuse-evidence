@@ -9,8 +9,8 @@ use uuid::Uuid;
 use super::naming::{self, EventFileName, EventPosition, EventType, OPENING_SEQUENCE};
 use super::{
     CASE_SCHEMA_VERSION, CaseOpenedEvent, EarlyReviewAuthorizedEvent, Occurrence,
-    OccurrenceAppendedEvent, REVIEW_ONLY_NOTICE, ReuseDecisionAcceptedEvent, find_repository_root,
-    read_steward, validate_case_storage_path,
+    OccurrenceAppendedEvent, REVIEW_ONLY_NOTICE, ReportedPrivacy, ReuseDecisionAcceptedEvent,
+    find_repository_root, read_steward, validate_case_storage_path,
 };
 use crate::{TerminalFailure, Visibility, portfolio};
 
@@ -162,6 +162,196 @@ pub struct ShowOutcome {
     portfolio_available: bool,
 }
 
+/// The implementation handoff projected from one accepted reuse decision.
+pub struct BriefOutcome {
+    case: CaseRecord,
+    privacy: ReportedPrivacy,
+}
+
+/// Renders the accepted implementation handoff without creating a second artifact.
+impl Display for BriefOutcome {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        let case = &self.case;
+        let decision = case
+            .decision
+            .as_ref()
+            .expect("a brief outcome has an accepted reuse decision");
+        let content = &decision.content;
+        writeln!(formatter, "implementation brief\ncase_id: {}", case.case_id)?;
+        self.privacy.write_receipt_line(formatter)?;
+        if content.action.authorizes_implementation() {
+            write_authorized_implementation(formatter, case, content)
+        } else {
+            write_no_implementation_decision(formatter, case, content)
+        }
+    }
+}
+
+fn write_authorized_implementation(
+    formatter: &mut Formatter<'_>,
+    case: &CaseRecord,
+    content: &super::DecisionContent,
+) -> fmt::Result {
+    formatter.write_str("implementation: authorized\n")?;
+    write_responsibility_identity(formatter, case, content)?;
+    formatter.write_str("evidence_bearing_consumers:\n")?;
+    for occurrence in &case.occurrences {
+        writeln!(
+            formatter,
+            "- repository_id: {}\n  consumer: {}\n  independence: {}",
+            occurrence.repository_id, occurrence.consumer, occurrence.independence
+        )?;
+        if let Some(affected) = content.affected_consumers.iter().find(|affected| {
+            occurrence.repository_id == affected.repository_id
+                && occurrence.consumer.trim() == affected.consumer.trim()
+        }) {
+            writeln!(formatter, "  expectation: {}", affected.expectation)?;
+        }
+        formatter.write_str("  evidence:\n")?;
+        for evidence in &occurrence.evidence {
+            writeln!(
+                formatter,
+                "  - kind: {}\n    reference: {}",
+                evidence.kind.label(),
+                evidence.reference
+            )?;
+            if let Some(path) = &evidence.path {
+                writeln!(formatter, "    path: {path}")?;
+            }
+        }
+    }
+    writeln!(
+        formatter,
+        "invariant_contract: {}\nnon_responsibilities:",
+        content
+            .invariant_contract
+            .as_deref()
+            .expect("an implementation-authorizing decision has an invariant contract")
+    )?;
+    write_string_list(formatter, &content.non_responsibilities)?;
+    write_chosen_home_and_scope(formatter, content)?;
+    write_alternatives_rejected(formatter, content)?;
+    formatter.write_str("existing_packages_considered:\n")?;
+    for package in content
+        .existing_packages_considered
+        .as_deref()
+        .expect("an implementation-authorizing decision records considered packages")
+    {
+        writeln!(
+            formatter,
+            "- package: {}\n  fit: {}\n  reason: {}",
+            package.package, package.fit, package.reason
+        )?;
+    }
+    formatter.write_str("required_consumer_level_tests:\n")?;
+    write_string_list(
+        formatter,
+        content
+            .required_consumer_level_tests
+            .as_deref()
+            .expect("an implementation-authorizing decision records consumer-level tests"),
+    )?;
+    writeln!(
+        formatter,
+        "compatibility_and_release_consequences: {}\nmigration_order:",
+        content.compatibility_consequences
+    )?;
+    for migration in content
+        .migration_expectations
+        .as_deref()
+        .expect("an implementation-authorizing decision records migration order")
+    {
+        writeln!(
+            formatter,
+            "- order: {}\n  expectation: {}",
+            migration.order, migration.expectation
+        )?;
+    }
+    writeln!(
+        formatter,
+        "rollback_or_resplitting_strategy: {}\nverification_conditions:",
+        content
+            .rollback_or_resplitting_path
+            .as_deref()
+            .expect("an implementation-authorizing decision records its reversal path")
+    )?;
+    write_string_list(formatter, &content.verification_conditions)
+}
+
+fn write_no_implementation_decision(
+    formatter: &mut Formatter<'_>,
+    case: &CaseRecord,
+    content: &super::DecisionContent,
+) -> fmt::Result {
+    formatter
+        .write_str("implementation: not authorized\ndecision: authorizes no implementation\n")?;
+    write_responsibility_identity(formatter, case, content)?;
+    write_chosen_home_and_scope(formatter, content)?;
+    formatter.write_str("non_responsibilities:\n")?;
+    write_string_list(formatter, &content.non_responsibilities)?;
+    write_alternatives_rejected(formatter, content)?;
+    write_compatibility_and_verification(formatter, content)
+}
+
+fn write_string_list(formatter: &mut Formatter<'_>, values: &[String]) -> fmt::Result {
+    for value in values {
+        writeln!(formatter, "- {value}")?;
+    }
+    Ok(())
+}
+
+fn write_responsibility_identity(
+    formatter: &mut Formatter<'_>,
+    case: &CaseRecord,
+    content: &super::DecisionContent,
+) -> fmt::Result {
+    writeln!(
+        formatter,
+        "accepted_responsibility_identity:\n  responsibility: {}\n  verdict: {}",
+        case.responsibility,
+        content.identity_verdict.label()
+    )
+}
+
+fn write_chosen_home_and_scope(
+    formatter: &mut Formatter<'_>,
+    content: &super::DecisionContent,
+) -> fmt::Result {
+    writeln!(
+        formatter,
+        "chosen_home_and_scope:\n  action: {}\n  scope: {}",
+        content.action.label(),
+        content.accepted_scope
+    )
+}
+
+fn write_alternatives_rejected(
+    formatter: &mut Formatter<'_>,
+    content: &super::DecisionContent,
+) -> fmt::Result {
+    formatter.write_str("alternatives_rejected:\n")?;
+    for alternative in &content.alternatives_rejected {
+        writeln!(
+            formatter,
+            "- alternative: {}\n  reason: {}",
+            alternative.alternative, alternative.reason
+        )?;
+    }
+    Ok(())
+}
+
+fn write_compatibility_and_verification(
+    formatter: &mut Formatter<'_>,
+    content: &super::DecisionContent,
+) -> fmt::Result {
+    writeln!(
+        formatter,
+        "compatibility_and_release_consequences: {}\nverification_conditions:",
+        content.compatibility_consequences
+    )?;
+    write_string_list(formatter, &content.verification_conditions)
+}
+
 /// Renders the case and every recorded occurrence deterministically.
 impl Display for ShowOutcome {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
@@ -188,9 +378,7 @@ impl Display for ShowOutcome {
                 occurrence.repository_id, occurrence.consumer, occurrence.independence
             )?;
             for evidence in &occurrence.evidence {
-                let kind = match evidence.kind {
-                    super::EvidenceKind::Commit => "commit",
-                };
+                let kind = evidence.kind.label();
                 writeln!(
                     formatter,
                     "  - kind: {kind}\n    reference: {}",
@@ -208,9 +396,7 @@ impl Display for ShowOutcome {
                 early_review.reason, early_review.review_appetite
             )?;
             for evidence in &early_review.evidence {
-                let kind = match evidence.kind {
-                    super::EvidenceKind::Commit => "commit",
-                };
+                let kind = evidence.kind.label();
                 writeln!(
                     formatter,
                     "  - kind: {kind}\n    reference: {}",
@@ -288,12 +474,7 @@ pub fn show(
     case_id: &str,
     root_overrides: &[PathBuf],
 ) -> Result<ShowOutcome, TerminalFailure> {
-    let case_id = Uuid::parse_str(case_id).map_err(|error| {
-        TerminalFailure::refusal(
-            format!("case identity `{case_id}` is invalid: {error}"),
-            "supply the opaque UUID recorded for the stewarded case",
-        )
-    })?;
+    let case_id = parse_recorded_case_id(case_id)?;
     let repository_root = find_repository_root(working_directory)?;
     let steward = read_steward(&repository_root)?;
     let relative_case_directory = Path::new("reuse-evidence/cases").join(case_id.to_string());
@@ -312,6 +493,58 @@ pub fn show(
     Ok(ShowOutcome {
         case,
         portfolio_available,
+    })
+}
+
+/// Projects the implementation brief for one accepted steward-local decision.
+///
+/// # Errors
+///
+/// Returns a refusal when the identity, steward, case, or accepted decision
+/// cannot be read safely.
+pub fn brief(
+    working_directory: &Path,
+    case_id: &str,
+    root_overrides: &[PathBuf],
+) -> Result<BriefOutcome, TerminalFailure> {
+    let case_id = parse_recorded_case_id(case_id)?;
+    let repository_root = find_repository_root(working_directory)?;
+    let steward = read_steward(&repository_root)?;
+    let relative_case_directory = Path::new("reuse-evidence/cases").join(case_id.to_string());
+    validate_case_storage_path(&repository_root, &relative_case_directory)?;
+    let case = read_case_for_brief(
+        &repository_root,
+        &relative_case_directory,
+        case_id,
+        steward.repository_id(),
+    )?;
+    if case.decision.is_none() {
+        let state = case.state();
+        let resolution = if state.authorizes_review() {
+            format!("record an accepted reuse decision, then rerun `case brief {case_id}`")
+        } else {
+            format!(
+                "make the case review-ready, record an accepted reuse decision, then rerun `case brief {case_id}`"
+            )
+        };
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case `{case_id}` has no accepted reuse decision; current state is `{}`",
+                state.label()
+            ),
+            resolution,
+        ));
+    }
+    let privacy = super::reported_privacy(&case, &steward, root_overrides);
+    Ok(BriefOutcome { case, privacy })
+}
+
+fn parse_recorded_case_id(case_id: &str) -> Result<Uuid, TerminalFailure> {
+    Uuid::parse_str(case_id).map_err(|error| {
+        TerminalFailure::refusal(
+            format!("case identity `{case_id}` is invalid: {error}"),
+            "supply the opaque UUID recorded for the stewarded case",
+        )
     })
 }
 
@@ -620,6 +853,32 @@ pub(super) fn read_case_for_decision(
                 "case identity `{case_id}` is not stewarded by repository `{steward_repository_id}`"
             ),
             "run `case list` in this steward repository and retry `case decide` with a recorded review-ready case identity",
+        ));
+    }
+    read_case(
+        repository_root,
+        relative_case_directory,
+        case_id,
+        steward_repository_id,
+    )
+}
+
+fn read_case_for_brief(
+    repository_root: &Path,
+    relative_case_directory: &Path,
+    case_id: Uuid,
+    steward_repository_id: Uuid,
+) -> Result<CaseRecord, TerminalFailure> {
+    let case_directory = repository_root.join(relative_case_directory);
+    if matches!(
+        fs::metadata(&case_directory),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    ) {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case identity `{case_id}` is not stewarded by repository `{steward_repository_id}`"
+            ),
+            "run `case list` in this steward repository, then retry `case brief <CASE_ID>` with one of its recorded case identities",
         ));
     }
     read_case(

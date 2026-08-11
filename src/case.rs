@@ -6,7 +6,7 @@ mod publication;
 mod read;
 
 pub use instant::RecordedInstant;
-pub use read::{ListOutcome, ShowOutcome, list, show};
+pub use read::{BriefOutcome, ListOutcome, ShowOutcome, brief, list, show};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Display, Formatter};
@@ -184,6 +184,14 @@ enum EvidenceKind {
     Commit,
 }
 
+impl EvidenceKind {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Commit => "commit",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum IdentityVerdict {
@@ -195,11 +203,20 @@ enum IdentityVerdict {
 
 impl IdentityVerdict {
     const NAMES: &[&str] = &[
-        "same_responsibility",
-        "different_responsibilities",
-        "insufficient_evidence",
-        "existing_abstraction_is_wrong",
+        Self::SameResponsibility.label(),
+        Self::DifferentResponsibilities.label(),
+        Self::InsufficientEvidence.label(),
+        Self::ExistingAbstractionIsWrong.label(),
     ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::SameResponsibility => "same_responsibility",
+            Self::DifferentResponsibilities => "different_responsibilities",
+            Self::InsufficientEvidence => "insufficient_evidence",
+            Self::ExistingAbstractionIsWrong => "existing_abstraction_is_wrong",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -220,18 +237,38 @@ enum DecisionAction {
 
 impl DecisionAction {
     const NAMES: &[&str] = &[
-        "retain_intentional_duplication",
-        "wait_for_more_evidence",
-        "use_existing_dependency",
-        "extract_or_deepen_locally",
-        "create_workspace_package",
-        "create_private_cross_repository_package",
-        "publish_public_package",
-        "centralize_schema_specification_or_fixture_corpus",
-        "replace_copies_with_generated_artifacts",
-        "contribute_missing_behavior_upstream",
-        "split_inline_or_narrow_existing_abstraction",
+        Self::RetainIntentionalDuplication.label(),
+        Self::WaitForMoreEvidence.label(),
+        Self::UseExistingDependency.label(),
+        Self::ExtractOrDeepenLocally.label(),
+        Self::CreateWorkspacePackage.label(),
+        Self::CreatePrivateCrossRepositoryPackage.label(),
+        Self::PublishPublicPackage.label(),
+        Self::CentralizeSchemaSpecificationOrFixtureCorpus.label(),
+        Self::ReplaceCopiesWithGeneratedArtifacts.label(),
+        Self::ContributeMissingBehaviorUpstream.label(),
+        Self::SplitInlineOrNarrowExistingAbstraction.label(),
     ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::RetainIntentionalDuplication => "retain_intentional_duplication",
+            Self::WaitForMoreEvidence => "wait_for_more_evidence",
+            Self::UseExistingDependency => "use_existing_dependency",
+            Self::ExtractOrDeepenLocally => "extract_or_deepen_locally",
+            Self::CreateWorkspacePackage => "create_workspace_package",
+            Self::CreatePrivateCrossRepositoryPackage => "create_private_cross_repository_package",
+            Self::PublishPublicPackage => "publish_public_package",
+            Self::CentralizeSchemaSpecificationOrFixtureCorpus => {
+                "centralize_schema_specification_or_fixture_corpus"
+            }
+            Self::ReplaceCopiesWithGeneratedArtifacts => "replace_copies_with_generated_artifacts",
+            Self::ContributeMissingBehaviorUpstream => "contribute_missing_behavior_upstream",
+            Self::SplitInlineOrNarrowExistingAbstraction => {
+                "split_inline_or_narrow_existing_abstraction"
+            }
+        }
+    }
 
     const fn authorizes_implementation(self) -> bool {
         !matches!(
@@ -777,7 +814,7 @@ fn append_retry_outcome(
         event_path,
         revision: event.sequence,
         state: case.state(),
-        privacy: retry_privacy(case, steward, root_overrides),
+        privacy: reported_privacy(case, steward, root_overrides),
         event: event.bytes,
     }
 }
@@ -1171,7 +1208,7 @@ fn decision_retry_outcome(
         case_id,
         event_path,
         event.sequence,
-        retry_privacy(case, steward, root_overrides),
+        reported_privacy(case, steward, root_overrides),
         action,
         event.bytes,
     )
@@ -1395,7 +1432,7 @@ fn early_review_retry_outcome(
         case_id,
         event_path,
         revision: event.sequence,
-        privacy: retry_privacy(case, steward, root_overrides),
+        privacy: reported_privacy(case, steward, root_overrides),
         event: event.bytes,
     }
 }
@@ -1646,11 +1683,11 @@ fn derive_complete_case_privacy(
     }
 }
 
-/// Reports complete case privacy for an exact retry, or why it cannot be derived.
+/// Reports complete case privacy for a no-write result, or why it cannot be derived.
 ///
-/// An exact retry writes nothing, so an underivable privacy is reported rather than refused. Every
-/// later event type reports it the same way, as ADR 0010 requires of the retry outcome.
-fn retry_privacy(
+/// A no-write result reports underivable privacy rather than refusing. Every later event retry and
+/// the implementation-brief projection use the same consequence.
+fn reported_privacy(
     case: &read::CaseRecord,
     steward: &marker::Marker,
     root_overrides: &[PathBuf],

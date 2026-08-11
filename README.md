@@ -8,11 +8,11 @@ The project is deliberately not a clone detector and not an automatic refactorin
 
 ## Status
 
-**Repository enrollment, marker-only portfolio reporting with derived change state, durable case opening, growth, early-review authorization, accepted reuse decisions, reading, and skill governance implemented.**
+**Repository enrollment, marker-only portfolio reporting with derived change state, durable case opening, growth, early-review authorization, accepted reuse decisions, implementation-brief projection, reading, and skill governance implemented.**
 
 The public Rust crate and standalone `reuse-evidence` binary can enroll a Git repository, including an npm workspace with no Cargo project. Enrollment writes a human-readable version 1 TOML marker at the nearest repository root, safely revalidates an existing marker without minting another identity, and uses the binary's shared success, unsafe-failure, and refusal exit meanings.
 
-Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, unsupported or unreadable markers, and new, moved, unavailable, or visibility-changed repositories. The case command can preview and atomically open a steward-local case from two or more evidenced occurrences, append a later occurrence against an expected revision, record a human early-review override on a watching case, record the exact accepted decision on a review-ready case, list every case stewarded by the current repository, and show one case's complete evidence record with freshly derived lifecycle, privacy-conflict, and staleness conditions. The binary also mounts the published `skill-evidence` lifecycle under `reuse-evidence skills` and this repository commits the four operator packages it installs. Capture, reuse-review proposal authoring, implementation-brief projection, verification, and this project's own `reuse-evidence-*` skill packages are not implemented yet.
+Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, unsupported or unreadable markers, and new, moved, unavailable, or visibility-changed repositories. The case command can preview and atomically open a steward-local case from two or more evidenced occurrences, append a later occurrence against an expected revision, record a human early-review override on a watching case, record the exact accepted decision on a review-ready case, project that decision's implementation brief, list every case stewarded by the current repository, and show one case's complete evidence record with freshly derived lifecycle, privacy-conflict, and staleness conditions. The binary also mounts the published `skill-evidence` lifecycle under `reuse-evidence skills` and this repository commits the four operator packages it installs. Capture, reuse-review proposal authoring, verification, and this project's own `reuse-evidence-*` skill packages are not implemented yet.
 
 The selected delivery constraints are:
 
@@ -261,6 +261,21 @@ Save the exact `event:` bytes after human approval and repeat without `--preview
 The identity verdict is one of `same_responsibility`, `different_responsibilities`, `insufficient_evidence`, or `existing_abstraction_is_wrong`. The permitted actions are `retain_intentional_duplication`, `wait_for_more_evidence`, `use_existing_dependency`, `extract_or_deepen_locally`, `create_workspace_package`, `create_private_cross_repository_package`, `publish_public_package`, `centralize_schema_specification_or_fixture_corpus`, `replace_copies_with_generated_artifacts`, `contribute_missing_behavior_upstream`, and `split_inline_or_narrow_existing_abstraction`.
 
 The first two actions authorize no implementation and must omit `invariant_contract`, `existing_packages_considered`, `required_consumer_level_tests`, `migration_expectations`, and `rollback_or_resplitting_path`. Every other action requires all five with non-empty content. Every affected repository-and-consumer pair must already be evidenced by an occurrence in the case. A watching case, stale expected revision, second decision, unrecognized verdict or action, or private case under a currently public steward refuses without writing. An exact prepared-event retry succeeds without writing even when current portfolio roots or participants are unavailable; a different identity at its occupied sequence is a revision conflict.
+
+## Project the implementation brief
+
+After a decision is recorded, project its bounded handoff from anywhere inside the steward repository:
+
+```console
+reuse-evidence case brief 00000000-0000-4000-8000-000000000011 \
+  --root /home/alice/src
+```
+
+The command takes only the case identity and optional repeated portfolio roots. It reads the opening responsibility, the recorded occurrence evidence, and the accepted decision; it requires no proposal or expected revision. It writes no event, generated brief, cache, or other artifact.
+
+For an implementation-authorizing action, the output carries the accepted responsibility identity, every evidence-bearing consumer and any accepted expectation placed on it, the invariant contract, non-responsibilities, chosen action and scope, rejected alternatives, packages considered, consumer-level tests, compatibility and release consequences, migration order, rollback or re-splitting strategy, and verification conditions. For `retain_intentional_duplication` or `wait_for_more_evidence`, it succeeds while stating that no implementation is authorized, then renders the decision fields that explain that result. A case with no accepted decision refuses and reports its current derived state; an identity not stewarded by the current repository also refuses.
+
+With resolvable portfolio roots, the brief reports the same current private-dominance consequence as event receipts. Without portfolio configuration it still succeeds, reports `privacy: unknown` with the conservative conditions-unavailable footer, and renders the handoff from durable case state. The text is command output under the version 0.x policy, not a separately authored or compatibility-promised document.
 
 ## Read cases
 

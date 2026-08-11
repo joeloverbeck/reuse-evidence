@@ -439,6 +439,208 @@ fn record_overridden_decision_then_append(fixture: &Fixture, steward: &Path) {
     }
 }
 
+fn record_three_occurrence_decision(fixture: &Fixture, steward: &Path, decision: &str) {
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&three_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        steward,
+        &["case", "open", "--proposal", proposal_path, "--root", root],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fs::write(&proposal, decision).expect("decision proposal should be writable");
+    let decided = run_in(
+        steward,
+        &[
+            "case",
+            "decide",
+            SECOND_CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            proposal_path,
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(decided.status.code(), Some(0), "{decided:?}");
+}
+
+#[test]
+fn implementation_brief_projects_all_change_decision_contents_without_writes() {
+    let fixture = Fixture::new("change-implementation-brief");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    record_three_occurrence_decision(&fixture, &steward, &change_decision_proposal());
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let before = files_beneath(&fixture.root);
+
+    let brief = run_in(&steward, &["case", "brief", SECOND_CASE_ID, "--root", root]);
+
+    assert_eq!(brief.status.code(), Some(0), "{brief:?}");
+    assert!(brief.stderr.is_empty(), "{brief:?}");
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "projecting an implementation brief must preserve every fixture byte"
+    );
+    assert_eq!(
+        String::from_utf8(brief.stdout).expect("stdout should be UTF-8"),
+        format!(
+            "implementation brief\ncase_id: {SECOND_CASE_ID}\nprivacy: private\nimplementation: authorized\naccepted_responsibility_identity:\n  responsibility: preserve generated artifact identity\n  verdict: same_responsibility\nevidence_bearing_consumers:\n- repository_id: {FIRST_PARTICIPANT_ID}\n  consumer: rust-release-tool\n  independence: separate release lifecycle\n  expectation: migrate after the package publishes\n  evidence:\n  - kind: commit\n    reference: 3333333\n    path: src/artifact.rs\n- repository_id: {SECOND_PARTICIPANT_ID}\n  consumer: web-deployment-tool\n  independence: independent npm workspace and owner\n  expectation: retain its language-specific adapter\n  evidence:\n  - kind: commit\n    reference: 4444444\n    path: packages/artifacts/src/id.ts\n- repository_id: {THIRD_PARTICIPANT_ID}\n  consumer: desktop-packager\n  independence: separate distribution contract\n  evidence:\n  - kind: commit\n    reference: 5555555\n    path: src/package.rs\ninvariant_contract: one opaque UUID identifies one immutable event\nnon_responsibilities:\n- case lifecycle storage\nchosen_home_and_scope:\n  action: publish_public_package\n  scope: the durable event identity contract\nalternatives_rejected:\n- alternative: retain intentional duplication\n  reason: coordinated fixes already cross the consumer boundary\nexisting_packages_considered:\n- package: uuid\n  fit: supplies identifiers but not the event contract\n  reason: the invariant remains portfolio-owned\nrequired_consumer_level_tests:\n- each consumer round-trips an event identity\ncompatibility_and_release_consequences: preserve the existing event identity spelling\nmigration_order:\n- order: 1\n  expectation: publish the invariant contract and its tests\n- order: 2\n  expectation: migrate the Rust consumer before the web adapter\nrollback_or_resplitting_strategy: restore consumer-local implementations without rewriting recorded evidence\nverification_conditions:\n- all named consumers pass their public contract tests\n"
+        )
+    );
+}
+
+#[test]
+fn implementation_brief_carries_every_recorded_occurrence_and_evidence_reference() {
+    let fixture = Fixture::new("brief-evidence-bearing-consumers");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    record_three_occurrence_decision(&fixture, &steward, &change_decision_proposal());
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+
+    let brief = run_in(&steward, &["case", "brief", SECOND_CASE_ID, "--root", root]);
+
+    assert_eq!(brief.status.code(), Some(0), "{brief:?}");
+    let stdout = String::from_utf8(brief.stdout).expect("stdout should be UTF-8");
+    for recorded_occurrence in [
+        format!(
+            "- repository_id: {FIRST_PARTICIPANT_ID}\n  consumer: rust-release-tool\n  independence: separate release lifecycle\n  expectation: migrate after the package publishes\n  evidence:\n  - kind: commit\n    reference: 3333333\n    path: src/artifact.rs\n"
+        ),
+        format!(
+            "- repository_id: {SECOND_PARTICIPANT_ID}\n  consumer: web-deployment-tool\n  independence: independent npm workspace and owner\n  expectation: retain its language-specific adapter\n  evidence:\n  - kind: commit\n    reference: 4444444\n    path: packages/artifacts/src/id.ts\n"
+        ),
+        format!(
+            "- repository_id: {THIRD_PARTICIPANT_ID}\n  consumer: desktop-packager\n  independence: separate distribution contract\n  evidence:\n  - kind: commit\n    reference: 5555555\n    path: src/package.rs\n"
+        ),
+    ] {
+        assert!(stdout.contains(&recorded_occurrence), "{stdout}");
+    }
+}
+
+#[test]
+fn no_change_brief_reports_that_no_implementation_is_authorized_with_success() {
+    let fixture = Fixture::new("no-change-implementation-brief");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    record_three_occurrence_decision(&fixture, &steward, &no_change_decision_proposal());
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let before = files_beneath(&fixture.root);
+
+    let brief = run_in(&steward, &["case", "brief", SECOND_CASE_ID, "--root", root]);
+
+    assert_eq!(brief.status.code(), Some(0), "{brief:?}");
+    assert!(brief.stderr.is_empty(), "{brief:?}");
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "projecting a no-change brief must preserve every fixture byte"
+    );
+    assert_eq!(
+        String::from_utf8(brief.stdout).expect("stdout should be UTF-8"),
+        format!(
+            "implementation brief\ncase_id: {SECOND_CASE_ID}\nprivacy: private\nimplementation: not authorized\ndecision: authorizes no implementation\naccepted_responsibility_identity:\n  responsibility: preserve generated artifact identity\n  verdict: different_responsibilities\nchosen_home_and_scope:\n  action: retain_intentional_duplication\n  scope: the two evidenced consumer implementations\nnon_responsibilities:\n- future consumers\nalternatives_rejected:\n- alternative: publish a public package\n  reason: the consumers change for different reasons\ncompatibility_and_release_consequences: each consumer retains its current contract\nverification_conditions:\n- both local implementations remain independently tested\n"
+        )
+    );
+}
+
+#[test]
+fn brief_without_an_accepted_decision_refuses_with_the_current_state_and_writes_nothing() {
+    let fixture = Fixture::new("brief-without-decision");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&three_occurrence_proposal());
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            proposal.to_str().expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    let before = files_beneath(&fixture.root);
+
+    let brief = run_in(&steward, &["case", "brief", SECOND_CASE_ID, "--root", root]);
+
+    assert_eq!(brief.status.code(), Some(3), "{brief:?}");
+    assert!(brief.stdout.is_empty(), "{brief:?}");
+    assert_eq!(
+        String::from_utf8(brief.stderr).expect("stderr should be UTF-8"),
+        format!(
+            "refusal: case `{SECOND_CASE_ID}` has no accepted reuse decision; current state is `review-ready`\nresolution: record an accepted reuse decision, then rerun `case brief {SECOND_CASE_ID}`\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "refusing a brief without an accepted decision must preserve every fixture byte"
+    );
+}
+
+#[test]
+fn brief_for_an_unknown_case_identity_refuses_and_writes_nothing() {
+    let fixture = Fixture::new("brief-unknown-case");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    let before = files_beneath(&fixture.root);
+
+    let brief =
+        run_without_portfolio_configuration(&fixture, &steward, &["case", "brief", CASE_ID]);
+
+    assert_eq!(brief.status.code(), Some(3), "{brief:?}");
+    assert!(brief.stdout.is_empty(), "{brief:?}");
+    assert_eq!(
+        String::from_utf8(brief.stderr).expect("stderr should be UTF-8"),
+        format!(
+            "refusal: case identity `{CASE_ID}` is not stewarded by repository `{STEWARD_ID}`\nresolution: run `case list` in this steward repository, then retry `case brief <CASE_ID>` with one of its recorded case identities\n"
+        )
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "refusing an unknown brief target must preserve every fixture byte"
+    );
+}
+
+#[test]
+fn brief_without_portfolio_configuration_succeeds_with_conservative_privacy() {
+    let fixture = Fixture::new("brief-without-portfolio");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    record_three_occurrence_decision(&fixture, &steward, &change_decision_proposal());
+    let before = files_beneath(&fixture.root);
+
+    let brief =
+        run_without_portfolio_configuration(&fixture, &steward, &["case", "brief", SECOND_CASE_ID]);
+
+    assert_eq!(brief.status.code(), Some(0), "{brief:?}");
+    assert!(brief.stderr.is_empty(), "{brief:?}");
+    let stdout = String::from_utf8(brief.stdout).expect("stdout should be UTF-8");
+    assert!(
+        stdout.starts_with(&format!(
+            "implementation brief\ncase_id: {SECOND_CASE_ID}\nprivacy: unknown\nportfolio conditions unavailable: configure portfolio roots or supply `--root <PATH>` to derive privacy conflicts and staleness\nimplementation: authorized\n"
+        )),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "verification_conditions:\n- all named consumers pass their public contract tests\n"
+        ),
+        "{stdout}"
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "a brief without portfolio configuration must preserve every fixture byte"
+    );
+}
+
 #[test]
 fn decision_preview_on_occurrence_ready_case_renders_the_event_without_writes() {
     let fixture = Fixture::new("decision-preview");
