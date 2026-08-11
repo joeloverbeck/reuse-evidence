@@ -51,6 +51,13 @@ name = "skills_cli"
 path = "tests/skills_cli.rs"
 required-features = ["cli"]
 
+# In-process coverage that reaches `case` and `portfolio`, which are public
+# modules only under the `cli` feature.
+[[test]]
+name = "portfolio_location_library"
+path = "tests/portfolio_location_library.rs"
+required-features = ["cli"]
+
 [lints.rust]
 unsafe_code = "forbid"
 

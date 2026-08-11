@@ -173,7 +173,9 @@ fn run(cli: Cli) -> ExitCode {
             expected_repository_id,
         }) => run_enroll(ecosystem_id, visibility, expected_repository_id),
         Some(Command::SetVisibility { visibility }) => run_set_visibility(visibility),
-        Some(Command::Portfolio { root }) => run_portfolio(&root),
+        Some(Command::Portfolio { root }) => {
+            run_portfolio(&portfolio::PortfolioLocation::from_environment(root))
+        }
         Some(Command::Case { command }) => run_case(command),
         Some(Command::Skills(args)) => return run_skills(args),
         None => {
@@ -195,71 +197,37 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
             proposal,
             root,
             preview,
-        } => run_open(proposal.as_deref(), &root, preview),
+        } => run_open(
+            proposal.as_deref(),
+            &portfolio::PortfolioLocation::from_environment(root),
+            preview,
+        ),
         CaseCommand::Append {
             case_id,
             expected_revision,
             proposal,
             root,
             preview,
-        } => {
-            let expected_revision = expected_revision.ok_or_else(|| {
-                TerminalFailure::refusal(
-                    "missing required `--expected-revision`",
-                    "rerun with `case append <CASE_ID> --expected-revision <REVISION>`",
-                )
-            })?;
-            let proposal = proposal.ok_or_else(|| {
-                TerminalFailure::refusal(
-                    "missing required `--proposal`",
-                    "rerun with `case append <CASE_ID> --proposal <PATH>`",
-                )
-            })?;
-            let outcome = case::append(
-                Path::new("."),
-                &case_id,
-                expected_revision,
-                &proposal,
-                &root,
-                RecordedInstant::now()?,
-                preview,
-            )?;
-            print!("{outcome}");
-            Ok(())
-        }
+        } => run_append(
+            &case_id,
+            expected_revision,
+            proposal.as_deref(),
+            &portfolio::PortfolioLocation::from_environment(root),
+            preview,
+        ),
         CaseCommand::Override {
             case_id,
             expected_revision,
             proposal,
             root,
             preview,
-        } => {
-            let expected_revision = expected_revision.ok_or_else(|| {
-                TerminalFailure::refusal(
-                    "missing required `--expected-revision`",
-                    format!(
-                        "run `case show {case_id}` to recover the current revision, then rerun `case override {case_id} --expected-revision <REVISION>`"
-                    ),
-                )
-            })?;
-            let proposal = proposal.ok_or_else(|| {
-                TerminalFailure::refusal(
-                    "missing required `--proposal`",
-                    "rerun with `case override <CASE_ID> --proposal <PATH>`",
-                )
-            })?;
-            let outcome = case::authorize_early_review(
-                Path::new("."),
-                &case_id,
-                expected_revision,
-                &proposal,
-                &root,
-                RecordedInstant::now()?,
-                preview,
-            )?;
-            print!("{outcome}");
-            Ok(())
-        }
+        } => run_override(
+            &case_id,
+            expected_revision,
+            proposal.as_deref(),
+            &portfolio::PortfolioLocation::from_environment(root),
+            preview,
+        ),
         CaseCommand::Decide {
             case_id,
             expected_revision,
@@ -270,21 +238,24 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
             &case_id,
             expected_revision,
             proposal.as_deref(),
-            &root,
+            &portfolio::PortfolioLocation::from_environment(root),
             preview,
         ),
         CaseCommand::Brief { case_id, root } => {
-            let outcome = case::brief(Path::new("."), &case_id, &root)?;
+            let location = portfolio::PortfolioLocation::from_environment(root);
+            let outcome = case::brief(Path::new("."), &case_id, &location)?;
             print!("{outcome}");
             Ok(())
         }
         CaseCommand::List { root } => {
-            let outcome = case::list(Path::new("."), &root)?;
+            let location = portfolio::PortfolioLocation::from_environment(root);
+            let outcome = case::list(Path::new("."), &location)?;
             print!("{outcome}");
             Ok(())
         }
         CaseCommand::Show { case_id, root } => {
-            let outcome = case::show(Path::new("."), &case_id, &root)?;
+            let location = portfolio::PortfolioLocation::from_environment(root);
+            let outcome = case::show(Path::new("."), &case_id, &location)?;
             print!("{outcome}");
             Ok(())
         }
@@ -293,7 +264,7 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
 
 fn run_open(
     proposal: Option<&Path>,
-    root: &[PathBuf],
+    location: &portfolio::PortfolioLocation,
     preview: bool,
 ) -> Result<(), TerminalFailure> {
     let proposal = proposal.ok_or_else(|| {
@@ -305,7 +276,73 @@ fn run_open(
     let outcome = case::open(
         Path::new("."),
         proposal,
-        root,
+        location,
+        RecordedInstant::now()?,
+        preview,
+    )?;
+    print!("{outcome}");
+    Ok(())
+}
+
+fn run_append(
+    case_id: &str,
+    expected_revision: Option<i64>,
+    proposal: Option<&Path>,
+    location: &portfolio::PortfolioLocation,
+    preview: bool,
+) -> Result<(), TerminalFailure> {
+    let expected_revision = expected_revision.ok_or_else(|| {
+        TerminalFailure::refusal(
+            "missing required `--expected-revision`",
+            "rerun with `case append <CASE_ID> --expected-revision <REVISION>`",
+        )
+    })?;
+    let proposal = proposal.ok_or_else(|| {
+        TerminalFailure::refusal(
+            "missing required `--proposal`",
+            "rerun with `case append <CASE_ID> --proposal <PATH>`",
+        )
+    })?;
+    let outcome = case::append(
+        Path::new("."),
+        case_id,
+        expected_revision,
+        proposal,
+        location,
+        RecordedInstant::now()?,
+        preview,
+    )?;
+    print!("{outcome}");
+    Ok(())
+}
+
+fn run_override(
+    case_id: &str,
+    expected_revision: Option<i64>,
+    proposal: Option<&Path>,
+    location: &portfolio::PortfolioLocation,
+    preview: bool,
+) -> Result<(), TerminalFailure> {
+    let expected_revision = expected_revision.ok_or_else(|| {
+        TerminalFailure::refusal(
+            "missing required `--expected-revision`",
+            format!(
+                "run `case show {case_id}` to recover the current revision, then rerun `case override {case_id} --expected-revision <REVISION>`"
+            ),
+        )
+    })?;
+    let proposal = proposal.ok_or_else(|| {
+        TerminalFailure::refusal(
+            "missing required `--proposal`",
+            "rerun with `case override <CASE_ID> --proposal <PATH>`",
+        )
+    })?;
+    let outcome = case::authorize_early_review(
+        Path::new("."),
+        case_id,
+        expected_revision,
+        proposal,
+        location,
         RecordedInstant::now()?,
         preview,
     )?;
@@ -317,7 +354,7 @@ fn run_decide(
     case_id: &str,
     expected_revision: Option<i64>,
     proposal: Option<&Path>,
-    root: &[PathBuf],
+    location: &portfolio::PortfolioLocation,
     preview: bool,
 ) -> Result<(), TerminalFailure> {
     let expected_revision = expected_revision.ok_or_else(|| {
@@ -339,7 +376,7 @@ fn run_decide(
         case_id,
         expected_revision,
         proposal,
-        root,
+        location,
         RecordedInstant::now()?,
         preview,
     )?;
@@ -383,8 +420,8 @@ const fn skill_exit_meaning(exit: skill_evidence::cli::Exit) -> ExitMeaning {
     }
 }
 
-fn run_portfolio(roots: &[PathBuf]) -> Result<(), TerminalFailure> {
-    let report = portfolio::report(roots)?;
+fn run_portfolio(location: &portfolio::PortfolioLocation) -> Result<(), TerminalFailure> {
+    let report = portfolio::report(location)?;
     match report {
         portfolio::PortfolioReport::Complete(report) => {
             print!("{report}");

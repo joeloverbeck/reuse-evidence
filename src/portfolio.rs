@@ -84,6 +84,62 @@ enum RootSelection {
     Unconfigured(PathBuf),
 }
 
+/// Where one command resolves the portfolio from.
+///
+/// Resolution reads the process environment and nothing else: no filesystem
+/// access, no validation, and no refusal. A user-local directory the platform's
+/// variables do not determine is carried as an absence, so each command decides
+/// whether that absence refuses or degrades. `portfolio` refuses; the case
+/// queries report unknown conditions and succeed.
+#[derive(Clone, Debug)]
+pub struct PortfolioLocation {
+    root_overrides: Vec<PathBuf>,
+    config_file: Option<PathBuf>,
+    state_file: Option<PathBuf>,
+}
+
+impl PortfolioLocation {
+    /// Resolves the location for one run from the roots supplied on the command
+    /// line and the process environment.
+    #[must_use]
+    pub fn from_environment(root_overrides: Vec<PathBuf>) -> Self {
+        Self {
+            root_overrides,
+            config_file: CONFIGURATION
+                .resolve_from_environment()
+                .as_deref()
+                .map(|directory| CONFIGURATION.file_beneath(directory)),
+            state_file: STATE
+                .resolve_from_environment()
+                .as_deref()
+                .map(|directory| STATE.file_beneath(directory)),
+        }
+    }
+
+    /// Builds a location from explicit user-local directories, without
+    /// consulting the process environment.
+    ///
+    /// `None` states that the directory is undeterminable, which is what an
+    /// unset `XDG_CONFIG_HOME` with no `HOME` means to a command.
+    #[must_use]
+    pub fn from_user_directories(
+        root_overrides: Vec<PathBuf>,
+        configuration_directory: Option<&Path>,
+        state_directory: Option<&Path>,
+    ) -> Self {
+        Self {
+            root_overrides,
+            config_file: configuration_directory
+                .map(|directory| CONFIGURATION.file_beneath(directory)),
+            state_file: state_directory.map(|directory| STATE.file_beneath(directory)),
+        }
+    }
+
+    fn root_overrides(&self) -> &[PathBuf] {
+        &self.root_overrides
+    }
+}
+
 /// Rescans enrolled repositories and renders the current portfolio report.
 ///
 /// # Errors
@@ -91,8 +147,8 @@ enum RootSelection {
 /// Returns a classified terminal failure when roots, markers, or derived state
 /// cannot be inspected safely.
 #[cfg(feature = "cli")]
-pub fn report(root_overrides: &[PathBuf]) -> Result<PortfolioReport, TerminalFailure> {
-    let roots = selected_roots(root_overrides)?;
+pub fn report(location: &PortfolioLocation) -> Result<PortfolioReport, TerminalFailure> {
+    let roots = selected_roots(location)?;
     let scan = scan(&roots)?;
     let identity_paths = duplicate_identity_paths(&scan.enrollments);
     let has_identity_conflicts = !identity_paths.is_empty();
@@ -105,7 +161,7 @@ pub fn report(root_overrides: &[PathBuf]) -> Result<PortfolioReport, TerminalFai
         )));
     }
 
-    let state_path = state_path()?;
+    let state_path = state_path(location)?;
     ensure_state_outside_repositories(&state_path, &scan.inspected_repositories)?;
     let _state_lock = acquire_state_lock(&state_path)?;
     let previous_state = load_state(&state_path)?;
@@ -639,20 +695,29 @@ fn replace_state_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     temporary.commit()
 }
 
-pub(crate) fn selected_roots(root_overrides: &[PathBuf]) -> Result<Vec<PathBuf>, TerminalFailure> {
-    match root_selection(root_overrides)? {
+/// Selects the roots to scan, refusing when neither the command line nor the
+/// user-local configuration supplies any.
+pub(crate) fn selected_roots(
+    location: &PortfolioLocation,
+) -> Result<Vec<PathBuf>, TerminalFailure> {
+    match root_selection(location)? {
         RootSelection::Selected(roots) => Ok(roots),
         RootSelection::Unconfigured(config_path) => Err(no_roots_message(&config_path)),
     }
 }
 
+/// Selects the roots to scan, reporting absence rather than refusing when no
+/// selection resolves.
+///
+/// Case queries derive unknown portfolio conditions from `None` and still
+/// succeed, which is why this is a separate answer from [`selected_roots`].
 pub(crate) fn selected_roots_if_configured(
-    root_overrides: &[PathBuf],
+    location: &PortfolioLocation,
 ) -> Result<Option<Vec<PathBuf>>, TerminalFailure> {
-    if !root_overrides.is_empty() {
-        return Ok(Some(root_overrides.to_vec()));
+    if !location.root_overrides().is_empty() {
+        return Ok(Some(location.root_overrides().to_vec()));
     }
-    let Some(config_path) = optional_config_path() else {
+    let Some(config_path) = location.config_file.clone() else {
         return Ok(None);
     };
     match root_selection_from_config(config_path)? {
@@ -661,12 +726,12 @@ pub(crate) fn selected_roots_if_configured(
     }
 }
 
-fn root_selection(root_overrides: &[PathBuf]) -> Result<RootSelection, TerminalFailure> {
-    if !root_overrides.is_empty() {
-        return Ok(RootSelection::Selected(root_overrides.to_vec()));
+fn root_selection(location: &PortfolioLocation) -> Result<RootSelection, TerminalFailure> {
+    if !location.root_overrides().is_empty() {
+        return Ok(RootSelection::Selected(location.root_overrides().to_vec()));
     }
 
-    root_selection_from_config(config_path()?)
+    root_selection_from_config(config_path(location)?)
 }
 
 fn root_selection_from_config(config_path: PathBuf) -> Result<RootSelection, TerminalFailure> {
@@ -822,8 +887,8 @@ fn inspect_marker(repository: &Path) -> MarkerInspection {
     }
 }
 
-fn config_path() -> Result<PathBuf, TerminalFailure> {
-    optional_config_path().ok_or_else(|| {
+fn config_path(location: &PortfolioLocation) -> Result<PathBuf, TerminalFailure> {
+    location.config_file.clone().ok_or_else(|| {
         TerminalFailure::refusal(
             "the user-local configuration directory cannot be determined",
             "set `APPDATA` on Windows, or `XDG_CONFIG_HOME` or `HOME` on Unix-like systems; alternatively rerun with `--root <PATH>`",
@@ -831,58 +896,91 @@ fn config_path() -> Result<PathBuf, TerminalFailure> {
     })
 }
 
-fn optional_config_path() -> Option<PathBuf> {
-    platform_config_directory()
-        .map(|directory| directory.join("reuse-evidence").join("config.toml"))
-}
-
-fn state_path() -> Result<PathBuf, TerminalFailure> {
-    platform_state_directory()
-        .map(|directory| directory.join("reuse-evidence").join("portfolio.toml"))
-        .ok_or_else(|| {
-            TerminalFailure::refusal(
-                "the user-local state directory cannot be determined",
-                "set `LOCALAPPDATA` on Windows, or `XDG_STATE_HOME` or `HOME` on Unix-like systems",
-            )
-        })
-}
-
-#[cfg(target_os = "windows")]
-fn platform_config_directory() -> Option<PathBuf> {
-    nonempty_environment_path("APPDATA")
-}
-
-#[cfg(target_os = "windows")]
-fn platform_state_directory() -> Option<PathBuf> {
-    nonempty_environment_path("LOCALAPPDATA")
-}
-
-#[cfg(target_os = "macos")]
-fn platform_state_directory() -> Option<PathBuf> {
-    nonempty_environment_path("XDG_STATE_HOME").or_else(|| {
-        nonempty_environment_path("HOME")
-            .map(|home| home.join("Library").join("Application Support"))
+#[cfg(feature = "cli")]
+fn state_path(location: &PortfolioLocation) -> Result<PathBuf, TerminalFailure> {
+    location.state_file.clone().ok_or_else(|| {
+        TerminalFailure::refusal(
+            "the user-local state directory cannot be determined",
+            "set `LOCALAPPDATA` on Windows, or `XDG_STATE_HOME` or `HOME` on Unix-like systems",
+        )
     })
 }
 
-#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-fn platform_state_directory() -> Option<PathBuf> {
-    nonempty_environment_path("XDG_STATE_HOME")
-        .or_else(|| nonempty_environment_path("HOME").map(|home| home.join(".local/state")))
+/// One kind of user-local directory and the environment variables that locate it.
+struct UserDirectory {
+    windows_variable: &'static str,
+    xdg_variable: &'static str,
+    unix_home_relative: &'static str,
+    file_name: &'static str,
 }
 
-#[cfg(target_os = "macos")]
-fn platform_config_directory() -> Option<PathBuf> {
-    nonempty_environment_path("XDG_CONFIG_HOME").or_else(|| {
-        nonempty_environment_path("HOME")
-            .map(|home| home.join("Library").join("Application Support"))
-    })
+const CONFIGURATION: UserDirectory = UserDirectory {
+    windows_variable: "APPDATA",
+    xdg_variable: "XDG_CONFIG_HOME",
+    unix_home_relative: ".config",
+    file_name: "config.toml",
+};
+
+const STATE: UserDirectory = UserDirectory {
+    windows_variable: "LOCALAPPDATA",
+    xdg_variable: "XDG_STATE_HOME",
+    unix_home_relative: ".local/state",
+    file_name: "portfolio.toml",
+};
+
+/// Where macOS keeps both kinds, in place of the XDG-style home-relative path.
+const MACOS_HOME_RELATIVE: &str = "Library/Application Support";
+
+/// Which precedence a host applies to the user-local directories.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Platform {
+    Windows,
+    MacOs,
+    Xdg,
 }
 
-#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-fn platform_config_directory() -> Option<PathBuf> {
-    nonempty_environment_path("XDG_CONFIG_HOME")
-        .or_else(|| nonempty_environment_path("HOME").map(|home| home.join(".config")))
+impl Platform {
+    /// The host this build targets.
+    ///
+    /// Selecting the platform as a value rather than by `#[cfg]` keeps one
+    /// statement of the precedence and lets every host's precedence be tested
+    /// from any host.
+    const CURRENT: Self = if cfg!(target_os = "windows") {
+        Self::Windows
+    } else if cfg!(target_os = "macos") {
+        Self::MacOs
+    } else {
+        Self::Xdg
+    };
+}
+
+impl UserDirectory {
+    /// Applies `platform`'s precedence to `lookup`, which supplies one
+    /// non-empty environment value per variable name.
+    ///
+    /// This is the crate's only statement of that precedence. It performs no
+    /// filesystem access, so an undeterminable directory is `None` rather than
+    /// a failure.
+    fn select(
+        &self,
+        platform: Platform,
+        lookup: impl Fn(&str) -> Option<PathBuf>,
+    ) -> Option<PathBuf> {
+        let home_relative = match platform {
+            Platform::Windows => return lookup(self.windows_variable),
+            Platform::MacOs => MACOS_HOME_RELATIVE,
+            Platform::Xdg => self.unix_home_relative,
+        };
+        lookup(self.xdg_variable).or_else(|| lookup("HOME").map(|home| home.join(home_relative)))
+    }
+
+    fn resolve_from_environment(&self) -> Option<PathBuf> {
+        self.select(Platform::CURRENT, nonempty_environment_path)
+    }
+
+    fn file_beneath(&self, directory: &Path) -> PathBuf {
+        directory.join("reuse-evidence").join(self.file_name)
+    }
 }
 
 fn nonempty_environment_path(name: &str) -> Option<PathBuf> {
@@ -894,6 +992,109 @@ fn nonempty_environment_path(name: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Answers `variables` and nothing else, so a precedence test states exactly
+    /// which of them the platform is allowed to consult.
+    fn environment(variables: &[(&'static str, &str)]) -> impl Fn(&str) -> Option<PathBuf> + use<> {
+        let variables: Vec<(String, PathBuf)> = variables
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), PathBuf::from(value)))
+            .collect();
+        move |name| {
+            variables
+                .iter()
+                .find(|(candidate, _)| candidate == name)
+                .map(|(_, value)| value.clone())
+        }
+    }
+
+    #[test]
+    fn xdg_variable_takes_precedence_over_home_for_both_directories() {
+        assert_eq!(
+            CONFIGURATION.select(
+                Platform::Xdg,
+                environment(&[("XDG_CONFIG_HOME", "/xdg/config"), ("HOME", "/home/user")])
+            ),
+            Some(PathBuf::from("/xdg/config"))
+        );
+        assert_eq!(
+            STATE.select(
+                Platform::Xdg,
+                environment(&[("XDG_STATE_HOME", "/xdg/state"), ("HOME", "/home/user")])
+            ),
+            Some(PathBuf::from("/xdg/state"))
+        );
+    }
+
+    #[test]
+    fn xdg_platform_falls_back_to_distinct_home_relative_directories() {
+        let home = environment(&[("HOME", "/home/user")]);
+        assert_eq!(
+            CONFIGURATION.select(Platform::Xdg, &home),
+            Some(PathBuf::from("/home/user/.config"))
+        );
+        assert_eq!(
+            STATE.select(Platform::Xdg, &home),
+            Some(PathBuf::from("/home/user/.local/state"))
+        );
+    }
+
+    #[test]
+    fn macos_falls_back_to_one_application_support_directory_for_both() {
+        let home = environment(&[("HOME", "/Users/user")]);
+        let expected = Some(PathBuf::from("/Users/user/Library/Application Support"));
+        assert_eq!(CONFIGURATION.select(Platform::MacOs, &home), expected);
+        assert_eq!(STATE.select(Platform::MacOs, &home), expected);
+    }
+
+    #[test]
+    fn windows_consults_only_its_own_variables() {
+        let windows = environment(&[
+            ("APPDATA", "C:/Users/user/AppData/Roaming"),
+            ("LOCALAPPDATA", "C:/Users/user/AppData/Local"),
+            ("XDG_CONFIG_HOME", "/xdg/config"),
+            ("XDG_STATE_HOME", "/xdg/state"),
+            ("HOME", "/home/user"),
+        ]);
+        assert_eq!(
+            CONFIGURATION.select(Platform::Windows, &windows),
+            Some(PathBuf::from("C:/Users/user/AppData/Roaming"))
+        );
+        assert_eq!(
+            STATE.select(Platform::Windows, &windows),
+            Some(PathBuf::from("C:/Users/user/AppData/Local"))
+        );
+    }
+
+    #[test]
+    fn an_undeterminable_directory_is_an_absence_rather_than_a_failure() {
+        let empty = environment(&[]);
+        for platform in [Platform::Windows, Platform::MacOs, Platform::Xdg] {
+            assert_eq!(CONFIGURATION.select(platform, &empty), None, "{platform:?}");
+            assert_eq!(STATE.select(platform, &empty), None, "{platform:?}");
+        }
+    }
+
+    #[test]
+    fn explicit_user_directories_name_the_same_files_the_environment_would() {
+        let location = PortfolioLocation::from_user_directories(
+            Vec::new(),
+            Some(Path::new("/config")),
+            Some(Path::new("/state")),
+        );
+        assert_eq!(
+            location.config_file,
+            Some(PathBuf::from("/config/reuse-evidence/config.toml"))
+        );
+        assert_eq!(
+            location.state_file,
+            Some(PathBuf::from("/state/reuse-evidence/portfolio.toml"))
+        );
+
+        let undeterminable = PortfolioLocation::from_user_directories(Vec::new(), None, None);
+        assert_eq!(undeterminable.config_file, None);
+        assert_eq!(undeterminable.state_file, None);
+    }
 
     fn enrollment(repository_id: &str, path: &str, visibility: Visibility) -> Enrollment {
         Enrollment {

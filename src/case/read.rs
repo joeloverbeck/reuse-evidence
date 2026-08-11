@@ -450,12 +450,12 @@ impl Display for ListOutcome {
 /// safely.
 pub fn list(
     working_directory: &Path,
-    root_overrides: &[PathBuf],
+    location: &portfolio::PortfolioLocation,
 ) -> Result<ListOutcome, TerminalFailure> {
     let repository_root = find_repository_root(working_directory)?;
     let steward = read_steward(&repository_root)?;
     let mut cases = read_cases(&repository_root, steward.repository_id())?;
-    let portfolio_available = derive_conditions(&mut cases, steward.visibility(), root_overrides)?;
+    let portfolio_available = derive_conditions(&mut cases, steward.visibility(), location)?;
     Ok(ListOutcome {
         cases,
         portfolio_available,
@@ -472,7 +472,7 @@ pub fn list(
 pub fn show(
     working_directory: &Path,
     case_id: &str,
-    root_overrides: &[PathBuf],
+    location: &portfolio::PortfolioLocation,
 ) -> Result<ShowOutcome, TerminalFailure> {
     let case_id = parse_recorded_case_id(case_id)?;
     let repository_root = find_repository_root(working_directory)?;
@@ -488,7 +488,7 @@ pub fn show(
     let portfolio_available = derive_conditions(
         std::slice::from_mut(&mut case),
         steward.visibility(),
-        root_overrides,
+        location,
     )?;
     Ok(ShowOutcome {
         case,
@@ -505,7 +505,7 @@ pub fn show(
 pub fn brief(
     working_directory: &Path,
     case_id: &str,
-    root_overrides: &[PathBuf],
+    location: &portfolio::PortfolioLocation,
 ) -> Result<BriefOutcome, TerminalFailure> {
     let case_id = parse_recorded_case_id(case_id)?;
     let repository_root = find_repository_root(working_directory)?;
@@ -536,7 +536,7 @@ pub fn brief(
             resolution,
         ));
     }
-    let privacy = super::reported_privacy(&case, &steward, root_overrides);
+    let privacy = super::reported_privacy(&case, &steward, location);
     Ok(BriefOutcome { case, privacy })
 }
 
@@ -552,9 +552,9 @@ fn parse_recorded_case_id(case_id: &str) -> Result<Uuid, TerminalFailure> {
 fn derive_conditions(
     cases: &mut [CaseRecord],
     steward_visibility: Visibility,
-    root_overrides: &[PathBuf],
+    location: &portfolio::PortfolioLocation,
 ) -> Result<bool, TerminalFailure> {
-    let Some(roots) = portfolio::selected_roots_if_configured(root_overrides)? else {
+    let Some(roots) = portfolio::selected_roots_if_configured(location)? else {
         return Ok(false);
     };
     let scan = portfolio::scan(&roots)?;

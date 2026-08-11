@@ -553,7 +553,7 @@ impl Display for LaterEventOutcome {
 pub fn open(
     working_directory: &Path,
     proposal_path: &Path,
-    root_overrides: &[PathBuf],
+    location: &portfolio::PortfolioLocation,
     recorded_at: RecordedInstant,
     preview: bool,
 ) -> Result<OpenOutcome, TerminalFailure> {
@@ -585,7 +585,8 @@ pub fn open(
             preview,
         );
     }
-    let participants = resolve_participants(root_overrides, &proposal.occurrences)?;
+    let roots = portfolio::selected_roots(location)?;
+    let participants = resolve_participants(&roots, &proposal.occurrences)?;
     if steward.visibility() == Visibility::Public
         && let Some(repository_id) = participants
             .iter()
@@ -642,7 +643,7 @@ pub fn append(
     case_id: &str,
     expected_revision: i64,
     proposal_path: &Path,
-    root_overrides: &[PathBuf],
+    location: &portfolio::PortfolioLocation,
     recorded_at: RecordedInstant,
     preview: bool,
 ) -> Result<LaterEventOutcome, TerminalFailure> {
@@ -663,7 +664,7 @@ pub fn append(
         bytes: &event,
     };
     let eligibility = |case: &read::CaseRecord, ()| {
-        validate_new_append(case, &proposal, &located.steward, root_overrides)
+        validate_new_append(case, &proposal, &located.steward, location)
     };
 
     if preview {
@@ -684,7 +685,7 @@ pub fn append(
                 &located.case,
                 existing,
                 &located.steward,
-                root_overrides,
+                location,
             ),
             publication::Checked::Fresh(privacy) => append_outcome(
                 LaterEventEffect::Preview,
@@ -736,7 +737,7 @@ pub fn append(
             &case,
             event,
             &located.steward,
-            root_overrides,
+            location,
         )),
     }
 }
@@ -770,7 +771,7 @@ fn append_retry_outcome(
     case: &read::CaseRecord,
     event: publication::ExistingEvent,
     steward: &marker::Marker,
-    root_overrides: &[PathBuf],
+    location: &portfolio::PortfolioLocation,
 ) -> LaterEventOutcome {
     append_outcome(
         LaterEventEffect::Existing,
@@ -778,7 +779,7 @@ fn append_retry_outcome(
         event_path,
         event.sequence,
         case.state(),
-        reported_privacy(case, steward, root_overrides),
+        reported_privacy(case, steward, location),
         event.bytes,
     )
 }
@@ -885,7 +886,7 @@ pub fn authorize_early_review(
     case_id: &str,
     expected_revision: i64,
     proposal_path: &Path,
-    root_overrides: &[PathBuf],
+    location: &portfolio::PortfolioLocation,
     recorded_at: RecordedInstant,
     preview: bool,
 ) -> Result<LaterEventOutcome, TerminalFailure> {
@@ -906,7 +907,8 @@ pub fn authorize_early_review(
         bytes: &event,
     };
     let case_privacy = |case: &read::CaseRecord| -> Result<Visibility, TerminalFailure> {
-        let privacy = derive_complete_case_privacy(case, &located.steward, root_overrides)?;
+        let roots = portfolio::selected_roots(location)?;
+        let privacy = derive_complete_case_privacy(case, &located.steward, &roots)?;
         validate_early_review_privacy(case, &located.steward, privacy)?;
         Ok(privacy)
     };
@@ -933,7 +935,7 @@ pub fn authorize_early_review(
                 &located.case,
                 existing,
                 &located.steward,
-                root_overrides,
+                location,
             ),
             publication::Checked::Fresh(privacy) => early_review_outcome(
                 LaterEventEffect::Preview,
@@ -985,7 +987,7 @@ pub fn authorize_early_review(
                 &case,
                 event,
                 &located.steward,
-                root_overrides,
+                location,
             ))
         }
     }
@@ -1002,7 +1004,7 @@ pub fn decide(
     case_id: &str,
     expected_revision: i64,
     proposal_path: &Path,
-    root_overrides: &[PathBuf],
+    location: &portfolio::PortfolioLocation,
     recorded_at: RecordedInstant,
     preview: bool,
 ) -> Result<LaterEventOutcome, TerminalFailure> {
@@ -1024,7 +1026,8 @@ pub fn decide(
     };
     let eligibility = |case: &read::CaseRecord, ()| -> Result<Visibility, TerminalFailure> {
         validate_new_decision(case, &proposal)?;
-        let privacy = derive_complete_case_privacy(case, &located.steward, root_overrides)?;
+        let roots = portfolio::selected_roots(location)?;
+        let privacy = derive_complete_case_privacy(case, &located.steward, &roots)?;
         validate_decision_privacy(case, &located.steward, privacy)?;
         Ok(privacy)
     };
@@ -1047,7 +1050,7 @@ pub fn decide(
                 &located.case,
                 existing,
                 &located.steward,
-                root_overrides,
+                location,
                 proposal.content.action,
             ),
             publication::Checked::Fresh(privacy) => decision_outcome(
@@ -1100,7 +1103,7 @@ pub fn decide(
             &case,
             event,
             &located.steward,
-            root_overrides,
+            location,
             proposal.content.action,
         )),
     }
@@ -1204,7 +1207,7 @@ fn decision_retry_outcome(
     case: &read::CaseRecord,
     event: publication::ExistingEvent,
     steward: &marker::Marker,
-    root_overrides: &[PathBuf],
+    location: &portfolio::PortfolioLocation,
     action: DecisionAction,
 ) -> LaterEventOutcome {
     decision_outcome(
@@ -1212,7 +1215,7 @@ fn decision_retry_outcome(
         case_id,
         event_path,
         event.sequence,
-        reported_privacy(case, steward, root_overrides),
+        reported_privacy(case, steward, location),
         action,
         event.bytes,
     )
@@ -1454,14 +1457,14 @@ fn early_review_retry_outcome(
     case: &read::CaseRecord,
     event: publication::ExistingEvent,
     steward: &marker::Marker,
-    root_overrides: &[PathBuf],
+    location: &portfolio::PortfolioLocation,
 ) -> LaterEventOutcome {
     early_review_outcome(
         LaterEventEffect::Existing,
         case_id,
         event_path,
         event.sequence,
-        reported_privacy(case, steward, root_overrides),
+        reported_privacy(case, steward, location),
         event.bytes,
     )
 }
@@ -1611,7 +1614,7 @@ fn validate_new_append(
     case: &read::CaseRecord,
     proposal: &AppendProposal,
     steward: &marker::Marker,
-    root_overrides: &[PathBuf],
+    location: &portfolio::PortfolioLocation,
 ) -> Result<Visibility, TerminalFailure> {
     if case.occurrences.iter().any(|recorded| {
         recorded.repository_id == proposal.occurrence.repository_id
@@ -1629,7 +1632,8 @@ fn validate_new_append(
     }
     let mut occurrences = case.occurrences.clone();
     occurrences.push(proposal.occurrence.clone());
-    let participant_visibilities = resolve_participants(root_overrides, &occurrences)?;
+    let roots = portfolio::selected_roots(location)?;
+    let participant_visibilities = resolve_participants(&roots, &occurrences)?;
     if steward.visibility() == Visibility::Public && case.privacy == Visibility::Private {
         return Err(TerminalFailure::refusal(
             format!(
@@ -1668,9 +1672,9 @@ fn validate_new_append(
 fn derive_complete_case_privacy(
     case: &read::CaseRecord,
     steward: &marker::Marker,
-    root_overrides: &[PathBuf],
+    roots: &[PathBuf],
 ) -> Result<Visibility, TerminalFailure> {
-    let participant_visibilities = resolve_participants(root_overrides, &case.occurrences)?;
+    let participant_visibilities = resolve_participants(roots, &case.occurrences)?;
     if case.privacy == Visibility::Private
         || steward.visibility() == Visibility::Private
         || participant_visibilities
@@ -1690,15 +1694,15 @@ fn derive_complete_case_privacy(
 fn reported_privacy(
     case: &read::CaseRecord,
     steward: &marker::Marker,
-    root_overrides: &[PathBuf],
+    location: &portfolio::PortfolioLocation,
 ) -> ReportedPrivacy {
-    if !matches!(
-        portfolio::selected_roots_if_configured(root_overrides),
-        Ok(Some(_))
-    ) {
+    // The selection is read once and carried into the derivation. Re-selecting
+    // there would read the same user-local configuration a second time and
+    // could only differ from this one by a concurrent edit.
+    let Ok(Some(roots)) = portfolio::selected_roots_if_configured(location) else {
         return ReportedPrivacy::PortfolioUnconfigured;
-    }
-    derive_complete_case_privacy(case, steward, root_overrides).map_or(
+    };
+    derive_complete_case_privacy(case, steward, &roots).map_or(
         ReportedPrivacy::ParticipantsUnresolved,
         ReportedPrivacy::Derived,
     )
@@ -2688,12 +2692,15 @@ fn validate_relative_evidence_path(path: &str) -> Result<(), TerminalFailure> {
     Ok(())
 }
 
+/// Resolves each occurrence's participant repository against `roots`.
+///
+/// Roots arrive already selected so one command selects them once, rather than
+/// each derivation re-reading the user-local configuration.
 fn resolve_participants(
-    root_overrides: &[PathBuf],
+    roots: &[PathBuf],
     occurrences: &[Occurrence],
 ) -> Result<BTreeMap<Uuid, Visibility>, TerminalFailure> {
-    let roots = portfolio::selected_roots(root_overrides)?;
-    let scan = portfolio::scan(&roots)?;
+    let scan = portfolio::scan(roots)?;
     let mut participants = BTreeMap::new();
     let requested = occurrences
         .iter()
