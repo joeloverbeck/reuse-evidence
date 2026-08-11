@@ -84,6 +84,13 @@ For each family member, establish:
 - whether current evidence is absent, unreadable, on an old hash, or otherwise
   incapable of supporting a comparison.
 
+In the census these two count different things: `qualifying_uses` counts runs,
+deduplicating the several incidents one run can record, while the outcome counts
+count records. A target whose runs deviated more than once therefore shows
+more outcomes than uses, and neither number is wrong. Read exercise off the use
+count and incident volume off the outcome counts; never subtract one from the
+other.
+
 Do not read every target package semantically. A current dirty target is not
 automatically excluded, but it cannot be selected when its method-bearing
 baseline is changing too rapidly to freeze coherently.

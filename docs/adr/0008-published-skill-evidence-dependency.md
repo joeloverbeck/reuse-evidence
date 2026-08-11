@@ -4,12 +4,13 @@
 **Date:** 2026-08-09  
 **Decision owner:** Repository maintainer  
 **Governing principles:** [`FOUNDATIONS.md`](../principles/FOUNDATIONS.md), [`CAPABILITY-AND-WORKFLOW-BOUNDARIES.md`](../principles/CAPABILITY-AND-WORKFLOW-BOUNDARIES.md), [`CONSUMER-CONTRACT.md`](../principles/CONSUMER-CONTRACT.md)
+**Amended:** 2026-08-11 by explicit maintainer direction to upgrade the ordinary crates.io dependency from `0.2.1` to `0.8.0`; the dependency form and boundaries below are unchanged.
 
 ## Context
 
 This repository already carries agent skills under `.claude/skills/` and will author its own `reuse-evidence-*` packages. Nothing currently gates their revision, so any of them can be rewritten on a hunch — the exact failure the sibling `skill-evidence` project exists to refuse.
 
-`skill-evidence` is published on crates.io; `0.2.1` is the latest published version, and the local `0.3.0` working tree is unpublished and untagged. Four sibling repositories already depend on it. `mundifold` recorded ADR 0005 after reversing a vendored fork, and mounts `skill_evidence::cli::SkillsArgs` beneath its own binary with a repository-specific `Host` and the exit map `0` success, `1` unsafe failure, `3` refusal.
+At acceptance, `skill-evidence` was published on crates.io at `0.2.1`, while the local `0.3.0` working tree was unpublished and untagged. Four sibling repositories already depended on it. `mundifold` recorded ADR 0005 after reversing a vendored fork, and mounts `skill_evidence::cli::SkillsArgs` beneath its own binary with a repository-specific `Host` and the exit map `0` success, `1` unsafe failure, `3` refusal.
 
 Two accepted boundaries reach this decision and must be settled explicitly rather than by implication.
 
@@ -23,7 +24,7 @@ Adopt the published `skill-evidence` crate for this repository's own skill gover
 
 1. **Narrowing.** ADR 0006's clause governs engineering-workflow skill sets consumed for implementation handoff — interface design, specifications, TDD, migration mechanics, and code review. It does not prohibit an ordinary versioned dependency on a published crate whose subject is this repository's own skill governance. ADR 0006's decision is otherwise unchanged: reuse review still produces decisions and briefs, and ordinary engineering still performs refactors.
 
-2. **Dependency form.** Depend on `skill-evidence` as an ordinary crates.io dependency pinned by `Cargo.lock`. The named resolved version is `0.2.1`. Do not depend on the unpublished local `0.3.0` tree, and do not use a git reference.
+2. **Dependency form.** Depend on `skill-evidence` as an ordinary crates.io dependency pinned by `Cargo.lock`. The initial resolved version was `0.2.1`; the amended resolved version is `0.8.0`. Do not depend on an unpublished local tree, and do not use a git reference.
 
 3. **Mount.** Mount `skill_evidence::cli::SkillsArgs` beneath `reuse-evidence skills`, dispatched with a repository-specific `Host`: namespace `reuse-evidence`, command `reuse-evidence`, Cargo package `reuse-evidence`, and a skills directory resolved from this crate's own `CARGO_MANIFEST_DIR`, never from an audited `--root`.
 

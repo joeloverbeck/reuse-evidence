@@ -204,6 +204,44 @@
                 "type": "array",
                 "minItems": 1,
                 "items": { "type": "string", "minLength": 1 }
+              },
+              "instrument_limited_event_ids": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "minLength": 1 },
+                "description": "Subset of adjudicated_event_ids this review could not decide: either no trial could express the mechanism those events record, or the acceptance gate grades outcome while their evidence bears no outcome claim. Asserts nothing about whether the mechanism reproduced. Omitted when the review decided everything it covered, which is what every close written before this key existed asserts."
+              },
+              "trial_count": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Caller-asserted validation trial count. Omitted when no count was recorded for this close."
+              },
+              "artifacts_path": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Caller-asserted path to retained validation artifacts. Omitted when no path was recorded for this close."
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "event_type": { "const": "review_started" } },
+        "required": ["event_type"]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["review_id"],
+            "properties": {
+              "review_id": { "type": "string", "minLength": 1 },
+              "operating_skill_hash": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Content hash computed from the operating Skill Evolution package when the claim opted to record it. Omitted when that operating-package identity was not recorded; absence never means it matched the package running now."
               }
             }
           }
