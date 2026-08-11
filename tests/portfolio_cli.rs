@@ -373,6 +373,57 @@ fn portfolio_reports_relocated_repository_as_moved_not_new() {
 }
 
 #[test]
+fn portfolio_reports_mover_and_new_tenant_without_substitution() {
+    let fixture = Fixture::new("portfolio-mover-new-tenant");
+    let config_home = fixture.root.join("config");
+    let portfolio_root = fixture.root.join("portfolio");
+    fs::create_dir_all(&portfolio_root).expect("portfolio root should be creatable");
+    let original_repository = fixture.repository(&portfolio_root, "original");
+    let moved_repository_id = "00000000-0000-4000-8000-000000000070";
+    let new_repository_id = "00000000-0000-4000-8000-000000000071";
+    write_marker(
+        &original_repository,
+        moved_repository_id,
+        "products",
+        "private",
+    );
+    write_config(&config_home, &[&portfolio_root]);
+
+    let first = run_in(&fixture.root, &["portfolio"], &config_home);
+    assert_eq!(first.status.code(), Some(0), "{first:?}");
+
+    let moved_repository = portfolio_root.join("moved");
+    fs::rename(&original_repository, &moved_repository)
+        .expect("repository fixture should be movable");
+    let moved_repository = moved_repository
+        .canonicalize()
+        .expect("moved repository should be canonicalizable");
+    let new_repository = fixture.repository(&portfolio_root, "original");
+    write_marker(&new_repository, new_repository_id, "products", "public");
+
+    let second = run_in(&fixture.root, &["portfolio"], &config_home);
+
+    assert_eq!(second.status.code(), Some(0), "{second:?}");
+    assert!(second.stderr.is_empty(), "{second:?}");
+    let stdout = String::from_utf8(second.stdout).expect("stdout should be UTF-8");
+    assert_eq!(
+        stdout,
+        format!(
+            "ecosystem: products\n- repository_id: {moved_repository_id}\n  path: {}\n  visibility: private\n- repository_id: {new_repository_id}\n  path: {}\n  visibility: public\nnew repositories:\n- repository_id: {new_repository_id}\n  path: {}\n  visibility: public\nmoved repositories:\n- repository_id: {moved_repository_id}\n  previous_path: {}\n  path: {}\n",
+            moved_repository.display(),
+            new_repository.display(),
+            new_repository.display(),
+            original_repository.display(),
+            moved_repository.display()
+        )
+    );
+    assert!(
+        !stdout.contains("substituted repositories:"),
+        "a surviving moved identity must not be reported as substituted: {stdout}"
+    );
+}
+
+#[test]
 fn portfolio_reports_previously_observed_absent_repository_as_unavailable() {
     let fixture = Fixture::new("portfolio-unavailable");
     let config_home = fixture.root.join("config");
@@ -452,7 +503,7 @@ fn portfolio_reports_visibility_change_and_corrects_derived_state() {
 }
 
 #[test]
-fn portfolio_uses_current_marker_when_cached_identity_is_stale() {
+fn portfolio_reports_identity_substitution_before_state_advances() {
     let fixture = Fixture::new("portfolio-stale-identity");
     let config_home = fixture.root.join("config");
     let portfolio_root = fixture.root.join("portfolio");
@@ -475,16 +526,22 @@ fn portfolio_uses_current_marker_when_cached_identity_is_stale() {
     assert_eq!(
         second_stdout,
         format!(
-            "ecosystem: products\n- repository_id: {current_repository_id}\n  path: {}\n  visibility: public\nnew repositories:\n- repository_id: {current_repository_id}\n  path: {}\n  visibility: public\n",
+            "ecosystem: products\n- repository_id: {current_repository_id}\n  path: {}\n  visibility: public\nsubstituted repositories:\n- repository_id: {current_repository_id}\n  path: {}\n  previous_repository_id: {old_repository_id}\n  previous_visibility: private\n  visibility: public\n",
             repository.display(),
             repository.display()
         )
     );
     assert!(
-        !second_stdout.contains(old_repository_id)
+        !second_stdout.contains("new repositories:")
             && !second_stdout.contains("unavailable repositories:"),
-        "stale state must not report marker-conflicting identity or visibility: {second_stdout}"
+        "a substitution must not be reported as new or unavailable: {second_stdout}"
     );
+    let state_text = fs::read_to_string(portfolio_state_path(&config_home))
+        .expect("derived state should be readable UTF-8");
+    let state =
+        toml::from_str::<toml::Value>(&state_text).expect("derived state should be valid TOML");
+    assert!(toml_contains_string(&state, current_repository_id));
+    assert!(!toml_contains_string(&state, old_repository_id));
 
     let third = run_in(&fixture.root, &["portfolio"], &config_home);
     assert_eq!(third.status.code(), Some(0), "{third:?}");
@@ -495,7 +552,45 @@ fn portfolio_uses_current_marker_when_cached_identity_is_stale() {
             "ecosystem: products\n- repository_id: {current_repository_id}\n  path: {}\n  visibility: public\n",
             repository.display()
         ),
-        "the stale cached observation must be corrected after the marker wins"
+        "an identity substitution must be reported only once before state advances"
+    );
+}
+
+#[test]
+fn portfolio_sorts_identity_substitutions_by_current_identity() {
+    let fixture = Fixture::new("portfolio-sorted-substitutions");
+    let config_home = fixture.root.join("config");
+    let portfolio_root = fixture.root.join("portfolio");
+    fs::create_dir_all(&portfolio_root).expect("portfolio root should be creatable");
+    let first_repository = fixture.repository(&portfolio_root, "first");
+    let second_repository = fixture.repository(&portfolio_root, "second");
+    let first_previous_id = "00000000-0000-4000-8000-000000000001";
+    let second_previous_id = "00000000-0000-4000-8000-000000000099";
+    let first_current_id = "00000000-0000-4000-8000-000000000081";
+    let second_current_id = "00000000-0000-4000-8000-000000000080";
+    write_marker(&first_repository, first_previous_id, "products", "private");
+    write_marker(&second_repository, second_previous_id, "products", "public");
+    write_config(&config_home, &[&portfolio_root]);
+
+    let first = run_in(&fixture.root, &["portfolio"], &config_home);
+    assert_eq!(first.status.code(), Some(0), "{first:?}");
+
+    write_marker(&first_repository, first_current_id, "products", "public");
+    write_marker(&second_repository, second_current_id, "products", "private");
+
+    let second = run_in(&fixture.root, &["portfolio"], &config_home);
+
+    assert_eq!(second.status.code(), Some(0), "{second:?}");
+    assert!(second.stderr.is_empty(), "{second:?}");
+    assert_eq!(
+        String::from_utf8(second.stdout).expect("stdout should be UTF-8"),
+        format!(
+            "ecosystem: products\n- repository_id: {second_current_id}\n  path: {}\n  visibility: private\n- repository_id: {first_current_id}\n  path: {}\n  visibility: public\nsubstituted repositories:\n- repository_id: {second_current_id}\n  path: {}\n  previous_repository_id: {second_previous_id}\n  previous_visibility: public\n  visibility: private\n- repository_id: {first_current_id}\n  path: {}\n  previous_repository_id: {first_previous_id}\n  previous_visibility: private\n  visibility: public\n",
+            second_repository.display(),
+            first_repository.display(),
+            second_repository.display(),
+            first_repository.display()
+        )
     );
 }
 

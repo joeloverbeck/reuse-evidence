@@ -66,6 +66,13 @@ struct PortfolioChanges {
     moved_repositories: Vec<(Enrollment, PathBuf)>,
     unavailable_repositories: Vec<Enrollment>,
     visibility_changes: Vec<(Enrollment, Visibility)>,
+    substituted_repositories: Vec<SubstitutedRepository>,
+}
+
+struct SubstitutedRepository {
+    repository: Enrollment,
+    previous_repository_id: Uuid,
+    previous_visibility: Visibility,
 }
 
 struct StateLock {
@@ -137,10 +144,43 @@ fn derive_changes(
     observation: &PortfolioObservation<'_>,
     previous_repositories: &BTreeMap<Uuid, Enrollment>,
 ) -> PortfolioChanges {
+    let mut substituted_repositories = previous_repositories
+        .values()
+        .filter(|previous| {
+            !observation
+                .enrollments
+                .iter()
+                .any(|current| current.repository_id == previous.repository_id)
+        })
+        .filter_map(|previous| {
+            let repository = observation.enrollments.iter().find(|current| {
+                current.path == previous.path && current.repository_id != previous.repository_id
+            })?;
+            Some(SubstitutedRepository {
+                repository: repository.clone(),
+                previous_repository_id: previous.repository_id,
+                previous_visibility: previous.visibility,
+            })
+        })
+        .collect::<Vec<_>>();
+    substituted_repositories.sort_by(|left, right| {
+        left.repository
+            .repository_id
+            .cmp(&right.repository.repository_id)
+            .then_with(|| {
+                left.previous_repository_id
+                    .cmp(&right.previous_repository_id)
+            })
+    });
     let mut new_repositories = observation
         .enrollments
         .iter()
         .filter(|repository| !previous_repositories.contains_key(&repository.repository_id))
+        .filter(|repository| {
+            !substituted_repositories.iter().any(|substitution| {
+                substitution.repository.repository_id == repository.repository_id
+            })
+        })
         .cloned()
         .collect::<Vec<_>>();
     new_repositories.sort_by(|left, right| left.repository_id.cmp(&right.repository_id));
@@ -191,6 +231,7 @@ fn derive_changes(
         moved_repositories,
         unavailable_repositories,
         visibility_changes,
+        substituted_repositories,
     }
 }
 
@@ -227,6 +268,7 @@ enum RepositoryEntryView<'a> {
         repository: &'a Enrollment,
         previous_visibility: &'a Visibility,
     },
+    Substituted(&'a SubstitutedRepository),
 }
 
 impl Display for RepositoryEntryView<'_> {
@@ -235,6 +277,7 @@ impl Display for RepositoryEntryView<'_> {
             Self::Enrolled(repository)
             | Self::Moved { repository, .. }
             | Self::VisibilityChanged { repository, .. } => &repository.repository_id,
+            Self::Substituted(substitution) => &substitution.repository.repository_id,
             Self::IdentityConflict { repository_id, .. } => repository_id,
         };
         writeln!(formatter, "- repository_id: {repository_id}")?;
@@ -268,7 +311,83 @@ impl Display for RepositoryEntryView<'_> {
                 writeln!(formatter, "  previous_visibility: {previous_visibility}")?;
                 writeln!(formatter, "  visibility: {}", repository.visibility)
             }
+            Self::Substituted(substitution) => {
+                writeln!(
+                    formatter,
+                    "  path: {}",
+                    substitution.repository.path.display()
+                )?;
+                writeln!(
+                    formatter,
+                    "  previous_repository_id: {}",
+                    substitution.previous_repository_id
+                )?;
+                writeln!(
+                    formatter,
+                    "  previous_visibility: {}",
+                    substitution.previous_visibility
+                )?;
+                writeln!(
+                    formatter,
+                    "  visibility: {}",
+                    substitution.repository.visibility
+                )
+            }
         }
+    }
+}
+
+impl Display for PortfolioChanges {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        if !self.new_repositories.is_empty() {
+            writeln!(formatter, "new repositories:")?;
+            for repository in &self.new_repositories {
+                write!(formatter, "{}", RepositoryEntryView::Enrolled(repository))?;
+            }
+        }
+        if !self.moved_repositories.is_empty() {
+            writeln!(formatter, "moved repositories:")?;
+            for (repository, previous_path) in &self.moved_repositories {
+                write!(
+                    formatter,
+                    "{}",
+                    RepositoryEntryView::Moved {
+                        repository,
+                        previous_path,
+                    }
+                )?;
+            }
+        }
+        if !self.unavailable_repositories.is_empty() {
+            writeln!(formatter, "unavailable repositories:")?;
+            for repository in &self.unavailable_repositories {
+                write!(formatter, "{}", RepositoryEntryView::Enrolled(repository))?;
+            }
+        }
+        if !self.visibility_changes.is_empty() {
+            writeln!(formatter, "visibility changed repositories:")?;
+            for (repository, previous_visibility) in &self.visibility_changes {
+                write!(
+                    formatter,
+                    "{}",
+                    RepositoryEntryView::VisibilityChanged {
+                        repository,
+                        previous_visibility,
+                    }
+                )?;
+            }
+        }
+        if !self.substituted_repositories.is_empty() {
+            writeln!(formatter, "substituted repositories:")?;
+            for substitution in &self.substituted_repositories {
+                write!(
+                    formatter,
+                    "{}",
+                    RepositoryEntryView::Substituted(substitution)
+                )?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -331,44 +450,7 @@ impl Display for PortfolioReportView<'_> {
             }
         }
         if let Some(changes) = self.changes {
-            if !changes.new_repositories.is_empty() {
-                writeln!(formatter, "new repositories:")?;
-                for repository in &changes.new_repositories {
-                    write!(formatter, "{}", RepositoryEntryView::Enrolled(repository))?;
-                }
-            }
-            if !changes.moved_repositories.is_empty() {
-                writeln!(formatter, "moved repositories:")?;
-                for (repository, previous_path) in &changes.moved_repositories {
-                    write!(
-                        formatter,
-                        "{}",
-                        RepositoryEntryView::Moved {
-                            repository,
-                            previous_path,
-                        }
-                    )?;
-                }
-            }
-            if !changes.unavailable_repositories.is_empty() {
-                writeln!(formatter, "unavailable repositories:")?;
-                for repository in &changes.unavailable_repositories {
-                    write!(formatter, "{}", RepositoryEntryView::Enrolled(repository))?;
-                }
-            }
-            if !changes.visibility_changes.is_empty() {
-                writeln!(formatter, "visibility changed repositories:")?;
-                for (repository, previous_visibility) in &changes.visibility_changes {
-                    write!(
-                        formatter,
-                        "{}",
-                        RepositoryEntryView::VisibilityChanged {
-                            repository,
-                            previous_visibility,
-                        }
-                    )?;
-                }
-            }
+            write!(formatter, "{changes}")?;
         }
         Ok(())
     }
@@ -916,7 +998,7 @@ mod tests {
     }
 
     #[test]
-    fn next_state_replaces_a_stale_identity_at_an_inspected_path() {
+    fn substitution_is_derived_before_next_state_replaces_stale_identity() {
         let repository_path = PathBuf::from("/portfolio/current");
         let current_repository = enrollment(
             "00000000-0000-4000-8000-000000000112",
@@ -936,9 +1018,26 @@ mod tests {
             "/portfolio/current",
             Visibility::Private,
         );
-        let previous_repositories = [(stale_repository.repository_id, stale_repository)]
+        let previous_repositories = [(stale_repository.repository_id, stale_repository.clone())]
             .into_iter()
             .collect();
+
+        let changes = derive_changes(&observation, &previous_repositories);
+
+        assert!(changes.new_repositories.is_empty());
+        assert_eq!(changes.substituted_repositories.len(), 1);
+        assert_eq!(
+            changes.substituted_repositories[0].repository.repository_id,
+            current_repository.repository_id
+        );
+        assert_eq!(
+            changes.substituted_repositories[0].previous_repository_id,
+            stale_repository.repository_id
+        );
+        assert_eq!(
+            changes.substituted_repositories[0].previous_visibility,
+            Visibility::Private
+        );
 
         let state = next_state(&observation, previous_repositories);
 
