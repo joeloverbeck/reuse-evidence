@@ -30,6 +30,10 @@ const IMPLEMENTATION_NOTICE: &str =
 const NO_IMPLEMENTATION_NOTICE: &str = "authorizes no implementation";
 const PORTFOLIO_UNAVAILABLE_FOOTER: &str = "portfolio conditions unavailable: configure portfolio roots or supply `--root <PATH>` to derive privacy conflicts and staleness\n";
 const PARTICIPANTS_UNRESOLVED_FOOTER: &str = "portfolio conditions unavailable: a recorded participant does not resolve to exactly one enrolled repository beneath the selected portfolio roots; restore its enrollment and unique repository identity to derive privacy\n";
+const APPEND_UNSTEWARDED_RESOLUTION: &str =
+    "run `case list` in this steward repository and retry with a recorded case identity";
+const EARLY_REVIEW_UNSTEWARDED_RESOLUTION: &str = "run `case list` in this steward repository and retry `case override` with a recorded watching case identity";
+const DECISION_UNSTEWARDED_RESOLUTION: &str = "run `case list` in this steward repository and retry `case decide` with a recorded review-ready case identity";
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -382,17 +386,66 @@ enum OpenEffect {
     Existing,
 }
 
-/// The complete observable result of appending or previewing an occurrence.
+/// The complete observable result of recording or previewing one later case event.
+///
+/// The three later event types share this carrier under ADR 0013. Which heading it renders and
+/// which optional fields it populates stay each event type's decision, as ADR 0010 requires.
+/// Opening is not a publication and keeps its own [`OpenOutcome`].
 #[derive(Debug)]
-pub struct AppendOutcome {
-    effect: AppendEffect,
+pub struct LaterEventOutcome {
+    effect: LaterEventEffect,
+    headings: LaterEventHeadings,
     case_id: Uuid,
     event_path: PathBuf,
     revision: i64,
-    state: read::CaseState,
+    state: Option<read::CaseState>,
     privacy: ReportedPrivacy,
+    notice: Option<&'static str>,
     event: String,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LaterEventEffect {
+    Preview,
+    Created,
+    Existing,
+}
+
+/// The three headings one later event type prints, selected by what the command did.
+#[derive(Clone, Copy, Debug)]
+struct LaterEventHeadings {
+    preview: &'static str,
+    created: &'static str,
+    existing: &'static str,
+}
+
+impl LaterEventHeadings {
+    const fn heading(self, effect: LaterEventEffect) -> &'static str {
+        match effect {
+            LaterEventEffect::Preview => self.preview,
+            LaterEventEffect::Created => self.created,
+            LaterEventEffect::Existing => self.existing,
+        }
+    }
+}
+
+const APPEND_HEADINGS: LaterEventHeadings = LaterEventHeadings {
+    preview: "case append preview",
+    created: "appended occurrence",
+    existing: "occurrence already recorded",
+};
+
+const EARLY_REVIEW_HEADINGS: LaterEventHeadings = LaterEventHeadings {
+    preview: "early-review override preview",
+    created: "authorized early review",
+    existing: "early review already authorized",
+};
+
+const DECISION_HEADINGS: LaterEventHeadings = LaterEventHeadings {
+    preview: "reuse decision preview",
+    created: "accepted reuse decision",
+    existing: "reuse decision already recorded",
+};
 
 /// The complete case privacy a receipt reports, or why it could not be derived.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -420,50 +473,6 @@ impl ReportedPrivacy {
             }
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AppendEffect {
-    Preview,
-    Created,
-    Existing,
-}
-
-/// The complete observable result of authorizing or previewing early review.
-#[derive(Debug)]
-pub struct EarlyReviewOutcome {
-    effect: EarlyReviewEffect,
-    case_id: Uuid,
-    event_path: PathBuf,
-    revision: i64,
-    privacy: ReportedPrivacy,
-    event: String,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum EarlyReviewEffect {
-    Preview,
-    Created,
-    Existing,
-}
-
-/// The complete observable result of accepting or previewing a reuse decision.
-#[derive(Debug)]
-pub struct DecisionOutcome {
-    effect: DecisionEffect,
-    case_id: Uuid,
-    event_path: PathBuf,
-    revision: i64,
-    privacy: ReportedPrivacy,
-    action: DecisionAction,
-    event: String,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DecisionEffect {
-    Preview,
-    Created,
-    Existing,
 }
 
 /// The spine every event-type receipt prints, in order.
@@ -528,75 +537,19 @@ impl Display for OpenOutcome {
     }
 }
 
-/// Renders the receipt followed by the exact event bytes for a preview.
-impl Display for AppendOutcome {
+/// Renders one later-event receipt, followed by the exact event bytes for a preview.
+impl Display for LaterEventOutcome {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        let heading = match self.effect {
-            AppendEffect::Preview => "case append preview",
-            AppendEffect::Created => "appended occurrence",
-            AppendEffect::Existing => "occurrence already recorded",
-        };
         EventReceipt {
-            heading,
+            heading: self.headings.heading(self.effect),
             case_id: self.case_id,
             event_path: &self.event_path,
             revision: self.revision,
-            state: Some(self.state),
+            state: self.state,
             privacy: self.privacy,
-            notice: None,
-            preview_event: (self.effect == AppendEffect::Preview).then_some(self.event.as_str()),
-        }
-        .fmt(formatter)
-    }
-}
-
-/// Renders the receipt followed by the exact event bytes for a preview.
-impl Display for EarlyReviewOutcome {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        let heading = match self.effect {
-            EarlyReviewEffect::Preview => "early-review override preview",
-            EarlyReviewEffect::Created => "authorized early review",
-            EarlyReviewEffect::Existing => "early review already authorized",
-        };
-        EventReceipt {
-            heading,
-            case_id: self.case_id,
-            event_path: &self.event_path,
-            revision: self.revision,
-            // Stated as a constant rather than derived from the recorded
-            // occurrence count, as ADR 0010 records.
-            state: Some(read::CaseState::ReviewReadyByEarlyReviewOverride),
-            privacy: self.privacy,
-            notice: None,
-            preview_event: (self.effect == EarlyReviewEffect::Preview)
+            notice: self.notice,
+            preview_event: (self.effect == LaterEventEffect::Preview)
                 .then_some(self.event.as_str()),
-        }
-        .fmt(formatter)
-    }
-}
-
-/// Renders a reuse-decision event receipt and, for a preview, its exact bytes.
-impl Display for DecisionOutcome {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        let heading = match self.effect {
-            DecisionEffect::Preview => "reuse decision preview",
-            DecisionEffect::Created => "accepted reuse decision",
-            DecisionEffect::Existing => "reuse decision already recorded",
-        };
-        let notice = if self.action.authorizes_implementation() {
-            IMPLEMENTATION_NOTICE
-        } else {
-            NO_IMPLEMENTATION_NOTICE
-        };
-        EventReceipt {
-            heading,
-            case_id: self.case_id,
-            event_path: &self.event_path,
-            revision: self.revision,
-            state: Some(read::CaseState::AwaitingVerification),
-            privacy: self.privacy,
-            notice: Some(notice),
-            preview_event: (self.effect == DecisionEffect::Preview).then_some(self.event.as_str()),
         }
         .fmt(formatter)
     }
@@ -696,107 +649,122 @@ pub fn append(
     root_overrides: &[PathBuf],
     recorded_at: RecordedInstant,
     preview: bool,
-) -> Result<AppendOutcome, TerminalFailure> {
-    let case_id = parse_case_id(case_id)?;
-    let publication = publication::Publication::new(expected_revision)?;
-    let sequence = publication.sequence();
-    let repository_root = find_repository_root(working_directory)?;
-    let steward = read_steward(&repository_root)?;
-    let relative_case_directory = Path::new("reuse-evidence/cases").join(case_id.to_string());
-    validate_case_storage_path(&repository_root, &relative_case_directory)?;
-    let case = read::read_case_for_append(
-        &repository_root,
-        &relative_case_directory,
+) -> Result<LaterEventOutcome, TerminalFailure> {
+    let located = locate_later_event_case(
+        working_directory,
         case_id,
-        steward.repository_id(),
+        expected_revision,
+        APPEND_UNSTEWARDED_RESOLUTION,
     )?;
+    let case_id = located.case_id;
     let proposal = read_append_proposal(proposal_path)?;
-    validate_prepared_append_sequence(&proposal, expected_revision, sequence)?;
-    let event_type = EventType::OccurrenceAppended;
-    let relative_event_path = case_event_path(&relative_case_directory, sequence, event_type)?;
-    validate_case_storage_path(&repository_root, &relative_event_path)?;
-    let absolute_event_path = repository_root.join(&relative_event_path);
-    let event = append_event_bytes(&proposal, sequence, recorded_at)?;
-    let prepared_event_id = proposal.prepared.as_ref().map(|prepared| prepared.event_id);
+    validate_prepared_append_sequence(&proposal, expected_revision, located.sequence)?;
+    let (relative_event_path, absolute_event_path) =
+        later_event_paths(&located, EventType::OccurrenceAppended)?;
+    let event = append_event_bytes(&proposal, located.sequence, recorded_at)?;
+    let prepared_event = publication::PreparedEvent {
+        event_id: proposal.prepared.as_ref().map(|prepared| prepared.event_id),
+        bytes: &event,
+    };
+    let eligibility = |case: &read::CaseRecord, ()| {
+        validate_new_append(case, &proposal, &located.steward, root_overrides)
+    };
+
     if preview {
-        if absolute_event_path.exists() {
-            let existing =
-                publication::existing_event(&case, &absolute_event_path, prepared_event_id, &event)
-                    .map_err(|failure| append_existing_event_failure(case_id, failure))?;
-            return Ok(append_retry_outcome(
+        let checked = located
+            .publication
+            .check(
+                &located.case,
+                &absolute_event_path,
+                prepared_event,
+                |_| Ok(()),
+                eligibility,
+            )
+            .map_err(|failure| append_publication_failure(case_id, failure))?;
+        return Ok(match checked {
+            publication::Checked::Existing(existing) => append_retry_outcome(
                 case_id,
                 relative_event_path,
-                &case,
+                &located.case,
                 existing,
-                &steward,
+                &located.steward,
                 root_overrides,
-            ));
-        }
-        if case.revision != expected_revision {
-            return Err(TerminalFailure::refusal(
-                format!(
-                    "expected revision {expected_revision} does not match case `{case_id}` current revision {}",
-                    case.revision
-                ),
-                format!(
-                    "run `case show {case_id}` and retry with `--expected-revision {}`",
-                    case.revision
-                ),
-            ));
-        }
-        let privacy = validate_new_append(&case, &proposal, &steward, root_overrides)?;
-        return Ok(AppendOutcome {
-            effect: AppendEffect::Preview,
-            case_id,
-            event_path: relative_event_path,
-            revision: sequence,
-            state: case.state_after_appending_occurrence(),
-            privacy: ReportedPrivacy::Derived(privacy),
-            event,
+            ),
+            publication::Checked::Fresh(privacy) => append_outcome(
+                LaterEventEffect::Preview,
+                case_id,
+                relative_event_path,
+                located.sequence,
+                located.case.state_after_appending_occurrence(),
+                ReportedPrivacy::Derived(privacy),
+                event,
+            ),
         });
     }
 
-    match publication
+    match located
+        .publication
         .publish(
             publication::PublicationTarget {
-                repository_root: &repository_root,
-                relative_case_directory: &relative_case_directory,
+                repository_root: &located.repository_root,
+                relative_case_directory: &located.relative_case_directory,
                 relative_event_path: &relative_event_path,
             },
-            publication::PreparedEvent {
-                event_id: prepared_event_id,
-                bytes: &event,
-            },
+            prepared_event,
             || {
-                read::read_case_for_append(
-                    &repository_root,
-                    &relative_case_directory,
+                read::read_case_for(
+                    &located.repository_root,
+                    &located.relative_case_directory,
                     case_id,
-                    steward.repository_id(),
+                    located.steward.repository_id(),
+                    APPEND_UNSTEWARDED_RESOLUTION,
                 )
             },
             |_| Ok(()),
-            |case, ()| validate_new_append(case, &proposal, &steward, root_overrides),
+            eligibility,
         )
         .map_err(|failure| append_publication_failure(case_id, failure))?
     {
-        publication::PublicationOutcome::Created { case, validation } => Ok(AppendOutcome {
-            effect: AppendEffect::Created,
+        publication::PublicationOutcome::Created { case, validation } => Ok(append_outcome(
+            LaterEventEffect::Created,
             case_id,
-            event_path: relative_event_path,
-            revision: sequence,
-            state: case.state_after_appending_occurrence(),
-            privacy: ReportedPrivacy::Derived(validation),
+            relative_event_path,
+            located.sequence,
+            case.state_after_appending_occurrence(),
+            ReportedPrivacy::Derived(validation),
             event,
-        }),
+        )),
         publication::PublicationOutcome::Existing { case, event } => Ok(append_retry_outcome(
             case_id,
             relative_event_path,
             &case,
             event,
-            &steward,
+            &located.steward,
             root_overrides,
         )),
+    }
+}
+
+/// Builds one occurrence-append receipt; the append event reports readiness and no notice.
+fn append_outcome(
+    effect: LaterEventEffect,
+    case_id: Uuid,
+    event_path: PathBuf,
+    revision: i64,
+    state: read::CaseState,
+    privacy: ReportedPrivacy,
+    event: String,
+) -> LaterEventOutcome {
+    LaterEventOutcome {
+        effect,
+        headings: APPEND_HEADINGS,
+        case_id,
+        event_path,
+        revision,
+        state: Some(state),
+        privacy,
+        notice: None,
+        event,
     }
 }
 
@@ -807,16 +775,16 @@ fn append_retry_outcome(
     event: publication::ExistingEvent,
     steward: &marker::Marker,
     root_overrides: &[PathBuf],
-) -> AppendOutcome {
-    AppendOutcome {
-        effect: AppendEffect::Existing,
+) -> LaterEventOutcome {
+    append_outcome(
+        LaterEventEffect::Existing,
         case_id,
         event_path,
-        revision: event.sequence,
-        state: case.state(),
-        privacy: reported_privacy(case, steward, root_overrides),
-        event: event.bytes,
-    }
+        event.sequence,
+        case.state(),
+        reported_privacy(case, steward, root_overrides),
+        event.bytes,
+    )
 }
 
 fn append_publication_failure(
@@ -924,104 +892,103 @@ pub fn authorize_early_review(
     root_overrides: &[PathBuf],
     recorded_at: RecordedInstant,
     preview: bool,
-) -> Result<EarlyReviewOutcome, TerminalFailure> {
-    let case_id = parse_case_id(case_id)?;
-    let publication = publication::Publication::new(expected_revision)?;
-    let sequence = publication.sequence();
-    let repository_root = find_repository_root(working_directory)?;
-    let steward = read_steward(&repository_root)?;
-    let relative_case_directory = Path::new("reuse-evidence/cases").join(case_id.to_string());
-    validate_case_storage_path(&repository_root, &relative_case_directory)?;
-    let case = read::read_case_for_early_review(
-        &repository_root,
-        &relative_case_directory,
+) -> Result<LaterEventOutcome, TerminalFailure> {
+    let located = locate_later_event_case(
+        working_directory,
         case_id,
-        steward.repository_id(),
+        expected_revision,
+        EARLY_REVIEW_UNSTEWARDED_RESOLUTION,
     )?;
+    let case_id = located.case_id;
     let proposal = read_early_review_proposal(proposal_path)?;
-    validate_prepared_early_review_sequence(&proposal, expected_revision, sequence)?;
-    let event_type = EventType::EarlyReviewAuthorized;
-    let relative_event_path = case_event_path(&relative_case_directory, sequence, event_type)?;
-    validate_case_storage_path(&repository_root, &relative_event_path)?;
-    let event = early_review_event_bytes(&proposal, sequence, recorded_at)?;
+    validate_prepared_early_review_sequence(&proposal, expected_revision, located.sequence)?;
+    let (relative_event_path, absolute_event_path) =
+        later_event_paths(&located, EventType::EarlyReviewAuthorized)?;
+    let event = early_review_event_bytes(&proposal, located.sequence, recorded_at)?;
+    let prepared_event = publication::PreparedEvent {
+        event_id: proposal.prepared.as_ref().map(|prepared| prepared.event_id),
+        bytes: &event,
+    };
+    let case_privacy = |case: &read::CaseRecord| -> Result<Visibility, TerminalFailure> {
+        let privacy = derive_complete_case_privacy(case, &located.steward, root_overrides)?;
+        validate_early_review_privacy(case, &located.steward, privacy)?;
+        Ok(privacy)
+    };
+    let eligibility = |case: &read::CaseRecord, privacy| {
+        validate_new_early_review(case)?;
+        Ok(privacy)
+    };
+
     if preview {
-        if let Some(outcome) = early_review_preview_retry(
-            &repository_root.join(&relative_event_path),
-            &relative_event_path,
-            &case,
-            &proposal,
-            &event,
-            &steward,
-            root_overrides,
-        )? {
-            return Ok(outcome);
-        }
-        let privacy = derive_complete_case_privacy(&case, &steward, root_overrides)?;
-        validate_early_review_privacy(&case, &steward, privacy)?;
-        if case.revision != expected_revision {
-            return Err(TerminalFailure::refusal(
-                format!(
-                    "expected revision {expected_revision} does not match case `{case_id}` current revision {}",
-                    case.revision
-                ),
-                format!(
-                    "run `case show {case_id}` and retry `case override {case_id}` with `--expected-revision {}` and the approved proposal",
-                    case.revision
-                ),
-            ));
-        }
-        validate_new_early_review(&case)?;
-        return Ok(EarlyReviewOutcome {
-            effect: EarlyReviewEffect::Preview,
-            case_id,
-            event_path: relative_event_path,
-            revision: sequence,
-            privacy: ReportedPrivacy::Derived(privacy),
-            event,
+        let checked = located
+            .publication
+            .check(
+                &located.case,
+                &absolute_event_path,
+                prepared_event,
+                case_privacy,
+                eligibility,
+            )
+            .map_err(|failure| early_review_publication_failure(case_id, failure))?;
+        return Ok(match checked {
+            publication::Checked::Existing(existing) => early_review_retry_outcome(
+                case_id,
+                relative_event_path,
+                &located.case,
+                existing,
+                &located.steward,
+                root_overrides,
+            ),
+            publication::Checked::Fresh(privacy) => early_review_outcome(
+                LaterEventEffect::Preview,
+                case_id,
+                relative_event_path,
+                located.sequence,
+                ReportedPrivacy::Derived(privacy),
+                event,
+            ),
         });
     }
 
-    match publication
+    match located
+        .publication
         .publish(
             publication::PublicationTarget {
-                repository_root: &repository_root,
-                relative_case_directory: &relative_case_directory,
+                repository_root: &located.repository_root,
+                relative_case_directory: &located.relative_case_directory,
                 relative_event_path: &relative_event_path,
             },
-            publication::PreparedEvent {
-                event_id: proposal.prepared.as_ref().map(|prepared| prepared.event_id),
-                bytes: &event,
-            },
+            prepared_event,
             || {
-                read::read_case_for_early_review(
-                    &repository_root,
-                    &relative_case_directory,
+                read::read_case_for(
+                    &located.repository_root,
+                    &located.relative_case_directory,
                     case_id,
-                    steward.repository_id(),
+                    located.steward.repository_id(),
+                    EARLY_REVIEW_UNSTEWARDED_RESOLUTION,
                 )
             },
-            |case| {
-                let privacy = derive_complete_case_privacy(case, &steward, root_overrides)?;
-                validate_early_review_privacy(case, &steward, privacy)?;
-                Ok(privacy)
-            },
-            |case, privacy| {
-                validate_new_early_review(case)?;
-                Ok(privacy)
-            },
+            case_privacy,
+            eligibility,
         )
         .map_err(|failure| early_review_publication_failure(case_id, failure))?
     {
-        publication::PublicationOutcome::Created { validation, .. } => Ok(
-            early_review_created_outcome(case_id, relative_event_path, sequence, validation, event),
-        ),
+        publication::PublicationOutcome::Created { validation, .. } => {
+            Ok(early_review_created_outcome(
+                case_id,
+                relative_event_path,
+                located.sequence,
+                validation,
+                event,
+            ))
+        }
         publication::PublicationOutcome::Existing { case, event } => {
             Ok(early_review_retry_outcome(
                 case_id,
                 relative_event_path,
                 &case,
                 event,
-                &steward,
+                &located.steward,
                 root_overrides,
             ))
         }
@@ -1042,92 +1009,91 @@ pub fn decide(
     root_overrides: &[PathBuf],
     recorded_at: RecordedInstant,
     preview: bool,
-) -> Result<DecisionOutcome, TerminalFailure> {
-    let case_id = parse_case_id(case_id)?;
-    let publication = publication::Publication::new(expected_revision)?;
-    let sequence = publication.sequence();
-    let repository_root = find_repository_root(working_directory)?;
-    let steward = read_steward(&repository_root)?;
-    let (relative_case_directory, case) =
-        load_decision_case(&repository_root, case_id, steward.repository_id())?;
+) -> Result<LaterEventOutcome, TerminalFailure> {
+    let located = locate_later_event_case(
+        working_directory,
+        case_id,
+        expected_revision,
+        DECISION_UNSTEWARDED_RESOLUTION,
+    )?;
+    let case_id = located.case_id;
     let proposal = read_decision_proposal(proposal_path)?;
-    validate_prepared_decision_sequence(&proposal, expected_revision, sequence)?;
-    let relative_event_path =
-        decision_event_path(&repository_root, &relative_case_directory, sequence)?;
-    let absolute_event_path = repository_root.join(&relative_event_path);
-    let event = decision_event_bytes(&proposal, sequence, recorded_at)?;
-    let prepared_event_id = proposal.prepared.as_ref().map(|prepared| prepared.event_id);
+    validate_prepared_decision_sequence(&proposal, expected_revision, located.sequence)?;
+    let (relative_event_path, absolute_event_path) =
+        later_event_paths(&located, EventType::ReuseDecisionAccepted)?;
+    let event = decision_event_bytes(&proposal, located.sequence, recorded_at)?;
+    let prepared_event = publication::PreparedEvent {
+        event_id: proposal.prepared.as_ref().map(|prepared| prepared.event_id),
+        bytes: &event,
+    };
+    let eligibility = |case: &read::CaseRecord, ()| -> Result<Visibility, TerminalFailure> {
+        validate_new_decision(case, &proposal)?;
+        let privacy = derive_complete_case_privacy(case, &located.steward, root_overrides)?;
+        validate_decision_privacy(case, &located.steward, privacy)?;
+        Ok(privacy)
+    };
 
     if preview {
-        if absolute_event_path.exists() {
-            let existing =
-                publication::existing_event(&case, &absolute_event_path, prepared_event_id, &event)
-                    .map_err(|failure| decision_existing_event_failure(case_id, failure))?;
-            return Ok(decision_retry_outcome(
+        let checked = located
+            .publication
+            .check(
+                &located.case,
+                &absolute_event_path,
+                prepared_event,
+                |_| Ok(()),
+                eligibility,
+            )
+            .map_err(|failure| decision_publication_failure(case_id, failure))?;
+        return Ok(match checked {
+            publication::Checked::Existing(existing) => decision_retry_outcome(
                 case_id,
                 relative_event_path,
-                &case,
+                &located.case,
                 existing,
-                &steward,
+                &located.steward,
                 root_overrides,
                 proposal.content.action,
-            ));
-        }
-        if case.revision != expected_revision {
-            return Err(decision_revision_conflict(
+            ),
+            publication::Checked::Fresh(privacy) => decision_outcome(
+                LaterEventEffect::Preview,
                 case_id,
-                expected_revision,
-                case.revision,
-            ));
-        }
-        validate_new_decision(&case, &proposal)?;
-        let privacy = derive_complete_case_privacy(&case, &steward, root_overrides)?;
-        validate_decision_privacy(&case, &steward, privacy)?;
-        return Ok(decision_outcome(
-            DecisionEffect::Preview,
-            case_id,
-            relative_event_path,
-            sequence,
-            ReportedPrivacy::Derived(privacy),
-            proposal.content.action,
-            event,
-        ));
+                relative_event_path,
+                located.sequence,
+                ReportedPrivacy::Derived(privacy),
+                proposal.content.action,
+                event,
+            ),
+        });
     }
 
-    match publication
+    match located
+        .publication
         .publish(
             publication::PublicationTarget {
-                repository_root: &repository_root,
-                relative_case_directory: &relative_case_directory,
+                repository_root: &located.repository_root,
+                relative_case_directory: &located.relative_case_directory,
                 relative_event_path: &relative_event_path,
             },
-            publication::PreparedEvent {
-                event_id: prepared_event_id,
-                bytes: &event,
-            },
+            prepared_event,
             || {
-                read::read_case_for_decision(
-                    &repository_root,
-                    &relative_case_directory,
+                read::read_case_for(
+                    &located.repository_root,
+                    &located.relative_case_directory,
                     case_id,
-                    steward.repository_id(),
+                    located.steward.repository_id(),
+                    DECISION_UNSTEWARDED_RESOLUTION,
                 )
             },
             |_| Ok(()),
-            |case, ()| {
-                validate_new_decision(case, &proposal)?;
-                let privacy = derive_complete_case_privacy(case, &steward, root_overrides)?;
-                validate_decision_privacy(case, &steward, privacy)?;
-                Ok(privacy)
-            },
+            eligibility,
         )
         .map_err(|failure| decision_publication_failure(case_id, failure))?
     {
         publication::PublicationOutcome::Created { validation, .. } => Ok(decision_outcome(
-            DecisionEffect::Created,
+            LaterEventEffect::Created,
             case_id,
             relative_event_path,
-            sequence,
+            located.sequence,
             ReportedPrivacy::Derived(validation),
             proposal.content.action,
             event,
@@ -1137,59 +1103,101 @@ pub fn decide(
             relative_event_path,
             &case,
             event,
-            &steward,
+            &located.steward,
             root_overrides,
             proposal.content.action,
         )),
     }
 }
 
-fn load_decision_case(
-    repository_root: &Path,
+/// The steward, case, and expected sequence a later-event command works against.
+struct LocatedCase {
     case_id: Uuid,
-    steward_repository_id: Uuid,
-) -> Result<(PathBuf, read::CaseRecord), TerminalFailure> {
+    publication: publication::Publication,
+    sequence: i64,
+    repository_root: PathBuf,
+    steward: marker::Marker,
+    relative_case_directory: PathBuf,
+    case: read::CaseRecord,
+}
+
+/// Locates the enrolled steward and the recorded case one later event would extend.
+///
+/// Every later-event command performs these steps in this order; only the resolution for a case
+/// this repository does not steward varies, because it names the command to retry and the case
+/// state that command requires.
+fn locate_later_event_case(
+    working_directory: &Path,
+    case_id: &str,
+    expected_revision: i64,
+    unstewarded_resolution: &str,
+) -> Result<LocatedCase, TerminalFailure> {
+    let case_id = parse_case_id(case_id)?;
+    let publication = publication::Publication::new(expected_revision)?;
+    let sequence = publication.sequence();
+    let repository_root = find_repository_root(working_directory)?;
+    let steward = read_steward(&repository_root)?;
     let relative_case_directory = Path::new("reuse-evidence/cases").join(case_id.to_string());
-    validate_case_storage_path(repository_root, &relative_case_directory)?;
-    let case = read::read_case_for_decision(
-        repository_root,
+    validate_case_storage_path(&repository_root, &relative_case_directory)?;
+    let case = read::read_case_for(
+        &repository_root,
         &relative_case_directory,
         case_id,
-        steward_repository_id,
+        steward.repository_id(),
+        unstewarded_resolution,
     )?;
-    Ok((relative_case_directory, case))
-}
-
-fn decision_event_path(
-    repository_root: &Path,
-    relative_case_directory: &Path,
-    sequence: i64,
-) -> Result<PathBuf, TerminalFailure> {
-    let relative_event_path = case_event_path(
-        relative_case_directory,
+    Ok(LocatedCase {
+        case_id,
+        publication,
         sequence,
-        EventType::ReuseDecisionAccepted,
-    )?;
-    validate_case_storage_path(repository_root, &relative_event_path)?;
-    Ok(relative_event_path)
+        repository_root,
+        steward,
+        relative_case_directory,
+        case,
+    })
 }
 
+/// Builds and validates the repository-relative and absolute paths a typed later event occupies.
+fn later_event_paths(
+    located: &LocatedCase,
+    event_type: EventType,
+) -> Result<(PathBuf, PathBuf), TerminalFailure> {
+    let relative_event_path = case_event_path(
+        &located.relative_case_directory,
+        located.sequence,
+        event_type,
+    )?;
+    validate_case_storage_path(&located.repository_root, &relative_event_path)?;
+    let absolute_event_path = located.repository_root.join(&relative_event_path);
+    Ok((relative_event_path, absolute_event_path))
+}
+
+/// Builds one reuse-decision receipt.
+///
+/// The decision event is the only later event that reports a notice; whether it authorizes
+/// implementation is the accepted action's decision, not the receipt's.
 fn decision_outcome(
-    effect: DecisionEffect,
+    effect: LaterEventEffect,
     case_id: Uuid,
     event_path: PathBuf,
     revision: i64,
     privacy: ReportedPrivacy,
     action: DecisionAction,
     event: String,
-) -> DecisionOutcome {
-    DecisionOutcome {
+) -> LaterEventOutcome {
+    LaterEventOutcome {
         effect,
+        headings: DECISION_HEADINGS,
         case_id,
         event_path,
         revision,
+        state: Some(read::CaseState::AwaitingVerification),
         privacy,
-        action,
+        notice: Some(if action.authorizes_implementation() {
+            IMPLEMENTATION_NOTICE
+        } else {
+            NO_IMPLEMENTATION_NOTICE
+        }),
         event,
     }
 }
@@ -1202,9 +1210,9 @@ fn decision_retry_outcome(
     steward: &marker::Marker,
     root_overrides: &[PathBuf],
     action: DecisionAction,
-) -> DecisionOutcome {
+) -> LaterEventOutcome {
     decision_outcome(
-        DecisionEffect::Existing,
+        LaterEventEffect::Existing,
         case_id,
         event_path,
         event.sequence,
@@ -1402,21 +1410,46 @@ fn validate_prepared_decision_sequence(
     Ok(())
 }
 
+/// Builds one early-review receipt.
+///
+/// Its readiness is stated as a constant rather than derived from the recorded occurrence count,
+/// as ADR 0010 records, and the override authorizes no implementation, so it reports no notice.
+fn early_review_outcome(
+    effect: LaterEventEffect,
+    case_id: Uuid,
+    event_path: PathBuf,
+    revision: i64,
+    privacy: ReportedPrivacy,
+    event: String,
+) -> LaterEventOutcome {
+    LaterEventOutcome {
+        effect,
+        headings: EARLY_REVIEW_HEADINGS,
+        case_id,
+        event_path,
+        revision,
+        state: Some(read::CaseState::ReviewReadyByEarlyReviewOverride),
+        privacy,
+        notice: None,
+        event,
+    }
+}
+
 fn early_review_created_outcome(
     case_id: Uuid,
     event_path: PathBuf,
     revision: i64,
     privacy: Visibility,
     event: String,
-) -> EarlyReviewOutcome {
-    EarlyReviewOutcome {
-        effect: EarlyReviewEffect::Created,
+) -> LaterEventOutcome {
+    early_review_outcome(
+        LaterEventEffect::Created,
         case_id,
         event_path,
         revision,
-        privacy: ReportedPrivacy::Derived(privacy),
+        ReportedPrivacy::Derived(privacy),
         event,
-    }
+    )
 }
 
 fn early_review_retry_outcome(
@@ -1426,15 +1459,15 @@ fn early_review_retry_outcome(
     event: publication::ExistingEvent,
     steward: &marker::Marker,
     root_overrides: &[PathBuf],
-) -> EarlyReviewOutcome {
-    EarlyReviewOutcome {
-        effect: EarlyReviewEffect::Existing,
+) -> LaterEventOutcome {
+    early_review_outcome(
+        LaterEventEffect::Existing,
         case_id,
         event_path,
-        revision: event.sequence,
-        privacy: reported_privacy(case, steward, root_overrides),
-        event: event.bytes,
-    }
+        event.sequence,
+        reported_privacy(case, steward, root_overrides),
+        event.bytes,
+    )
 }
 
 fn early_review_publication_failure(
@@ -1507,35 +1540,6 @@ fn early_review_existing_event_failure(
             )
         }
     }
-}
-
-fn early_review_preview_retry(
-    absolute_event_path: &Path,
-    relative_event_path: &Path,
-    case: &read::CaseRecord,
-    proposal: &EarlyReviewProposal,
-    event: &str,
-    steward: &marker::Marker,
-    root_overrides: &[PathBuf],
-) -> Result<Option<EarlyReviewOutcome>, TerminalFailure> {
-    if !absolute_event_path.exists() {
-        return Ok(None);
-    }
-    let existing = publication::existing_event(
-        case,
-        absolute_event_path,
-        proposal.prepared.as_ref().map(|prepared| prepared.event_id),
-        event,
-    )
-    .map_err(|failure| early_review_existing_event_failure(case.case_id, failure))?;
-    Ok(Some(early_review_retry_outcome(
-        case.case_id,
-        relative_event_path.to_path_buf(),
-        case,
-        existing,
-        steward,
-        root_overrides,
-    )))
 }
 
 fn validate_prepared_early_review_sequence(

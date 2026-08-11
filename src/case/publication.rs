@@ -36,6 +36,18 @@ pub(super) enum PublicationOutcome<C, V> {
     Existing { case: C, event: ExistingEvent },
 }
 
+/// The result of checking a proposed later event against a case that has already been read.
+///
+/// A check never takes the opening-event lock and never creates an event file, so a caller that
+/// only previews reaches the same existence, expected-revision, and eligibility decisions a
+/// publication reaches without becoming able to record one.
+pub(super) enum Checked<V> {
+    /// The typed event path already holds the exact proposed event.
+    Existing(ExistingEvent),
+    /// The typed event path is free and the case accepted the proposed event.
+    Fresh(V),
+}
+
 pub(super) struct ExistingEvent {
     pub(super) sequence: i64,
     pub(super) bytes: String,
@@ -130,7 +142,7 @@ impl<C> LockedPublication<C> {
     }
 }
 
-pub(super) fn existing_event<C: RevisionedCase>(
+fn existing_event<C: RevisionedCase>(
     case: &C,
     absolute_event_path: &Path,
     prepared_event_id: Option<Uuid>,
@@ -193,6 +205,38 @@ impl Publication {
         self.sequence
     }
 
+    /// Decides what a proposed later event would do to a case that has already been read.
+    ///
+    /// Reports the recorded event when the typed path is occupied by an exact retry, refuses a
+    /// stale expected revision, and otherwise reports the eligibility result. It creates nothing.
+    pub(super) fn check<C, B, V>(
+        &self,
+        case: &C,
+        absolute_event_path: &Path,
+        event: PreparedEvent<'_>,
+        before_revision: impl FnOnce(&C) -> Result<B, TerminalFailure>,
+        after_revision: impl FnOnce(&C, B) -> Result<V, TerminalFailure>,
+    ) -> Result<Checked<V>, PublicationFailure>
+    where
+        C: RevisionedCase,
+    {
+        if absolute_event_path.exists() {
+            let existing = existing_event(case, absolute_event_path, event.event_id, event.bytes)
+                .map_err(PublicationFailure::ExistingEvent)?;
+            return Ok(Checked::Existing(existing));
+        }
+        let before_revision = before_revision(case).map_err(PublicationFailure::Protocol)?;
+        if case.revision() != self.expected_revision {
+            return Err(PublicationFailure::RevisionConflict {
+                expected_revision: self.expected_revision,
+                current_revision: case.revision(),
+            });
+        }
+        let validation =
+            after_revision(case, before_revision).map_err(PublicationFailure::Protocol)?;
+        Ok(Checked::Fresh(validation))
+    }
+
     pub(super) fn publish<C, B, V>(
         self,
         target: PublicationTarget<'_>,
@@ -211,29 +255,21 @@ impl Publication {
         )
         .map_err(PublicationFailure::Protocol)?;
         let absolute_event_path = target.repository_root.join(target.relative_event_path);
-        if absolute_event_path.exists() {
-            let existing = existing_event(
-                &locked.case,
-                &absolute_event_path,
-                event.event_id,
-                event.bytes,
-            )
-            .map_err(PublicationFailure::ExistingEvent)?;
-            return Ok(PublicationOutcome::Existing {
-                case: locked.case,
-                event: existing,
-            });
-        }
-        let before_revision =
-            before_revision(&locked.case).map_err(PublicationFailure::Protocol)?;
-        if locked.case.revision() != self.expected_revision {
-            return Err(PublicationFailure::RevisionConflict {
-                expected_revision: self.expected_revision,
-                current_revision: locked.case.revision(),
-            });
-        }
-        let validation =
-            after_revision(&locked.case, before_revision).map_err(PublicationFailure::Protocol)?;
+        let validation = match self.check(
+            &locked.case,
+            &absolute_event_path,
+            event,
+            before_revision,
+            after_revision,
+        )? {
+            Checked::Existing(existing) => {
+                return Ok(PublicationOutcome::Existing {
+                    case: locked.case,
+                    event: existing,
+                });
+            }
+            Checked::Fresh(validation) => validation,
+        };
         match locked
             .create_event(&absolute_event_path, event.bytes.as_bytes())
             .map_err(PublicationFailure::Protocol)?
@@ -262,6 +298,7 @@ impl Publication {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -546,6 +583,132 @@ mod tests {
         assert!(
             !fixture.root.join(event_path).exists(),
             "stale publication must not create an event"
+        );
+    }
+
+    #[test]
+    fn check_reports_a_matching_recorded_event_without_eligibility() {
+        let fixture = Fixture::new("check-existing");
+        let event_path = fixture.event_path(EventType::OccurrenceAppended);
+        let event = event_bytes(EVENT_ID);
+        fs::write(fixture.root.join(&event_path), &event)
+            .expect("recorded event should be writable");
+        let publication = Publication::new(1).expect("expected revision should be valid");
+
+        let checked = publication
+            .check(
+                &TestCase { revision: 2 },
+                &fixture.root.join(&event_path),
+                PreparedEvent {
+                    event_id: Some(EVENT_ID),
+                    bytes: &event,
+                },
+                |_| -> Result<(), TerminalFailure> {
+                    panic!("an exact retry must not repeat event eligibility")
+                },
+                |_, ()| Ok("unreachable"),
+            )
+            .expect("matching identity and bytes should report the recorded event");
+
+        assert!(matches!(
+            checked,
+            Checked::Existing(ExistingEvent {
+                sequence: 2,
+                bytes,
+            }) if bytes == event
+        ));
+    }
+
+    #[test]
+    fn check_refuses_a_stale_expected_revision_before_eligibility() {
+        let fixture = Fixture::new("check-stale-revision");
+        let event_path = fixture.event_path(EventType::OccurrenceAppended);
+        let publication = Publication::new(1).expect("expected revision should be valid");
+
+        let result = publication.check(
+            &TestCase { revision: 2 },
+            &fixture.root.join(&event_path),
+            PreparedEvent {
+                event_id: Some(EVENT_ID),
+                bytes: &event_bytes(EVENT_ID),
+            },
+            |_| Ok(()),
+            |_, ()| -> Result<(), TerminalFailure> {
+                panic!("a stale check must refuse before event eligibility")
+            },
+        );
+
+        assert!(
+            matches!(
+                result,
+                Err(PublicationFailure::RevisionConflict {
+                    expected_revision: 1,
+                    current_revision: 2,
+                })
+            ),
+            "a stale expected revision must return invariant conflict data"
+        );
+    }
+
+    #[test]
+    fn check_derives_before_revision_ahead_of_the_revision_check() {
+        let fixture = Fixture::new("check-before-revision");
+        let event_path = fixture.event_path(EventType::EarlyReviewAuthorized);
+        let publication = Publication::new(1).expect("expected revision should be valid");
+        let derived = Cell::new(false);
+
+        let result = publication.check(
+            &TestCase { revision: 2 },
+            &fixture.root.join(&event_path),
+            PreparedEvent {
+                event_id: Some(EVENT_ID),
+                bytes: &event_bytes(EVENT_ID),
+            },
+            |_| {
+                derived.set(true);
+                Ok(())
+            },
+            |_, ()| -> Result<(), TerminalFailure> {
+                panic!("a stale check must refuse before event eligibility")
+            },
+        );
+
+        assert!(
+            matches!(result, Err(PublicationFailure::RevisionConflict { .. })),
+            "a stale expected revision must still refuse"
+        );
+        assert!(
+            derived.get(),
+            "a derivation ordered before the revision check must run even when the revision is stale"
+        );
+    }
+
+    #[test]
+    fn check_reports_fresh_eligibility_without_creating_the_event() {
+        let fixture = Fixture::new("check-fresh");
+        let event_path = fixture.event_path(EventType::OccurrenceAppended);
+        let publication = Publication::new(1).expect("expected revision should be valid");
+
+        let checked = publication
+            .check(
+                &TestCase { revision: 1 },
+                &fixture.root.join(&event_path),
+                PreparedEvent {
+                    event_id: Some(EVENT_ID),
+                    bytes: &event_bytes(EVENT_ID),
+                },
+                |_| Ok("derived"),
+                |_, derived| Ok(format!("validated after {derived}")),
+            )
+            .expect("a free path at the expected revision should report eligibility");
+
+        assert!(
+            matches!(checked, Checked::Fresh(validation) if validation == "validated after derived"),
+            "eligibility must receive the value derived before the revision check"
+        );
+        assert!(
+            !fixture.root.join(event_path).exists(),
+            "a check must not create an event"
         );
     }
 }

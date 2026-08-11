@@ -512,11 +512,12 @@ pub fn brief(
     let steward = read_steward(&repository_root)?;
     let relative_case_directory = Path::new("reuse-evidence/cases").join(case_id.to_string());
     validate_case_storage_path(&repository_root, &relative_case_directory)?;
-    let case = read_case_for_brief(
+    let case = read_case_for(
         &repository_root,
         &relative_case_directory,
         case_id,
         steward.repository_id(),
+        "run `case list` in this steward repository, then retry `case brief <CASE_ID>` with one of its recorded case identities",
     )?;
     if case.decision.is_none() {
         let state = case.state();
@@ -785,11 +786,16 @@ fn validate_unique_occurrences(
     Ok(())
 }
 
-pub(super) fn read_case_for_append(
+/// Reads a case an operation addressed by identity, refusing one this repository does not steward.
+///
+/// The refusal condition is the same for every operation; only the resolution differs, because it
+/// names the command to retry and the case state that command requires.
+pub(super) fn read_case_for(
     repository_root: &Path,
     relative_case_directory: &Path,
     case_id: Uuid,
     steward_repository_id: Uuid,
+    unstewarded_resolution: &str,
 ) -> Result<CaseRecord, TerminalFailure> {
     let case_directory = repository_root.join(relative_case_directory);
     if matches!(
@@ -800,85 +806,7 @@ pub(super) fn read_case_for_append(
             format!(
                 "case identity `{case_id}` is not stewarded by repository `{steward_repository_id}`"
             ),
-            "run `case list` in this steward repository and retry with a recorded case identity",
-        ));
-    }
-    read_case(
-        repository_root,
-        relative_case_directory,
-        case_id,
-        steward_repository_id,
-    )
-}
-
-pub(super) fn read_case_for_early_review(
-    repository_root: &Path,
-    relative_case_directory: &Path,
-    case_id: Uuid,
-    steward_repository_id: Uuid,
-) -> Result<CaseRecord, TerminalFailure> {
-    let case_directory = repository_root.join(relative_case_directory);
-    if matches!(
-        fs::metadata(&case_directory),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound
-    ) {
-        return Err(TerminalFailure::refusal(
-            format!(
-                "case identity `{case_id}` is not stewarded by repository `{steward_repository_id}`"
-            ),
-            "run `case list` in this steward repository and retry `case override` with a recorded watching case identity",
-        ));
-    }
-    read_case(
-        repository_root,
-        relative_case_directory,
-        case_id,
-        steward_repository_id,
-    )
-}
-
-pub(super) fn read_case_for_decision(
-    repository_root: &Path,
-    relative_case_directory: &Path,
-    case_id: Uuid,
-    steward_repository_id: Uuid,
-) -> Result<CaseRecord, TerminalFailure> {
-    let case_directory = repository_root.join(relative_case_directory);
-    if matches!(
-        fs::metadata(&case_directory),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound
-    ) {
-        return Err(TerminalFailure::refusal(
-            format!(
-                "case identity `{case_id}` is not stewarded by repository `{steward_repository_id}`"
-            ),
-            "run `case list` in this steward repository and retry `case decide` with a recorded review-ready case identity",
-        ));
-    }
-    read_case(
-        repository_root,
-        relative_case_directory,
-        case_id,
-        steward_repository_id,
-    )
-}
-
-fn read_case_for_brief(
-    repository_root: &Path,
-    relative_case_directory: &Path,
-    case_id: Uuid,
-    steward_repository_id: Uuid,
-) -> Result<CaseRecord, TerminalFailure> {
-    let case_directory = repository_root.join(relative_case_directory);
-    if matches!(
-        fs::metadata(&case_directory),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound
-    ) {
-        return Err(TerminalFailure::refusal(
-            format!(
-                "case identity `{case_id}` is not stewarded by repository `{steward_repository_id}`"
-            ),
-            "run `case list` in this steward repository, then retry `case brief <CASE_ID>` with one of its recorded case identities",
+            unstewarded_resolution,
         ));
     }
     read_case(

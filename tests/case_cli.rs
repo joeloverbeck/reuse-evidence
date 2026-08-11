@@ -2009,9 +2009,12 @@ fn reuse_decision_on_unknown_case_refuses_and_creates_nothing() {
 
     assert_eq!(output.status.code(), Some(3), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
-    let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
-    assert!(stderr.contains("is not stewarded"), "{stderr}");
-    assert!(stderr.contains("case list"), "{stderr}");
+    assert_eq!(
+        String::from_utf8(output.stderr).expect("stderr should be UTF-8"),
+        format!(
+            "refusal: case identity `{SECOND_CASE_ID}` is not stewarded by repository `{STEWARD_ID}`\nresolution: run `case list` in this steward repository and retry `case decide` with a recorded review-ready case identity\n"
+        )
+    );
     assert_eq!(
         files_beneath(&fixture.root),
         before,
