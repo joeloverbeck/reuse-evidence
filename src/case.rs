@@ -25,6 +25,9 @@ use crate::{TerminalFailure, Visibility, create_file_atomically};
 
 const CASE_SCHEMA_VERSION: i64 = 1;
 const REVIEW_ONLY_NOTICE: &str = "authorizes semantic review; does not authorize extraction";
+const IMPLEMENTATION_NOTICE: &str =
+    "authorizes implementation outside the reuse lifecycle; does not perform it";
+const NO_IMPLEMENTATION_NOTICE: &str = "authorizes no implementation";
 const PORTFOLIO_UNAVAILABLE_FOOTER: &str = "portfolio conditions unavailable: configure portfolio roots or supply `--root <PATH>` to derive privacy conflicts and staleness\n";
 const PARTICIPANTS_UNRESOLVED_FOOTER: &str = "portfolio conditions unavailable: a recorded participant does not resolve to exactly one enrolled repository beneath the selected portfolio roots; restore its enrollment and unique repository identity to derive privacy\n";
 
@@ -50,6 +53,13 @@ enum EarlyReviewProposalDocument {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum DecisionProposalDocument {
+    Prepared(ReuseDecisionAcceptedEvent),
+    Human(HumanDecisionProposalDocument),
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HumanOpenProposalDocument {
     case_id: String,
@@ -69,6 +79,24 @@ struct HumanEarlyReviewProposalDocument {
     reason: Option<String>,
     review_appetite: Option<String>,
     evidence: Option<Vec<EvidenceReference>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HumanDecisionProposalDocument {
+    identity_verdict: IdentityVerdict,
+    action: DecisionAction,
+    accepted_scope: String,
+    non_responsibilities: Vec<String>,
+    affected_consumers: Vec<AffectedConsumer>,
+    alternatives_rejected: Vec<RejectedAlternative>,
+    compatibility_consequences: String,
+    verification_conditions: Vec<String>,
+    invariant_contract: Option<String>,
+    existing_packages_considered: Option<Vec<ExistingPackageConsidered>>,
+    required_consumer_level_tests: Option<Vec<String>>,
+    migration_expectations: Option<Vec<MigrationExpectation>>,
+    rollback_or_resplitting_path: Option<String>,
 }
 
 #[derive(Debug)]
@@ -114,6 +142,31 @@ struct PreparedEarlyReview {
     bytes: String,
 }
 
+#[derive(Debug)]
+struct DecisionProposal {
+    identity_verdict: IdentityVerdict,
+    action: DecisionAction,
+    accepted_scope: String,
+    non_responsibilities: Vec<String>,
+    affected_consumers: Vec<AffectedConsumer>,
+    alternatives_rejected: Vec<RejectedAlternative>,
+    compatibility_consequences: String,
+    verification_conditions: Vec<String>,
+    invariant_contract: Option<String>,
+    existing_packages_considered: Option<Vec<ExistingPackageConsidered>>,
+    required_consumer_level_tests: Option<Vec<String>>,
+    migration_expectations: Option<Vec<MigrationExpectation>>,
+    rollback_or_resplitting_path: Option<String>,
+    prepared: Option<PreparedDecision>,
+}
+
+#[derive(Debug)]
+struct PreparedDecision {
+    sequence: i64,
+    event_id: Uuid,
+    bytes: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Occurrence {
@@ -136,6 +189,93 @@ struct EvidenceReference {
 #[serde(rename_all = "snake_case")]
 enum EvidenceKind {
     Commit,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum IdentityVerdict {
+    SameResponsibility,
+    DifferentResponsibilities,
+    InsufficientEvidence,
+    ExistingAbstractionIsWrong,
+}
+
+impl IdentityVerdict {
+    const NAMES: &[&str] = &[
+        "same_responsibility",
+        "different_responsibilities",
+        "insufficient_evidence",
+        "existing_abstraction_is_wrong",
+    ];
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DecisionAction {
+    RetainIntentionalDuplication,
+    WaitForMoreEvidence,
+    UseExistingDependency,
+    ExtractOrDeepenLocally,
+    CreateWorkspacePackage,
+    CreatePrivateCrossRepositoryPackage,
+    PublishPublicPackage,
+    CentralizeSchemaSpecificationOrFixtureCorpus,
+    ReplaceCopiesWithGeneratedArtifacts,
+    ContributeMissingBehaviorUpstream,
+    SplitInlineOrNarrowExistingAbstraction,
+}
+
+impl DecisionAction {
+    const NAMES: &[&str] = &[
+        "retain_intentional_duplication",
+        "wait_for_more_evidence",
+        "use_existing_dependency",
+        "extract_or_deepen_locally",
+        "create_workspace_package",
+        "create_private_cross_repository_package",
+        "publish_public_package",
+        "centralize_schema_specification_or_fixture_corpus",
+        "replace_copies_with_generated_artifacts",
+        "contribute_missing_behavior_upstream",
+        "split_inline_or_narrow_existing_abstraction",
+    ];
+
+    const fn authorizes_implementation(self) -> bool {
+        !matches!(
+            self,
+            Self::RetainIntentionalDuplication | Self::WaitForMoreEvidence
+        )
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AffectedConsumer {
+    repository_id: Uuid,
+    consumer: String,
+    expectation: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RejectedAlternative {
+    alternative: String,
+    reason: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ExistingPackageConsidered {
+    package: String,
+    fit: String,
+    reason: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct MigrationExpectation {
+    order: i64,
+    expectation: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -175,6 +315,34 @@ struct EarlyReviewAuthorizedEvent {
     reason: String,
     review_appetite: String,
     evidence: Vec<EvidenceReference>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReuseDecisionAcceptedEvent {
+    schema_version: i64,
+    sequence: i64,
+    event_id: Uuid,
+    event_type: EventType,
+    recorded_at: String,
+    identity_verdict: IdentityVerdict,
+    action: DecisionAction,
+    accepted_scope: String,
+    non_responsibilities: Vec<String>,
+    affected_consumers: Vec<AffectedConsumer>,
+    alternatives_rejected: Vec<RejectedAlternative>,
+    compatibility_consequences: String,
+    verification_conditions: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invariant_contract: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    existing_packages_considered: Option<Vec<ExistingPackageConsidered>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    required_consumer_level_tests: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    migration_expectations: Option<Vec<MigrationExpectation>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rollback_or_resplitting_path: Option<String>,
 }
 
 impl publication::RevisionedCase for read::CaseRecord {
@@ -265,6 +433,25 @@ enum EarlyReviewEffect {
     Existing,
 }
 
+/// The complete observable result of accepting or previewing a reuse decision.
+#[derive(Debug)]
+pub struct DecisionOutcome {
+    effect: DecisionEffect,
+    case_id: Uuid,
+    event_path: PathBuf,
+    revision: i64,
+    privacy: ReportedPrivacy,
+    action: DecisionAction,
+    event: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DecisionEffect {
+    Preview,
+    Created,
+    Existing,
+}
+
 /// The spine every event-type receipt prints, in order.
 ///
 /// Which fields an event type supplies stays that event type's decision under
@@ -278,6 +465,7 @@ struct EventReceipt<'a> {
     revision: i64,
     readiness: Option<read::Readiness>,
     privacy: ReportedPrivacy,
+    notice: Option<&'a str>,
     preview_event: Option<&'a str>,
 }
 
@@ -291,6 +479,9 @@ impl Display for EventReceipt<'_> {
             readiness.write_receipt_lines(formatter, "")?;
         }
         self.privacy.write_receipt_line(formatter)?;
+        if let Some(notice) = self.notice {
+            writeln!(formatter, "decision: {notice}")?;
+        }
         if let Some(event) = self.preview_event {
             formatter.write_str("event:\n")?;
             formatter.write_str(event)?;
@@ -316,6 +507,7 @@ impl Display for OpenOutcome {
             // Opening derives privacy once and has no retry path, so its stored
             // privacy stays a `Visibility` the spine widens only in passing.
             privacy: ReportedPrivacy::Derived(self.privacy),
+            notice: None,
             preview_event: (self.effect == OpenEffect::Preview).then_some(self.event.as_str()),
         }
         .fmt(formatter)
@@ -337,6 +529,7 @@ impl Display for AppendOutcome {
             revision: self.revision,
             readiness: Some(self.readiness),
             privacy: self.privacy,
+            notice: None,
             preview_event: (self.effect == AppendEffect::Preview).then_some(self.event.as_str()),
         }
         .fmt(formatter)
@@ -360,8 +553,36 @@ impl Display for EarlyReviewOutcome {
             // occurrence count, as ADR 0010 records.
             readiness: Some(read::Readiness::ReviewReadyByEarlyReviewOverride),
             privacy: self.privacy,
+            notice: None,
             preview_event: (self.effect == EarlyReviewEffect::Preview)
                 .then_some(self.event.as_str()),
+        }
+        .fmt(formatter)
+    }
+}
+
+/// Renders a reuse-decision event receipt and, for a preview, its exact bytes.
+impl Display for DecisionOutcome {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        let heading = match self.effect {
+            DecisionEffect::Preview => "reuse decision preview",
+            DecisionEffect::Created => "accepted reuse decision",
+            DecisionEffect::Existing => "reuse decision already recorded",
+        };
+        let notice = if self.action.authorizes_implementation() {
+            IMPLEMENTATION_NOTICE
+        } else {
+            NO_IMPLEMENTATION_NOTICE
+        };
+        EventReceipt {
+            heading,
+            case_id: self.case_id,
+            event_path: &self.event_path,
+            revision: self.revision,
+            readiness: Some(read::Readiness::AwaitingVerification),
+            privacy: self.privacy,
+            notice: Some(notice),
+            preview_event: (self.effect == DecisionEffect::Preview).then_some(self.event.as_str()),
         }
         .fmt(formatter)
     }
@@ -793,6 +1014,378 @@ pub fn authorize_early_review(
     }
 }
 
+/// Records or previews the exact reuse decision accepted for a review-ready case.
+///
+/// # Errors
+///
+/// Returns a classified failure when the steward, case, proposal, revision,
+/// privacy, or affected-consumer set cannot be read or validated safely.
+pub fn decide(
+    working_directory: &Path,
+    case_id: &str,
+    expected_revision: i64,
+    proposal_path: &Path,
+    root_overrides: &[PathBuf],
+    recorded_at: RecordedInstant,
+    preview: bool,
+) -> Result<DecisionOutcome, TerminalFailure> {
+    let case_id = parse_case_id(case_id)?;
+    let publication = publication::Publication::new(expected_revision)?;
+    let sequence = publication.sequence();
+    let repository_root = find_repository_root(working_directory)?;
+    let steward = read_steward(&repository_root)?;
+    let (relative_case_directory, case) =
+        load_decision_case(&repository_root, case_id, steward.repository_id())?;
+    let proposal = read_decision_proposal(proposal_path)?;
+    validate_prepared_decision_sequence(&proposal, expected_revision, sequence)?;
+    let relative_event_path =
+        decision_event_path(&repository_root, &relative_case_directory, sequence)?;
+    let absolute_event_path = repository_root.join(&relative_event_path);
+    let event = decision_event_bytes(&proposal, sequence, recorded_at)?;
+    let prepared_event_id = proposal.prepared.as_ref().map(|prepared| prepared.event_id);
+
+    if preview {
+        if absolute_event_path.exists() {
+            let existing =
+                publication::existing_event(&case, &absolute_event_path, prepared_event_id, &event)
+                    .map_err(|failure| decision_existing_event_failure(case_id, failure))?;
+            return Ok(decision_retry_outcome(
+                case_id,
+                relative_event_path,
+                &case,
+                existing,
+                &steward,
+                root_overrides,
+                proposal.action,
+            ));
+        }
+        if case.revision != expected_revision {
+            return Err(decision_revision_conflict(
+                case_id,
+                expected_revision,
+                case.revision,
+            ));
+        }
+        validate_new_decision(&case, &proposal)?;
+        let privacy = derive_complete_case_privacy(&case, &steward, root_overrides)?;
+        validate_decision_privacy(&case, &steward, privacy)?;
+        return Ok(decision_outcome(
+            DecisionEffect::Preview,
+            case_id,
+            relative_event_path,
+            sequence,
+            ReportedPrivacy::Derived(privacy),
+            proposal.action,
+            event,
+        ));
+    }
+
+    match publication
+        .publish(
+            publication::PublicationTarget {
+                repository_root: &repository_root,
+                relative_case_directory: &relative_case_directory,
+                relative_event_path: &relative_event_path,
+            },
+            publication::PreparedEvent {
+                event_id: prepared_event_id,
+                bytes: &event,
+            },
+            || {
+                read::read_case_for_decision(
+                    &repository_root,
+                    &relative_case_directory,
+                    case_id,
+                    steward.repository_id(),
+                )
+            },
+            |_| Ok(()),
+            |case, ()| {
+                validate_new_decision(case, &proposal)?;
+                let privacy = derive_complete_case_privacy(case, &steward, root_overrides)?;
+                validate_decision_privacy(case, &steward, privacy)?;
+                Ok(privacy)
+            },
+        )
+        .map_err(|failure| decision_publication_failure(case_id, failure))?
+    {
+        publication::PublicationOutcome::Created { validation, .. } => Ok(decision_outcome(
+            DecisionEffect::Created,
+            case_id,
+            relative_event_path,
+            sequence,
+            ReportedPrivacy::Derived(validation),
+            proposal.action,
+            event,
+        )),
+        publication::PublicationOutcome::Existing { case, event } => Ok(decision_retry_outcome(
+            case_id,
+            relative_event_path,
+            &case,
+            event,
+            &steward,
+            root_overrides,
+            proposal.action,
+        )),
+    }
+}
+
+fn load_decision_case(
+    repository_root: &Path,
+    case_id: Uuid,
+    steward_repository_id: Uuid,
+) -> Result<(PathBuf, read::CaseRecord), TerminalFailure> {
+    let relative_case_directory = Path::new("reuse-evidence/cases").join(case_id.to_string());
+    validate_case_storage_path(repository_root, &relative_case_directory)?;
+    let case = read::read_case_for_decision(
+        repository_root,
+        &relative_case_directory,
+        case_id,
+        steward_repository_id,
+    )?;
+    Ok((relative_case_directory, case))
+}
+
+fn decision_event_path(
+    repository_root: &Path,
+    relative_case_directory: &Path,
+    sequence: i64,
+) -> Result<PathBuf, TerminalFailure> {
+    let relative_event_path = case_event_path(
+        relative_case_directory,
+        sequence,
+        EventType::ReuseDecisionAccepted,
+    )?;
+    validate_case_storage_path(repository_root, &relative_event_path)?;
+    Ok(relative_event_path)
+}
+
+fn decision_outcome(
+    effect: DecisionEffect,
+    case_id: Uuid,
+    event_path: PathBuf,
+    revision: i64,
+    privacy: ReportedPrivacy,
+    action: DecisionAction,
+    event: String,
+) -> DecisionOutcome {
+    DecisionOutcome {
+        effect,
+        case_id,
+        event_path,
+        revision,
+        privacy,
+        action,
+        event,
+    }
+}
+
+fn decision_retry_outcome(
+    case_id: Uuid,
+    event_path: PathBuf,
+    case: &read::CaseRecord,
+    event: publication::ExistingEvent,
+    steward: &marker::Marker,
+    root_overrides: &[PathBuf],
+    action: DecisionAction,
+) -> DecisionOutcome {
+    decision_outcome(
+        DecisionEffect::Existing,
+        case_id,
+        event_path,
+        event.sequence,
+        retry_privacy(case, steward, root_overrides),
+        action,
+        event.bytes,
+    )
+}
+
+fn decision_publication_failure(
+    case_id: Uuid,
+    failure: publication::PublicationFailure,
+) -> TerminalFailure {
+    match failure {
+        publication::PublicationFailure::Protocol(failure) => failure,
+        publication::PublicationFailure::ExistingEvent(failure) => {
+            decision_existing_event_failure(case_id, failure)
+        }
+        publication::PublicationFailure::RevisionConflict {
+            expected_revision,
+            current_revision,
+        } => decision_revision_conflict(case_id, expected_revision, current_revision),
+    }
+}
+
+fn decision_existing_event_failure(
+    case_id: Uuid,
+    failure: publication::ExistingEventFailure,
+) -> TerminalFailure {
+    match failure {
+        publication::ExistingEventFailure::Unreadable { path, error } => TerminalFailure::refusal(
+            format!(
+                "recorded reuse decision event `{}` cannot be read: {error}",
+                path.display()
+            ),
+            "restore the recorded event before retrying the reuse decision",
+        ),
+        publication::ExistingEventFailure::Invalid { path, error } => TerminalFailure::refusal(
+            format!(
+                "recorded reuse decision event `{}` is invalid: {error}",
+                path.display()
+            ),
+            "restore the supported recorded event before retrying the reuse decision",
+        ),
+        publication::ExistingEventFailure::IdentityConflict {
+            recorded_sequence,
+            recorded_event_id,
+            prepared_event_id,
+            current_revision,
+        } => {
+            let proposed = prepared_event_id.map_or_else(
+                || "a newly prepared event".to_owned(),
+                |event_id| format!("event `{event_id}`"),
+            );
+            TerminalFailure::refusal(
+                format!(
+                    "case `{case_id}` has a revision conflict at sequence {recorded_sequence}: event `{recorded_event_id}` is recorded instead of {proposed}"
+                ),
+                format!(
+                    "inspect sequence {recorded_sequence}; retry its recorded identity if it is the intended reuse decision, or prepare a new operation against revision {current_revision}"
+                ),
+            )
+        }
+        publication::ExistingEventFailure::ContentDrift { recorded_event_id } => {
+            TerminalFailure::refusal(
+                format!(
+                    "reuse decision event identity `{recorded_event_id}` is already recorded with different content"
+                ),
+                "restore the exact previewed reuse decision event before retrying",
+            )
+        }
+    }
+}
+
+fn decision_revision_conflict(
+    case_id: Uuid,
+    expected_revision: i64,
+    current_revision: i64,
+) -> TerminalFailure {
+    TerminalFailure::refusal(
+        format!(
+            "expected revision {expected_revision} does not match case `{case_id}` current revision {current_revision}"
+        ),
+        format!(
+            "run `case show {case_id}` and retry `case decide {case_id}` with `--expected-revision {current_revision}` and the approved proposal"
+        ),
+    )
+}
+
+fn validate_new_decision(
+    case: &read::CaseRecord,
+    proposal: &DecisionProposal,
+) -> Result<(), TerminalFailure> {
+    if case.has_decision() {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case `{}` already records an accepted reuse decision",
+                case.case_id
+            ),
+            "leave the recorded decision unchanged; superseding it requires the separately accepted reopen capability",
+        ));
+    }
+    if !case.readiness().authorizes_review() {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case `{}` is watching and cannot record an accepted reuse decision",
+                case.case_id
+            ),
+            "append a third independent occurrence or record a human-authorized early-review override before retrying the decision",
+        ));
+    }
+    if let Some(affected) =
+        unrecorded_affected_consumer(&case.occurrences, &proposal.affected_consumers)
+    {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "decision affected consumer `{}` in participant `{}` is not recorded by case `{}`",
+                affected.consumer.trim(),
+                affected.repository_id,
+                case.case_id
+            ),
+            "name only a participant repository and consumer pair already evidenced by a recorded occurrence",
+        ));
+    }
+    Ok(())
+}
+
+fn unrecorded_affected_consumer<'a>(
+    occurrences: &[Occurrence],
+    affected_consumers: &'a [AffectedConsumer],
+) -> Option<&'a AffectedConsumer> {
+    affected_consumers.iter().find(|affected| {
+        !occurrences.iter().any(|occurrence| {
+            occurrence.repository_id == affected.repository_id
+                && occurrence.consumer.trim() == affected.consumer.trim()
+        })
+    })
+}
+
+fn validate_recorded_decision_participants(
+    case_id: Uuid,
+    occurrences: &[Occurrence],
+    decision: &ReuseDecisionAcceptedEvent,
+) -> Result<(), TerminalFailure> {
+    let Some(affected) = unrecorded_affected_consumer(occurrences, &decision.affected_consumers)
+    else {
+        return Ok(());
+    };
+    Err(TerminalFailure::refusal(
+        format!(
+            "decision affected consumer `{}` in participant `{}` is not recorded by case `{case_id}`",
+            affected.consumer.trim(),
+            affected.repository_id
+        ),
+        "restore the accepted decision so every affected repository and consumer pair names a recorded case participant",
+    ))
+}
+
+fn validate_decision_privacy(
+    case: &read::CaseRecord,
+    steward: &marker::Marker,
+    privacy: Visibility,
+) -> Result<(), TerminalFailure> {
+    if steward.visibility() == Visibility::Public && privacy == Visibility::Private {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "public steward `{}` cannot record a reuse decision for private case `{}`",
+                steward.repository_id(),
+                case.case_id
+            ),
+            "run `set-visibility --visibility private` in the steward repository, then preview the reuse decision again",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_prepared_decision_sequence(
+    proposal: &DecisionProposal,
+    expected_revision: i64,
+    sequence: i64,
+) -> Result<(), TerminalFailure> {
+    if let Some(prepared) = &proposal.prepared
+        && prepared.sequence != sequence
+    {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "prepared reuse decision event records sequence {}, but expected revision {expected_revision} requires sequence {sequence}",
+                prepared.sequence
+            ),
+            "preview the reuse decision again against the current expected revision",
+        ));
+    }
+    Ok(())
+}
+
 fn early_review_created_outcome(
     case_id: Uuid,
     event_path: PathBuf,
@@ -967,6 +1560,15 @@ fn validate_early_review_privacy(
 }
 
 fn validate_new_early_review(case: &read::CaseRecord) -> Result<(), TerminalFailure> {
+    if case.has_decision() {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case `{}` already records an accepted reuse decision",
+                case.case_id
+            ),
+            "leave the case awaiting verification; an early-review override cannot change a decided case",
+        ));
+    }
     if case.has_early_review() {
         return Err(TerminalFailure::refusal(
             format!(
@@ -1130,6 +1732,41 @@ fn early_review_event_bytes(
     toml::to_string(&event).map_err(|error| {
         TerminalFailure::unsafe_failure(format!(
             "early-review authorization event could not be encoded: {error}"
+        ))
+    })
+}
+
+fn decision_event_bytes(
+    proposal: &DecisionProposal,
+    sequence: i64,
+    recorded_at: RecordedInstant,
+) -> Result<String, TerminalFailure> {
+    if let Some(prepared) = &proposal.prepared {
+        return Ok(prepared.bytes.clone());
+    }
+    let event = ReuseDecisionAcceptedEvent {
+        schema_version: CASE_SCHEMA_VERSION,
+        sequence,
+        event_id: Uuid::new_v4(),
+        event_type: EventType::ReuseDecisionAccepted,
+        recorded_at: recorded_at.to_string(),
+        identity_verdict: proposal.identity_verdict,
+        action: proposal.action,
+        accepted_scope: proposal.accepted_scope.clone(),
+        non_responsibilities: proposal.non_responsibilities.clone(),
+        affected_consumers: proposal.affected_consumers.clone(),
+        alternatives_rejected: proposal.alternatives_rejected.clone(),
+        compatibility_consequences: proposal.compatibility_consequences.clone(),
+        verification_conditions: proposal.verification_conditions.clone(),
+        invariant_contract: proposal.invariant_contract.clone(),
+        existing_packages_considered: proposal.existing_packages_considered.clone(),
+        required_consumer_level_tests: proposal.required_consumer_level_tests.clone(),
+        migration_expectations: proposal.migration_expectations.clone(),
+        rollback_or_resplitting_path: proposal.rollback_or_resplitting_path.clone(),
+    };
+    toml::to_string(&event).map_err(|error| {
+        TerminalFailure::unsafe_failure(format!(
+            "accepted reuse decision event could not be encoded: {error}"
         ))
     })
 }
@@ -1455,6 +2092,224 @@ fn read_proposal(path: &Path) -> Result<OpenProposal, TerminalFailure> {
     Ok(proposal)
 }
 
+fn validate_decision_content(proposal: &DecisionProposal) -> Result<(), TerminalFailure> {
+    validate_common_decision_content(proposal)?;
+    if proposal.action.authorizes_implementation() {
+        validate_change_decision_content(proposal)
+    } else {
+        validate_no_change_decision_content(proposal)
+    }
+}
+
+fn validate_common_decision_content(proposal: &DecisionProposal) -> Result<(), TerminalFailure> {
+    require_nonempty("accepted_scope", &proposal.accepted_scope)?;
+    require_nonempty_string_list("non_responsibilities", &proposal.non_responsibilities)?;
+    if proposal.affected_consumers.is_empty() {
+        return Err(missing_required_decision_item("affected_consumers"));
+    }
+    let mut affected_consumers = BTreeSet::new();
+    for (index, affected) in proposal.affected_consumers.iter().enumerate() {
+        require_nonempty(
+            &format!("affected_consumers[{}].consumer", index + 1),
+            &affected.consumer,
+        )?;
+        require_nonempty(
+            &format!("affected_consumers[{}].expectation", index + 1),
+            &affected.expectation,
+        )?;
+        if !affected_consumers.insert((affected.repository_id, affected.consumer.trim())) {
+            return Err(TerminalFailure::refusal(
+                format!(
+                    "affected_consumers records participant `{}` and consumer `{}` more than once",
+                    affected.repository_id,
+                    affected.consumer.trim()
+                ),
+                "record each affected participant repository and consumer pair exactly once",
+            ));
+        }
+    }
+    if proposal.alternatives_rejected.is_empty() {
+        return Err(missing_required_decision_item("alternatives_rejected"));
+    }
+    for (index, alternative) in proposal.alternatives_rejected.iter().enumerate() {
+        require_nonempty(
+            &format!("alternatives_rejected[{}].alternative", index + 1),
+            &alternative.alternative,
+        )?;
+        require_nonempty(
+            &format!("alternatives_rejected[{}].reason", index + 1),
+            &alternative.reason,
+        )?;
+    }
+    require_nonempty(
+        "compatibility_consequences",
+        &proposal.compatibility_consequences,
+    )?;
+    require_nonempty_string_list("verification_conditions", &proposal.verification_conditions)?;
+    Ok(())
+}
+
+fn validate_change_decision_content(proposal: &DecisionProposal) -> Result<(), TerminalFailure> {
+    let invariant_contract = proposal
+        .invariant_contract
+        .as_deref()
+        .ok_or_else(|| missing_change_decision_item("invariant_contract"))?;
+    require_nonempty("invariant_contract", invariant_contract)?;
+    require_nonempty_change_list(
+        "existing_packages_considered",
+        proposal.existing_packages_considered.as_deref(),
+    )?;
+    require_nonempty_change_list(
+        "required_consumer_level_tests",
+        proposal.required_consumer_level_tests.as_deref(),
+    )?;
+    require_nonempty_change_list(
+        "migration_expectations",
+        proposal.migration_expectations.as_deref(),
+    )?;
+    let rollback = proposal
+        .rollback_or_resplitting_path
+        .as_deref()
+        .ok_or_else(|| missing_change_decision_item("rollback_or_resplitting_path"))?;
+    require_nonempty("rollback_or_resplitting_path", rollback)?;
+
+    let packages = proposal
+        .existing_packages_considered
+        .as_deref()
+        .expect("change-action package list was required above");
+    for (index, package) in packages.iter().enumerate() {
+        require_nonempty(
+            &format!("existing_packages_considered[{}].package", index + 1),
+            &package.package,
+        )?;
+        require_nonempty(
+            &format!("existing_packages_considered[{}].fit", index + 1),
+            &package.fit,
+        )?;
+        require_nonempty(
+            &format!("existing_packages_considered[{}].reason", index + 1),
+            &package.reason,
+        )?;
+    }
+    require_nonempty_string_list(
+        "required_consumer_level_tests",
+        proposal
+            .required_consumer_level_tests
+            .as_deref()
+            .expect("change-action test list was required above"),
+    )?;
+    validate_migration_expectations(
+        proposal
+            .migration_expectations
+            .as_deref()
+            .expect("change-action migration list was required above"),
+    )
+}
+
+fn validate_migration_expectations(
+    migrations: &[MigrationExpectation],
+) -> Result<(), TerminalFailure> {
+    let mut observed_orders = BTreeSet::new();
+    for (index, migration) in migrations.iter().enumerate() {
+        require_nonempty(
+            &format!("migration_expectations[{}].expectation", index + 1),
+            &migration.expectation,
+        )?;
+        if migration.order < 1 || !observed_orders.insert(migration.order) {
+            return Err(TerminalFailure::refusal(
+                format!(
+                    "migration_expectations[{}].order `{}` is not a unique positive order",
+                    index + 1,
+                    migration.order
+                ),
+                "number migration expectations once each in contiguous order beginning at 1",
+            ));
+        }
+    }
+    if observed_orders
+        .iter()
+        .copied()
+        .ne(1..=i64::try_from(migrations.len()).expect("migration count fits in i64"))
+    {
+        return Err(TerminalFailure::refusal(
+            "migration_expectations order is not contiguous from 1",
+            "number migration expectations once each in contiguous order beginning at 1",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_no_change_decision_content(proposal: &DecisionProposal) -> Result<(), TerminalFailure> {
+    if let Some((field, _)) = [
+        ("invariant_contract", proposal.invariant_contract.is_some()),
+        (
+            "existing_packages_considered",
+            proposal.existing_packages_considered.is_some(),
+        ),
+        (
+            "required_consumer_level_tests",
+            proposal.required_consumer_level_tests.is_some(),
+        ),
+        (
+            "migration_expectations",
+            proposal.migration_expectations.is_some(),
+        ),
+        (
+            "rollback_or_resplitting_path",
+            proposal.rollback_or_resplitting_path.is_some(),
+        ),
+    ]
+    .into_iter()
+    .find(|(_, present)| *present)
+    {
+        return Err(TerminalFailure::refusal(
+            format!("reuse decision action authorizes no implementation but carries `{field}`"),
+            format!(
+                "remove `{field}` and all other implementation-shaped items, or choose an action that authorizes implementation"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn require_nonempty_string_list(field: &str, values: &[String]) -> Result<(), TerminalFailure> {
+    if values.is_empty() {
+        return Err(missing_required_decision_item(field));
+    }
+    for (index, value) in values.iter().enumerate() {
+        require_nonempty(&format!("{field}[{}]", index + 1), value)?;
+    }
+    Ok(())
+}
+
+fn missing_required_decision_item(field: &str) -> TerminalFailure {
+    TerminalFailure::refusal(
+        format!("reuse decision `{field}` is missing or empty"),
+        format!("provide non-empty `{field}` content in the accepted reuse decision"),
+    )
+}
+
+fn require_nonempty_change_list<T>(
+    field: &str,
+    value: Option<&[T]>,
+) -> Result<(), TerminalFailure> {
+    if value.is_none_or(<[T]>::is_empty) {
+        return Err(missing_change_decision_item(field));
+    }
+    Ok(())
+}
+
+fn missing_change_decision_item(field: &str) -> TerminalFailure {
+    TerminalFailure::refusal(
+        format!(
+            "reuse decision action authorizes implementation but `{field}` is missing or empty"
+        ),
+        format!(
+            "provide a non-empty `{field}` value, or choose a no-implementation action and omit all implementation-shaped items"
+        ),
+    )
+}
+
 fn read_append_proposal(path: &Path) -> Result<AppendProposal, TerminalFailure> {
     let text = fs::read_to_string(path).map_err(|error| {
         TerminalFailure::refusal(
@@ -1558,6 +2413,92 @@ fn read_early_review_proposal(path: &Path) -> Result<EarlyReviewProposal, Termin
         &proposal.evidence,
     )?;
     Ok(proposal)
+}
+
+fn read_decision_proposal(path: &Path) -> Result<DecisionProposal, TerminalFailure> {
+    let text = fs::read_to_string(path).map_err(|error| {
+        TerminalFailure::refusal(
+            format!(
+                "reuse decision proposal `{}` cannot be read: {error}",
+                path.display()
+            ),
+            "supply a readable UTF-8 TOML proposal with `--proposal <PATH>`",
+        )
+    })?;
+    validate_decision_vocabulary(&text)?;
+    let document = toml::from_str::<DecisionProposalDocument>(&text).map_err(|error| {
+        TerminalFailure::refusal(
+            format!(
+                "reuse decision proposal `{}` is invalid: {error}",
+                path.display()
+            ),
+            "provide a complete TOML reuse-decision proposal using one permitted identity verdict and action",
+        )
+    })?;
+    let proposal = match document {
+        DecisionProposalDocument::Human(document) => DecisionProposal {
+            identity_verdict: document.identity_verdict,
+            action: document.action,
+            accepted_scope: document.accepted_scope,
+            non_responsibilities: document.non_responsibilities,
+            affected_consumers: document.affected_consumers,
+            alternatives_rejected: document.alternatives_rejected,
+            compatibility_consequences: document.compatibility_consequences,
+            verification_conditions: document.verification_conditions,
+            invariant_contract: document.invariant_contract,
+            existing_packages_considered: document.existing_packages_considered,
+            required_consumer_level_tests: document.required_consumer_level_tests,
+            migration_expectations: document.migration_expectations,
+            rollback_or_resplitting_path: document.rollback_or_resplitting_path,
+            prepared: None,
+        },
+        DecisionProposalDocument::Prepared(event) => {
+            validate_recorded_decision(&event)?;
+            DecisionProposal {
+                identity_verdict: event.identity_verdict,
+                action: event.action,
+                accepted_scope: event.accepted_scope,
+                non_responsibilities: event.non_responsibilities,
+                affected_consumers: event.affected_consumers,
+                alternatives_rejected: event.alternatives_rejected,
+                compatibility_consequences: event.compatibility_consequences,
+                verification_conditions: event.verification_conditions,
+                invariant_contract: event.invariant_contract,
+                existing_packages_considered: event.existing_packages_considered,
+                required_consumer_level_tests: event.required_consumer_level_tests,
+                migration_expectations: event.migration_expectations,
+                rollback_or_resplitting_path: event.rollback_or_resplitting_path,
+                prepared: Some(PreparedDecision {
+                    sequence: event.sequence,
+                    event_id: event.event_id,
+                    bytes: text,
+                }),
+            }
+        }
+    };
+    validate_decision_content(&proposal)?;
+    Ok(proposal)
+}
+
+fn validate_decision_vocabulary(text: &str) -> Result<(), TerminalFailure> {
+    let Ok(table) = text.parse::<toml::Table>() else {
+        return Ok(());
+    };
+    for (field, allowed) in [
+        ("identity_verdict", IdentityVerdict::NAMES),
+        ("action", DecisionAction::NAMES),
+    ] {
+        let Some(value) = table.get(field).and_then(toml::Value::as_str) else {
+            continue;
+        };
+        if !allowed.contains(&value) {
+            return Err(TerminalFailure::refusal(
+                format!("reuse decision `{field}` value `{value}` is unrecognized"),
+                format!("use one permitted `{field}` value: {}", allowed.join(", ")),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn parse_case_id(value: &str) -> Result<Uuid, TerminalFailure> {
@@ -1738,6 +2679,48 @@ fn validate_recorded_early_review(
         "case override --preview",
     )?;
     validate_early_review_content(&event.reason, &event.review_appetite, &event.evidence)
+}
+
+fn validate_recorded_decision(event: &ReuseDecisionAcceptedEvent) -> Result<(), TerminalFailure> {
+    if event.schema_version != CASE_SCHEMA_VERSION
+        || event.sequence <= OPENING_SEQUENCE
+        || event.event_type != EventType::ReuseDecisionAccepted
+    {
+        return Err(TerminalFailure::refusal(
+            "prepared reuse decision event is not a supported later event",
+            "use the exact event rendered by `case decide --preview`",
+        ));
+    }
+    if event.event_id.get_version_num() != 4 {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "prepared reuse decision event identity `{}` is not an opaque UUID version 4",
+                event.event_id
+            ),
+            "use the exact event rendered by `case decide --preview`",
+        ));
+    }
+    validate_recorded_at(
+        &event.recorded_at,
+        "reuse decision",
+        "case decide --preview",
+    )?;
+    validate_decision_content(&DecisionProposal {
+        identity_verdict: event.identity_verdict,
+        action: event.action,
+        accepted_scope: event.accepted_scope.clone(),
+        non_responsibilities: event.non_responsibilities.clone(),
+        affected_consumers: event.affected_consumers.clone(),
+        alternatives_rejected: event.alternatives_rejected.clone(),
+        compatibility_consequences: event.compatibility_consequences.clone(),
+        verification_conditions: event.verification_conditions.clone(),
+        invariant_contract: event.invariant_contract.clone(),
+        existing_packages_considered: event.existing_packages_considered.clone(),
+        required_consumer_level_tests: event.required_consumer_level_tests.clone(),
+        migration_expectations: event.migration_expectations.clone(),
+        rollback_or_resplitting_path: event.rollback_or_resplitting_path.clone(),
+        prepared: None,
+    })
 }
 
 fn validate_early_review_content(

@@ -9,8 +9,8 @@ use uuid::Uuid;
 use super::naming::{self, EventFileName, EventPosition, EventType, OPENING_SEQUENCE};
 use super::{
     CASE_SCHEMA_VERSION, CaseOpenedEvent, EarlyReviewAuthorizedEvent, Occurrence,
-    OccurrenceAppendedEvent, REVIEW_ONLY_NOTICE, find_repository_root, read_steward,
-    validate_case_storage_path,
+    OccurrenceAppendedEvent, REVIEW_ONLY_NOTICE, ReuseDecisionAcceptedEvent, find_repository_root,
+    read_steward, validate_case_storage_path,
 };
 use crate::{TerminalFailure, Visibility, portfolio};
 
@@ -19,6 +19,7 @@ pub(super) enum Readiness {
     Watching,
     ReviewReadyByOccurrenceCount,
     ReviewReadyByEarlyReviewOverride,
+    AwaitingVerification,
 }
 
 impl Readiness {
@@ -36,16 +37,20 @@ impl Readiness {
             Self::ReviewReadyByOccurrenceCount | Self::ReviewReadyByEarlyReviewOverride => {
                 "review-ready"
             }
+            Self::AwaitingVerification => "awaiting-verification",
         }
     }
 
     pub(super) const fn authorizes_review(self) -> bool {
-        !matches!(self, Self::Watching)
+        matches!(
+            self,
+            Self::ReviewReadyByOccurrenceCount | Self::ReviewReadyByEarlyReviewOverride
+        )
     }
 
     pub(super) const fn basis(self) -> Option<&'static str> {
         match self {
-            Self::Watching => None,
+            Self::Watching | Self::AwaitingVerification => None,
             Self::ReviewReadyByOccurrenceCount => Some("occurrence-count"),
             Self::ReviewReadyByEarlyReviewOverride => Some("early-review-override"),
         }
@@ -78,6 +83,7 @@ pub(super) struct CaseRecord {
     pub(super) privacy: Visibility,
     pub(super) occurrences: Vec<Occurrence>,
     early_review: Option<EarlyReviewAuthorizedEvent>,
+    decision: Option<ReuseDecisionAcceptedEvent>,
     conditions: Conditions,
 }
 
@@ -85,6 +91,7 @@ enum CaseEvent {
     Opened(CaseOpenedEvent),
     OccurrenceAppended(OccurrenceAppendedEvent),
     EarlyReviewAuthorized(EarlyReviewAuthorizedEvent),
+    ReuseDecisionAccepted(ReuseDecisionAcceptedEvent),
 }
 
 #[derive(Deserialize)]
@@ -115,7 +122,9 @@ fn render_condition(value: Option<bool>) -> &'static str {
 
 impl CaseRecord {
     pub(super) fn readiness(&self) -> Readiness {
-        if self.early_review.is_some() {
+        if self.decision.is_some() {
+            Readiness::AwaitingVerification
+        } else if self.early_review.is_some() {
             Readiness::ReviewReadyByEarlyReviewOverride
         } else {
             Readiness::from_occurrence_count(self.occurrences.len())
@@ -123,7 +132,9 @@ impl CaseRecord {
     }
 
     pub(super) fn readiness_after_appending_occurrence(&self) -> Readiness {
-        if self.early_review.is_some() {
+        if self.decision.is_some() {
+            Readiness::AwaitingVerification
+        } else if self.early_review.is_some() {
             Readiness::ReviewReadyByEarlyReviewOverride
         } else {
             Readiness::from_occurrence_count(self.occurrences.len() + 1)
@@ -132,6 +143,10 @@ impl CaseRecord {
 
     pub(super) const fn has_early_review(&self) -> bool {
         self.early_review.is_some()
+    }
+
+    pub(super) const fn has_decision(&self) -> bool {
+        self.decision.is_some()
     }
 }
 
@@ -448,6 +463,7 @@ fn read_case(
     let mut revision = 0;
     let mut occurrences = Vec::new();
     let mut early_review = None;
+    let mut decision = None;
     for event_path in event_paths {
         let (file_sequence, event) =
             read_case_event(repository_root, &event_path, case_id, steward_repository_id)?;
@@ -466,11 +482,22 @@ fn read_case(
                     ));
                 }
             }
+            CaseEvent::ReuseDecisionAccepted(event) => {
+                if decision.replace(event).is_some() {
+                    return Err(TerminalFailure::refusal(
+                        format!("case `{case_id}` records more than one accepted reuse decision"),
+                        "restore exactly one accepted reuse decision event before reading the case",
+                    ));
+                }
+            }
         }
     }
 
     let opening = opening.expect("a validated case event set has one opening event");
     validate_unique_occurrences(case_id, &occurrences)?;
+    if let Some(decision) = &decision {
+        super::validate_recorded_decision_participants(case_id, &occurrences, decision)?;
+    }
 
     Ok(CaseRecord {
         case_id,
@@ -479,6 +506,7 @@ fn read_case(
         privacy: opening.privacy,
         occurrences,
         early_review,
+        decision,
         conditions: Conditions::UNKNOWN,
     })
 }
@@ -545,6 +573,32 @@ pub(super) fn read_case_for_early_review(
                 "case identity `{case_id}` is not stewarded by repository `{steward_repository_id}`"
             ),
             "run `case list` in this steward repository and retry `case override` with a recorded watching case identity",
+        ));
+    }
+    read_case(
+        repository_root,
+        relative_case_directory,
+        case_id,
+        steward_repository_id,
+    )
+}
+
+pub(super) fn read_case_for_decision(
+    repository_root: &Path,
+    relative_case_directory: &Path,
+    case_id: Uuid,
+    steward_repository_id: Uuid,
+) -> Result<CaseRecord, TerminalFailure> {
+    let case_directory = repository_root.join(relative_case_directory);
+    if matches!(
+        fs::metadata(&case_directory),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound
+    ) {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case identity `{case_id}` is not stewarded by repository `{steward_repository_id}`"
+            ),
+            "run `case list` in this steward repository and retry `case decide` with a recorded review-ready case identity",
         ));
     }
     read_case(
@@ -635,6 +689,9 @@ fn read_case_event(
         EventType::EarlyReviewAuthorized => {
             read_early_review_event(event_path, &event_text, case_id, file_sequence, file_name)
         }
+        EventType::ReuseDecisionAccepted => {
+            read_reuse_decision_event(event_path, &event_text, case_id, file_sequence, file_name)
+        }
     }
 }
 
@@ -684,6 +741,31 @@ fn read_early_review_event(
     validate_file_event_type(case_id, file_name, file_sequence, event.event_type)?;
     super::validate_recorded_early_review(&event)?;
     Ok((file_sequence, CaseEvent::EarlyReviewAuthorized(event)))
+}
+
+fn read_reuse_decision_event(
+    event_path: &Path,
+    event_text: &str,
+    case_id: Uuid,
+    file_sequence: i64,
+    file_name: &str,
+) -> Result<(i64, CaseEvent), TerminalFailure> {
+    let event = toml::from_str::<ReuseDecisionAcceptedEvent>(event_text)
+        .map_err(|error| invalid_event(event_path, &error))?;
+    validate_body_sequence(event_path, event.sequence, file_sequence)?;
+    if event.sequence == OPENING_SEQUENCE {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case event `{}` records `{}` at opening sequence 1",
+                event_path.display(),
+                event.event_type.body_name()
+            ),
+            "restore `case_opened` as sequence 1 and accept reuse decisions only after it",
+        ));
+    }
+    validate_file_event_type(case_id, file_name, file_sequence, event.event_type)?;
+    super::validate_recorded_decision(&event)?;
+    Ok((file_sequence, CaseEvent::ReuseDecisionAccepted(event)))
 }
 
 fn invalid_event(event_path: &Path, error: &toml::de::Error) -> TerminalFailure {

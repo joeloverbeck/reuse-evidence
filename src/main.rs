@@ -102,6 +102,23 @@ enum CaseCommand {
         #[arg(long)]
         preview: bool,
     },
+    /// Record the exact reuse decision accepted for a review-ready case.
+    Decide {
+        /// Opaque identity of the stewarded case whose decision was accepted.
+        case_id: String,
+        /// Revision the accepted decision was reviewed against.
+        #[arg(long)]
+        expected_revision: Option<i64>,
+        /// TOML proposal containing the exact accepted reuse decision.
+        #[arg(long)]
+        proposal: Option<PathBuf>,
+        /// Portfolio root for participant resolution; overrides configuration.
+        #[arg(long)]
+        root: Vec<PathBuf>,
+        /// Render the exact event and privacy consequence without writing.
+        #[arg(long)]
+        preview: bool,
+    },
     /// List every case stewarded by the current repository.
     List {
         /// Portfolio root for current participant conditions; overrides configuration.
@@ -170,23 +187,7 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
             proposal,
             root,
             preview,
-        } => {
-            let proposal = proposal.ok_or_else(|| {
-                TerminalFailure::refusal(
-                    "missing required `--proposal`",
-                    "rerun with `case open --proposal <PATH>`",
-                )
-            })?;
-            let outcome = case::open(
-                Path::new("."),
-                &proposal,
-                &root,
-                RecordedInstant::now()?,
-                preview,
-            )?;
-            print!("{outcome}");
-            Ok(())
-        }
+        } => run_open(proposal.as_deref(), &root, preview),
         CaseCommand::Append {
             case_id,
             expected_revision,
@@ -251,6 +252,19 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
             print!("{outcome}");
             Ok(())
         }
+        CaseCommand::Decide {
+            case_id,
+            expected_revision,
+            proposal,
+            root,
+            preview,
+        } => run_decide(
+            &case_id,
+            expected_revision,
+            proposal.as_deref(),
+            &root,
+            preview,
+        ),
         CaseCommand::List { root } => {
             let outcome = case::list(Path::new("."), &root)?;
             print!("{outcome}");
@@ -262,6 +276,62 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
             Ok(())
         }
     }
+}
+
+fn run_open(
+    proposal: Option<&Path>,
+    root: &[PathBuf],
+    preview: bool,
+) -> Result<(), TerminalFailure> {
+    let proposal = proposal.ok_or_else(|| {
+        TerminalFailure::refusal(
+            "missing required `--proposal`",
+            "rerun with `case open --proposal <PATH>`",
+        )
+    })?;
+    let outcome = case::open(
+        Path::new("."),
+        proposal,
+        root,
+        RecordedInstant::now()?,
+        preview,
+    )?;
+    print!("{outcome}");
+    Ok(())
+}
+
+fn run_decide(
+    case_id: &str,
+    expected_revision: Option<i64>,
+    proposal: Option<&Path>,
+    root: &[PathBuf],
+    preview: bool,
+) -> Result<(), TerminalFailure> {
+    let expected_revision = expected_revision.ok_or_else(|| {
+        TerminalFailure::refusal(
+            "missing required `--expected-revision`",
+            format!(
+                "run `case show {case_id}` to recover the current revision, then rerun `case decide {case_id} --expected-revision <REVISION>`"
+            ),
+        )
+    })?;
+    let proposal = proposal.ok_or_else(|| {
+        TerminalFailure::refusal(
+            "missing required `--proposal`",
+            "rerun with `case decide <CASE_ID> --proposal <PATH>`",
+        )
+    })?;
+    let outcome = case::decide(
+        Path::new("."),
+        case_id,
+        expected_revision,
+        proposal,
+        root,
+        RecordedInstant::now()?,
+        preview,
+    )?;
+    print!("{outcome}");
+    Ok(())
 }
 
 fn terminal_exit(result: Result<(), TerminalFailure>) -> ExitCode {

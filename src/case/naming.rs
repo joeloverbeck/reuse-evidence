@@ -46,6 +46,10 @@ define_event_types! {
         body: "early_review_authorized",
         slug: "early-review-authorized"
     },
+    ReuseDecisionAccepted => {
+        body: "reuse_decision_accepted",
+        slug: "reuse-decision-accepted"
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -67,7 +71,9 @@ impl EventFileName {
         }
         match event_type {
             EventType::CaseOpened if sequence != OPENING_SEQUENCE => return None,
-            EventType::OccurrenceAppended | EventType::EarlyReviewAuthorized
+            EventType::OccurrenceAppended
+            | EventType::EarlyReviewAuthorized
+            | EventType::ReuseDecisionAccepted
                 if sequence == OPENING_SEQUENCE =>
             {
                 return None;
@@ -140,7 +146,9 @@ pub(super) fn is_staged_temporary(file_name: &std::ffi::OsStr, position: EventPo
                 (EventPosition::Opening, EventType::CaseOpened)
                     | (
                         EventPosition::Later,
-                        EventType::OccurrenceAppended | EventType::EarlyReviewAuthorized
+                        EventType::OccurrenceAppended
+                            | EventType::EarlyReviewAuthorized
+                            | EventType::ReuseDecisionAccepted
                     )
             )
         })
@@ -197,6 +205,44 @@ mod tests {
             assert_eq!(identity.sequence(), expected_sequence);
             assert_eq!(identity.event_type(), expected_event_type);
         }
+    }
+
+    #[test]
+    fn accepted_reuse_decision_round_trips_through_the_naming_owner() {
+        #[derive(serde::Serialize)]
+        struct Envelope {
+            event_type: EventType,
+        }
+
+        let name = EventFileName::new(4, EventType::ReuseDecisionAccepted)
+            .expect("an accepted reuse decision is a later case event");
+
+        assert_eq!(name.to_string(), "0004-reuse-decision-accepted.toml");
+        assert_eq!(
+            EventFileName::parse("0004-reuse-decision-accepted.toml"),
+            Some(name)
+        );
+        assert_eq!(
+            EventFileName::new(1, EventType::ReuseDecisionAccepted),
+            None,
+            "an accepted reuse decision cannot occupy the opening sequence"
+        );
+        assert_eq!(
+            toml::to_string(&Envelope {
+                event_type: EventType::ReuseDecisionAccepted,
+            })
+            .expect("the accepted reuse decision type should serialize"),
+            "event_type = \"reuse_decision_accepted\"\n"
+        );
+        let staged = format!(".{name}.{}.tmp", "00000000-0000-4000-8000-000000000001");
+        assert!(is_staged_temporary(
+            OsStr::new(&staged),
+            EventPosition::Later
+        ));
+        assert!(!is_staged_temporary(
+            OsStr::new(&staged),
+            EventPosition::Opening
+        ));
     }
 
     #[test]

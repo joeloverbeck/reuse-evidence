@@ -8,11 +8,11 @@ The project is deliberately not a clone detector and not an automatic refactorin
 
 ## Status
 
-**Repository enrollment, marker-only portfolio reporting with derived change state, durable case opening, growth, early-review authorization, and reading, and skill governance implemented.**
+**Repository enrollment, marker-only portfolio reporting with derived change state, durable case opening, growth, early-review authorization, accepted reuse decisions, reading, and skill governance implemented.**
 
 The public Rust crate and standalone `reuse-evidence` binary can enroll a Git repository, including an npm workspace with no Cargo project. Enrollment writes a human-readable version 1 TOML marker at the nearest repository root, safely revalidates an existing marker without minting another identity, and uses the binary's shared success, unsafe-failure, and refusal exit meanings.
 
-Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, unsupported or unreadable markers, and new, moved, unavailable, or visibility-changed repositories. The case command can preview and atomically open a steward-local case from two or more evidenced occurrences, append a later occurrence against an expected revision, record a human early-review override on a watching case, list every case stewarded by the current repository, and show one case's complete evidence record with freshly derived readiness, privacy-conflict, and staleness conditions. The binary also mounts the published `skill-evidence` lifecycle under `reuse-evidence skills` and this repository commits the four operator packages it installs. Capture, reuse review, decisions, verification, and this project's own `reuse-evidence-*` skill packages are not implemented yet.
+Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, unsupported or unreadable markers, and new, moved, unavailable, or visibility-changed repositories. The case command can preview and atomically open a steward-local case from two or more evidenced occurrences, append a later occurrence against an expected revision, record a human early-review override on a watching case, record the exact accepted decision on a review-ready case, list every case stewarded by the current repository, and show one case's complete evidence record with freshly derived lifecycle, privacy-conflict, and staleness conditions. The binary also mounts the published `skill-evidence` lifecycle under `reuse-evidence skills` and this repository commits the four operator packages it installs. Capture, reuse-review proposal authoring, implementation-brief projection, verification, and this project's own `reuse-evidence-*` skill packages are not implemented yet.
 
 The selected delivery constraints are:
 
@@ -214,6 +214,54 @@ Save the exact `event:` bytes after approval and repeat without `--preview`. A s
 
 The command refuses a missing reason, evidence collection, review appetite, or expected revision; an empty evidence collection; a stale revision; an unknown case; a current public steward for a private case; a second override; and an override on a case already review-ready from three or more occurrences. Every refusal exits with status `3` and writes nothing. Retrying the exact prepared event at its occupied sequence reports that early review is already authorized with status `0`, preserves every file byte-for-byte, and reports privacy exactly as an exact append retry does. Once recorded, the early-review override remains the displayed readiness basis even if a later append raises the occurrence count to the ordinary threshold.
 
+## Record an accepted reuse decision
+
+A decision applies only to a review-ready case, whether readiness came from three independent occurrences or a recorded early-review override. The proposal records the responsibility verdict independently from the chosen action, plus the complete human-accepted scope and verification contract. For example, a change-authorizing proposal has this shape:
+
+```toml
+identity_verdict = "same_responsibility"
+action = "publish_public_package"
+accepted_scope = "the durable event identity contract"
+non_responsibilities = ["case lifecycle storage"]
+compatibility_consequences = "preserve the existing event identity spelling"
+verification_conditions = ["all named consumers pass their public contract tests"]
+invariant_contract = "one opaque UUID identifies one immutable event"
+required_consumer_level_tests = ["each consumer round-trips an event identity"]
+rollback_or_resplitting_path = "restore consumer-local implementations"
+
+[[affected_consumers]]
+repository_id = "00000000-0000-4000-8000-000000000013"
+consumer = "rust-release-tool"
+expectation = "migrate after the package publishes"
+
+[[alternatives_rejected]]
+alternative = "retain intentional duplication"
+reason = "coordinated fixes already cross the consumer boundary"
+
+[[existing_packages_considered]]
+package = "uuid"
+fit = "supplies identifiers but not the event contract"
+reason = "the invariant remains portfolio-owned"
+
+[[migration_expectations]]
+order = 1
+expectation = "publish the invariant contract and its tests"
+```
+
+Recover the current revision with `case show`, then preview the exact accepted event without writing:
+
+```console
+reuse-evidence case decide 00000000-0000-4000-8000-000000000011 \
+  --expected-revision 3 --proposal reuse-decision.toml \
+  --root /home/alice/src --preview
+```
+
+Save the exact `event:` bytes after human approval and repeat without `--preview`. The command exclusively creates one new event, modifies no existing event, and derives `state: awaiting-verification` with no readiness basis. Its receipt reports the case, event path, resulting revision, privacy consequence, and whether the action authorizes implementation outside this lifecycle; this command never performs that implementation.
+
+The identity verdict is one of `same_responsibility`, `different_responsibilities`, `insufficient_evidence`, or `existing_abstraction_is_wrong`. The permitted actions are `retain_intentional_duplication`, `wait_for_more_evidence`, `use_existing_dependency`, `extract_or_deepen_locally`, `create_workspace_package`, `create_private_cross_repository_package`, `publish_public_package`, `centralize_schema_specification_or_fixture_corpus`, `replace_copies_with_generated_artifacts`, `contribute_missing_behavior_upstream`, and `split_inline_or_narrow_existing_abstraction`.
+
+The first two actions authorize no implementation and must omit `invariant_contract`, `existing_packages_considered`, `required_consumer_level_tests`, `migration_expectations`, and `rollback_or_resplitting_path`. Every other action requires all five with non-empty content. Every affected repository-and-consumer pair must already be evidenced by an occurrence in the case. A watching case, stale expected revision, second decision, unrecognized verdict or action, or private case under a currently public steward refuses without writing. An exact prepared-event retry succeeds without writing even when current portfolio roots or participants are unavailable; a different identity at its occupied sequence is a revision conflict.
+
 ## Read cases
 
 From anywhere inside an enrolled steward repository, list every case it owns without requiring portfolio configuration:
@@ -222,7 +270,7 @@ From anywhere inside an enrolled steward repository, list every case it owns wit
 reuse-evidence case list
 ```
 
-The listing reports each case identity, current revision, occurrence count, and state. Two occurrences derive `watching`; three or more derive `review-ready` with `readiness_basis: occurrence-count`; a recorded early-review override derives `review-ready` with `readiness_basis: early-review-override`. Every review-ready result states that it authorizes semantic review and does not authorize extraction.
+The listing reports each case identity, current revision, occurrence count, and state. Two occurrences derive `watching`; three or more derive `review-ready` with `readiness_basis: occurrence-count`; a recorded early-review override derives `review-ready` with `readiness_basis: early-review-override`; and a recorded decision dominates either route and derives `awaiting-verification` with no readiness basis. Every review-ready result states that it authorizes semantic review and does not authorize extraction.
 
 Show the responsibility and complete occurrence evidence for one case with:
 
