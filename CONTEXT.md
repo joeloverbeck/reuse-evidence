@@ -24,7 +24,8 @@ This glossary is the shared language for `reuse-evidence`. Use these terms consi
 | **Early-review override** | A human-authorized decision to review after the second occurrence because concrete cost or risk makes waiting materially worse. It is not permission to extract automatically. |
 | **Reuse review** | A semantic investigation of whether occurrences share a responsibility, what varies legitimately, where authority belongs, and what action is warranted. |
 | **Reuse decision** | The exact human-accepted disposition of a case, including its scope, non-responsibilities, migration expectations, and verification conditions. |
-| **Implementation brief** | The bounded handoff produced by an accepted decision for the normal engineering workflow. It is not implementation and does not schedule downstream work by itself. |
+| **Implementation brief** | The bounded handoff produced by an accepted decision for the normal engineering workflow. It is projected from the recorded decision rather than authored, is not implementation, and does not schedule downstream work by itself. |
+| **Awaiting verification** | The derived state of a case whose accepted reuse decision is recorded. It reports that the case is waiting for independent evidence of the accepted consequence. It does not claim that implementation started, and it supersedes watching and review-ready. |
 | **Verification** | Independent evidence that an accepted decision was implemented as authorized and that the named consumers still satisfy their behavioral contracts. |
 | **Wrong abstraction** | An existing shared surface that couples consumers which no longer share one responsibility or reason to change. A valid decision may split it and deliberately restore duplication. |
 | **Sensor** | An optional external tool or analysis that proposes similarity candidates. A sensor does not establish semantic identity or decision authority. |
@@ -48,6 +49,7 @@ This glossary is the shared language for `reuse-evidence`. Use these terms consi
 - Accumulated occurrences derive **watching** or **review-ready** state.
 - A **reuse review** proposes a **reuse decision**.
 - Only the human accepts the decision.
-- An accepted decision may produce an **implementation brief**.
+- A recorded **reuse decision** derives **awaiting verification**.
+- An accepted change decision projects an **implementation brief** from what the decision recorded.
 - **Verification** determines whether the case may close, park, or reopen.
 - **Sensors** can help find candidates but never change these authority relationships.

@@ -26,6 +26,7 @@ Only the human decision owner can accept, supersede, or reject an ADR. Merge, im
 | [0009](0009-per-event-case-evidence-files.md) | Case events are sequence-numbered single-event TOML files; exclusive create is the expected-revision check. |
 | [0010](0010-publication-shares-only-the-invariant-protocol.md) | Publication shares only ADR 0009's invariant protocol; proposal, eligibility, and privacy derivation stay per event type, while the event-receipt spine may take one owner. |
 | [0011](0011-one-owner-for-case-event-naming.md) | Case event naming has one owner reached one way by publication and projection; the `case.rs`/`case/read.rs` boundary is not re-cut. |
+| [0012](0012-implementation-brief-is-a-projection.md) | The accepted decision is the single durable record; the implementation brief is projected from it and never authored. |
 
 ## Adding or changing an ADR
 

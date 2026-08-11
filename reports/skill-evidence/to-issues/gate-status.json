@@ -1,19 +1,21 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-10T06:16:50.347248735Z",
+  "generated_at": "2026-08-11T00:36:27.609739793Z",
   "target_content_hash": "f6086b3322c82fb21d5da0c6cbd04f093ec20d7ca1e6094a9c2324cbeff6dd1d",
-  "qualifying_uses_on_current_hash": 1,
+  "qualifying_uses_on_current_hash": 2,
   "open_incident_ids": [
-    "evt_74c863ac-a621-4e58-9244-b7f1d562bfb6"
+    "evt_74c863ac-a621-4e58-9244-b7f1d562bfb6",
+    "evt_108c15ca-af07-4575-8159-f43c0a4147c6"
   ],
   "candidate_clusters": [
     {
       "symptom_key": "execution",
       "open_event_ids": [
-        "evt_74c863ac-a621-4e58-9244-b7f1d562bfb6"
+        "evt_74c863ac-a621-4e58-9244-b7f1d562bfb6",
+        "evt_108c15ca-af07-4575-8159-f43c0a4147c6"
       ],
-      "independent_incidents": 1,
-      "max_severity": "friction"
+      "independent_incidents": 2,
+      "max_severity": "material_failure"
     }
   ],
   "state": "collecting",
@@ -27,5 +29,5 @@
   "review_reentry_basis": null,
   "target_name": "to-issues",
   "target_repo_relative_path": ".claude/skills/to-issues",
-  "derivation_session_id": "4e3fdbb2-079f-40e9-8836-be34988e87eb"
+  "derivation_session_id": "d0f3a6ec-bcf2-4a61-908c-790bc964745d"
 }
