@@ -418,10 +418,137 @@ impl LaterEventHeadings {
     }
 }
 
+/// The words one later event type supplies to the shared publication refusals.
+///
+/// Every later event type refuses a failed publication in the same shape; only the words
+/// naming the event and its retry differ. `case::naming` owns the machine spellings under
+/// ADR 0011 — the recorded body string and the file-name slug — and that decision leaves
+/// receipt strings where they are, so the operator-facing vocabulary lives here beside the
+/// headings rather than widening the naming module.
+#[derive(Clone, Copy, Debug)]
+struct LaterEventRefusals {
+    /// Names the recorded event in a condition: `recorded {event} event ...`.
+    event: &'static str,
+    /// Names the operation in a resolution: `... before retrying the {operation}`.
+    operation: &'static str,
+    /// Completes an identity-conflict resolution: `or {conflict_resolution} against revision N`.
+    conflict_resolution: &'static str,
+    /// The command a revision-conflict resolution tells the operator to retry with the
+    /// approved proposal, for an operation that carries one. An operation whose retry needs
+    /// no proposal supplies none and names no command.
+    retry_command: Option<&'static str>,
+}
+
+impl LaterEventRefusals {
+    /// Renders one failed publication as this event type's refusal.
+    ///
+    /// A protocol failure already carries its own terminal meaning and passes through.
+    fn publication_failure(
+        self,
+        case_id: Uuid,
+        failure: publication::PublicationFailure,
+    ) -> TerminalFailure {
+        match failure {
+            publication::PublicationFailure::Protocol(failure) => failure,
+            publication::PublicationFailure::ExistingEvent(failure) => {
+                self.existing_event_failure(case_id, failure)
+            }
+            publication::PublicationFailure::RevisionConflict {
+                expected_revision,
+                current_revision,
+            } => TerminalFailure::refusal(
+                format!(
+                    "expected revision {expected_revision} does not match case `{case_id}` current revision {current_revision}"
+                ),
+                self.retry_command.map_or_else(
+                    || {
+                        format!(
+                            "run `case show {case_id}` and retry with `--expected-revision {current_revision}`"
+                        )
+                    },
+                    |command| {
+                        format!(
+                            "run `case show {case_id}` and retry `{command} {case_id}` with `--expected-revision {current_revision}` and the approved proposal"
+                        )
+                    },
+                ),
+            ),
+        }
+    }
+
+    /// Renders an event already recorded at the target sequence as this event type's refusal.
+    fn existing_event_failure(
+        self,
+        case_id: Uuid,
+        failure: publication::ExistingEventFailure,
+    ) -> TerminalFailure {
+        let Self {
+            event,
+            operation,
+            conflict_resolution,
+            ..
+        } = self;
+        match failure {
+            publication::ExistingEventFailure::Unreadable { path, error } => {
+                TerminalFailure::refusal(
+                    format!(
+                        "recorded {event} event `{}` cannot be read: {error}",
+                        path.display()
+                    ),
+                    format!("restore the recorded event before retrying the {operation}"),
+                )
+            }
+            publication::ExistingEventFailure::Invalid { path, error } => TerminalFailure::refusal(
+                format!(
+                    "recorded {event} event `{}` is invalid: {error}",
+                    path.display()
+                ),
+                format!("restore the supported recorded event before retrying the {operation}"),
+            ),
+            publication::ExistingEventFailure::IdentityConflict {
+                recorded_sequence,
+                recorded_event_id,
+                prepared_event_id,
+                current_revision,
+            } => {
+                let proposed = prepared_event_id.map_or_else(
+                    || "a newly prepared event".to_owned(),
+                    |event_id| format!("event `{event_id}`"),
+                );
+                TerminalFailure::refusal(
+                    format!(
+                        "case `{case_id}` has a revision conflict at sequence {recorded_sequence}: event `{recorded_event_id}` is recorded instead of {proposed}"
+                    ),
+                    format!(
+                        "inspect sequence {recorded_sequence}; retry its recorded identity if it is the intended {operation}, or {conflict_resolution} against revision {current_revision}"
+                    ),
+                )
+            }
+            publication::ExistingEventFailure::ContentDrift { recorded_event_id } => {
+                TerminalFailure::refusal(
+                    format!(
+                        "{event} event identity `{recorded_event_id}` is already recorded with different content"
+                    ),
+                    format!("restore the exact previewed {event} event before retrying"),
+                )
+            }
+        }
+    }
+}
+
 const APPEND_HEADINGS: LaterEventHeadings = LaterEventHeadings {
     preview: "case append preview",
     created: "appended occurrence",
     existing: "occurrence already recorded",
+};
+
+/// Appending retries against a fresh revision rather than a re-approved proposal, so its
+/// revision-conflict resolution names no command and asks for a distinct occurrence.
+const APPEND_REFUSALS: LaterEventRefusals = LaterEventRefusals {
+    event: "append",
+    operation: "append",
+    conflict_resolution: "prepare a distinct occurrence",
+    retry_command: None,
 };
 
 const EARLY_REVIEW_HEADINGS: LaterEventHeadings = LaterEventHeadings {
@@ -430,10 +557,24 @@ const EARLY_REVIEW_HEADINGS: LaterEventHeadings = LaterEventHeadings {
     existing: "early review already authorized",
 };
 
+const EARLY_REVIEW_REFUSALS: LaterEventRefusals = LaterEventRefusals {
+    event: "early-review",
+    operation: "early-review override",
+    conflict_resolution: "prepare a new operation",
+    retry_command: Some("case override"),
+};
+
 const DECISION_HEADINGS: LaterEventHeadings = LaterEventHeadings {
     preview: "reuse decision preview",
     created: "accepted reuse decision",
     existing: "reuse decision already recorded",
+};
+
+const DECISION_REFUSALS: LaterEventRefusals = LaterEventRefusals {
+    event: "reuse decision",
+    operation: "reuse decision",
+    conflict_resolution: "prepare a new operation",
+    retry_command: Some("case decide"),
 };
 
 /// The complete case privacy a receipt reports, or why it could not be derived.
@@ -677,7 +818,7 @@ pub fn append(
                 |_| Ok(()),
                 eligibility,
             )
-            .map_err(|failure| append_publication_failure(case_id, failure))?;
+            .map_err(|failure| APPEND_REFUSALS.publication_failure(case_id, failure))?;
         return Ok(match checked {
             publication::Checked::Existing(existing) => append_retry_outcome(
                 case_id,
@@ -720,7 +861,7 @@ pub fn append(
             |_| Ok(()),
             eligibility,
         )
-        .map_err(|failure| append_publication_failure(case_id, failure))?
+        .map_err(|failure| APPEND_REFUSALS.publication_failure(case_id, failure))?
     {
         publication::PublicationOutcome::Created { case, validation } => Ok(append_outcome(
             LaterEventEffect::Created,
@@ -782,78 +923,6 @@ fn append_retry_outcome(
         reported_privacy(case, steward, location),
         event.bytes,
     )
-}
-
-fn append_publication_failure(
-    case_id: Uuid,
-    failure: publication::PublicationFailure,
-) -> TerminalFailure {
-    match failure {
-        publication::PublicationFailure::Protocol(failure) => failure,
-        publication::PublicationFailure::ExistingEvent(failure) => {
-            append_existing_event_failure(case_id, failure)
-        }
-        publication::PublicationFailure::RevisionConflict {
-            expected_revision,
-            current_revision,
-        } => TerminalFailure::refusal(
-            format!(
-                "expected revision {expected_revision} does not match case `{case_id}` current revision {current_revision}"
-            ),
-            format!(
-                "run `case show {case_id}` and retry with `--expected-revision {current_revision}`"
-            ),
-        ),
-    }
-}
-
-fn append_existing_event_failure(
-    case_id: Uuid,
-    failure: publication::ExistingEventFailure,
-) -> TerminalFailure {
-    match failure {
-        publication::ExistingEventFailure::Unreadable { path, error } => TerminalFailure::refusal(
-            format!(
-                "recorded append event `{}` cannot be read: {error}",
-                path.display()
-            ),
-            "restore the recorded event before retrying the append",
-        ),
-        publication::ExistingEventFailure::Invalid { path, error } => TerminalFailure::refusal(
-            format!(
-                "recorded append event `{}` is invalid: {error}",
-                path.display()
-            ),
-            "restore the supported recorded event before retrying the append",
-        ),
-        publication::ExistingEventFailure::IdentityConflict {
-            recorded_sequence,
-            recorded_event_id,
-            prepared_event_id,
-            current_revision,
-        } => {
-            let proposed = prepared_event_id.map_or_else(
-                || "a newly prepared event".to_owned(),
-                |event_id| format!("event `{event_id}`"),
-            );
-            TerminalFailure::refusal(
-                format!(
-                    "case `{case_id}` has a revision conflict at sequence {recorded_sequence}: event `{recorded_event_id}` is recorded instead of {proposed}"
-                ),
-                format!(
-                    "inspect sequence {recorded_sequence}; retry its recorded identity if it is the intended append, or prepare a distinct occurrence against revision {current_revision}"
-                ),
-            )
-        }
-        publication::ExistingEventFailure::ContentDrift { recorded_event_id } => {
-            TerminalFailure::refusal(
-                format!(
-                    "append event identity `{recorded_event_id}` is already recorded with different content"
-                ),
-                "restore the exact previewed append event before retrying",
-            )
-        }
-    }
 }
 
 fn validate_prepared_append_sequence(
@@ -927,7 +996,7 @@ pub fn authorize_early_review(
                 case_privacy,
                 eligibility,
             )
-            .map_err(|failure| early_review_publication_failure(case_id, failure))?;
+            .map_err(|failure| EARLY_REVIEW_REFUSALS.publication_failure(case_id, failure))?;
         return Ok(match checked {
             publication::Checked::Existing(existing) => early_review_retry_outcome(
                 case_id,
@@ -969,7 +1038,7 @@ pub fn authorize_early_review(
             case_privacy,
             eligibility,
         )
-        .map_err(|failure| early_review_publication_failure(case_id, failure))?
+        .map_err(|failure| EARLY_REVIEW_REFUSALS.publication_failure(case_id, failure))?
     {
         publication::PublicationOutcome::Created { validation, .. } => {
             Ok(early_review_created_outcome(
@@ -1042,7 +1111,7 @@ pub fn decide(
                 |_| Ok(()),
                 eligibility,
             )
-            .map_err(|failure| decision_publication_failure(case_id, failure))?;
+            .map_err(|failure| DECISION_REFUSALS.publication_failure(case_id, failure))?;
         return Ok(match checked {
             publication::Checked::Existing(existing) => decision_retry_outcome(
                 case_id,
@@ -1086,7 +1155,7 @@ pub fn decide(
             |_| Ok(()),
             eligibility,
         )
-        .map_err(|failure| decision_publication_failure(case_id, failure))?
+        .map_err(|failure| DECISION_REFUSALS.publication_failure(case_id, failure))?
     {
         publication::PublicationOutcome::Created { validation, .. } => Ok(decision_outcome(
             LaterEventEffect::Created,
@@ -1222,86 +1291,6 @@ fn decision_retry_outcome(
         reported_privacy(case, steward, location),
         action,
         event.bytes,
-    )
-}
-
-fn decision_publication_failure(
-    case_id: Uuid,
-    failure: publication::PublicationFailure,
-) -> TerminalFailure {
-    match failure {
-        publication::PublicationFailure::Protocol(failure) => failure,
-        publication::PublicationFailure::ExistingEvent(failure) => {
-            decision_existing_event_failure(case_id, failure)
-        }
-        publication::PublicationFailure::RevisionConflict {
-            expected_revision,
-            current_revision,
-        } => decision_revision_conflict(case_id, expected_revision, current_revision),
-    }
-}
-
-fn decision_existing_event_failure(
-    case_id: Uuid,
-    failure: publication::ExistingEventFailure,
-) -> TerminalFailure {
-    match failure {
-        publication::ExistingEventFailure::Unreadable { path, error } => TerminalFailure::refusal(
-            format!(
-                "recorded reuse decision event `{}` cannot be read: {error}",
-                path.display()
-            ),
-            "restore the recorded event before retrying the reuse decision",
-        ),
-        publication::ExistingEventFailure::Invalid { path, error } => TerminalFailure::refusal(
-            format!(
-                "recorded reuse decision event `{}` is invalid: {error}",
-                path.display()
-            ),
-            "restore the supported recorded event before retrying the reuse decision",
-        ),
-        publication::ExistingEventFailure::IdentityConflict {
-            recorded_sequence,
-            recorded_event_id,
-            prepared_event_id,
-            current_revision,
-        } => {
-            let proposed = prepared_event_id.map_or_else(
-                || "a newly prepared event".to_owned(),
-                |event_id| format!("event `{event_id}`"),
-            );
-            TerminalFailure::refusal(
-                format!(
-                    "case `{case_id}` has a revision conflict at sequence {recorded_sequence}: event `{recorded_event_id}` is recorded instead of {proposed}"
-                ),
-                format!(
-                    "inspect sequence {recorded_sequence}; retry its recorded identity if it is the intended reuse decision, or prepare a new operation against revision {current_revision}"
-                ),
-            )
-        }
-        publication::ExistingEventFailure::ContentDrift { recorded_event_id } => {
-            TerminalFailure::refusal(
-                format!(
-                    "reuse decision event identity `{recorded_event_id}` is already recorded with different content"
-                ),
-                "restore the exact previewed reuse decision event before retrying",
-            )
-        }
-    }
-}
-
-fn decision_revision_conflict(
-    case_id: Uuid,
-    expected_revision: i64,
-    current_revision: i64,
-) -> TerminalFailure {
-    TerminalFailure::refusal(
-        format!(
-            "expected revision {expected_revision} does not match case `{case_id}` current revision {current_revision}"
-        ),
-        format!(
-            "run `case show {case_id}` and retry `case decide {case_id}` with `--expected-revision {current_revision}` and the approved proposal"
-        ),
     )
 }
 
@@ -1471,78 +1460,6 @@ fn early_review_retry_outcome(
         reported_privacy(case, steward, location),
         event.bytes,
     )
-}
-
-fn early_review_publication_failure(
-    case_id: Uuid,
-    failure: publication::PublicationFailure,
-) -> TerminalFailure {
-    match failure {
-        publication::PublicationFailure::Protocol(failure) => failure,
-        publication::PublicationFailure::ExistingEvent(failure) => {
-            early_review_existing_event_failure(case_id, failure)
-        }
-        publication::PublicationFailure::RevisionConflict {
-            expected_revision,
-            current_revision,
-        } => TerminalFailure::refusal(
-            format!(
-                "expected revision {expected_revision} does not match case `{case_id}` current revision {current_revision}"
-            ),
-            format!(
-                "run `case show {case_id}` and retry `case override {case_id}` with `--expected-revision {current_revision}` and the approved proposal"
-            ),
-        ),
-    }
-}
-
-fn early_review_existing_event_failure(
-    case_id: Uuid,
-    failure: publication::ExistingEventFailure,
-) -> TerminalFailure {
-    match failure {
-        publication::ExistingEventFailure::Unreadable { path, error } => TerminalFailure::refusal(
-            format!(
-                "recorded early-review event `{}` cannot be read: {error}",
-                path.display()
-            ),
-            "restore the recorded event before retrying the early-review override",
-        ),
-        publication::ExistingEventFailure::Invalid { path, error } => TerminalFailure::refusal(
-            format!(
-                "recorded early-review event `{}` is invalid: {error}",
-                path.display()
-            ),
-            "restore the supported recorded event before retrying the early-review override",
-        ),
-        publication::ExistingEventFailure::IdentityConflict {
-            recorded_sequence,
-            recorded_event_id,
-            prepared_event_id,
-            current_revision,
-        } => {
-            let proposed = prepared_event_id.map_or_else(
-                || "a newly prepared event".to_owned(),
-                |event_id| format!("event `{event_id}`"),
-            );
-            TerminalFailure::refusal(
-                format!(
-                    "case `{case_id}` has a revision conflict at sequence {recorded_sequence}: event `{recorded_event_id}` is recorded instead of {proposed}"
-                ),
-                format!(
-                    "inspect sequence {recorded_sequence}; retry its recorded identity if it is the intended early-review override, or prepare a new operation against revision {current_revision}"
-                ),
-            )
-        }
-        publication::ExistingEventFailure::ContentDrift { recorded_event_id } => {
-            TerminalFailure::refusal(
-                format!(
-                    "early-review event identity `{recorded_event_id}` is already recorded with different content"
-                ),
-                "restore the exact previewed early-review event before retrying",
-            )
-        }
-    }
 }
 
 fn validate_prepared_early_review_sequence(
@@ -2920,5 +2837,250 @@ mod tests {
             error.to_string().contains("unknown field `surprise`"),
             "the refusal must name the unknown field: {error}"
         );
+    }
+
+    /// The recorded and prepared identities a publication failure names.
+    const RECORDED_EVENT_ID: &str = "44444444-4444-4444-8444-444444444444";
+    const PREPARED_EVENT_ID: &str = "55555555-5555-4555-8555-555555555555";
+    const EXISTING_EVENT_PATH: &str = "cases/0002-occurrence-appended.toml";
+
+    /// Renders one later-event publication failure the way a command's `map_err` does.
+    ///
+    /// `CONSUMER-CONTRACT.md` §1 makes the terminal meanings an independently versioned
+    /// surface, and ADR 0016 places refusal prose in process rather than at the process
+    /// boundary. Every expectation below is a literal transcribed from the terminal text,
+    /// so a renderer that changes one byte fails here rather than reaching an operator.
+    fn refusal(
+        render: fn(Uuid, publication::PublicationFailure) -> TerminalFailure,
+        failure: publication::PublicationFailure,
+    ) -> String {
+        render(fixture_case_id(), failure).to_string()
+    }
+
+    fn append_refusal(case_id: Uuid, failure: publication::PublicationFailure) -> TerminalFailure {
+        APPEND_REFUSALS.publication_failure(case_id, failure)
+    }
+
+    fn early_review_refusal(
+        case_id: Uuid,
+        failure: publication::PublicationFailure,
+    ) -> TerminalFailure {
+        EARLY_REVIEW_REFUSALS.publication_failure(case_id, failure)
+    }
+
+    fn decision_refusal(
+        case_id: Uuid,
+        failure: publication::PublicationFailure,
+    ) -> TerminalFailure {
+        DECISION_REFUSALS.publication_failure(case_id, failure)
+    }
+
+    fn fixture_case_id() -> Uuid {
+        Uuid::parse_str(CASE_ID).expect("the fixture case is a valid UUID")
+    }
+
+    fn recorded_event_id() -> Uuid {
+        Uuid::parse_str(RECORDED_EVENT_ID).expect("the recorded identity is a valid UUID")
+    }
+
+    fn unreadable_existing_event() -> publication::PublicationFailure {
+        publication::PublicationFailure::ExistingEvent(
+            publication::ExistingEventFailure::Unreadable {
+                path: PathBuf::from(EXISTING_EVENT_PATH),
+                error: std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "permission denied",
+                ),
+            },
+        )
+    }
+
+    fn invalid_existing_event() -> publication::PublicationFailure {
+        publication::PublicationFailure::ExistingEvent(publication::ExistingEventFailure::Invalid {
+            path: PathBuf::from(EXISTING_EVENT_PATH),
+            error: toml::from_str::<toml::Value>("not = = toml")
+                .expect_err("the fixture must fail to parse"),
+        })
+    }
+
+    fn identity_conflict(prepared_event_id: Option<Uuid>) -> publication::PublicationFailure {
+        publication::PublicationFailure::ExistingEvent(
+            publication::ExistingEventFailure::IdentityConflict {
+                recorded_sequence: 2,
+                recorded_event_id: recorded_event_id(),
+                prepared_event_id,
+                current_revision: 3,
+            },
+        )
+    }
+
+    fn prepared_identity_conflict() -> publication::PublicationFailure {
+        identity_conflict(Some(
+            Uuid::parse_str(PREPARED_EVENT_ID).expect("the prepared identity is a valid UUID"),
+        ))
+    }
+
+    fn content_drift() -> publication::PublicationFailure {
+        publication::PublicationFailure::ExistingEvent(
+            publication::ExistingEventFailure::ContentDrift {
+                recorded_event_id: recorded_event_id(),
+            },
+        )
+    }
+
+    const fn revision_conflict() -> publication::PublicationFailure {
+        publication::PublicationFailure::RevisionConflict {
+            expected_revision: 1,
+            current_revision: 3,
+        }
+    }
+
+    /// Asserts an invalid-event refusal, whose middle is `toml`'s own parse diagnostic.
+    fn assert_invalid_event_refusal(rendered: &str, event_noun: &str, operation: &str) {
+        let condition =
+            format!("refusal: recorded {event_noun} event `{EXISTING_EVENT_PATH}` is invalid: ");
+        let resolution = format!(
+            "\nresolution: restore the supported recorded event before retrying the {operation}"
+        );
+        assert!(
+            rendered.starts_with(&condition),
+            "the refusal must open with `{condition}`: {rendered}"
+        );
+        assert!(
+            rendered.ends_with(&resolution),
+            "the refusal must close with `{resolution}`: {rendered}"
+        );
+    }
+
+    #[test]
+    fn an_append_publication_failure_names_the_append() {
+        let case_id = fixture_case_id();
+
+        assert_eq!(
+            refusal(append_refusal, unreadable_existing_event()),
+            format!(
+                "refusal: recorded append event `{EXISTING_EVENT_PATH}` cannot be read: permission denied\nresolution: restore the recorded event before retrying the append"
+            )
+        );
+        assert_invalid_event_refusal(
+            &refusal(append_refusal, invalid_existing_event()),
+            "append",
+            "append",
+        );
+        assert_eq!(
+            refusal(append_refusal, prepared_identity_conflict()),
+            format!(
+                "refusal: case `{case_id}` has a revision conflict at sequence 2: event `{RECORDED_EVENT_ID}` is recorded instead of event `{PREPARED_EVENT_ID}`\nresolution: inspect sequence 2; retry its recorded identity if it is the intended append, or prepare a distinct occurrence against revision 3"
+            )
+        );
+        assert_eq!(
+            refusal(append_refusal, content_drift()),
+            format!(
+                "refusal: append event identity `{RECORDED_EVENT_ID}` is already recorded with different content\nresolution: restore the exact previewed append event before retrying"
+            )
+        );
+        assert_eq!(
+            refusal(append_refusal, revision_conflict()),
+            format!(
+                "refusal: expected revision 1 does not match case `{case_id}` current revision 3\nresolution: run `case show {case_id}` and retry with `--expected-revision 3`"
+            )
+        );
+    }
+
+    #[test]
+    fn an_early_review_publication_failure_names_the_override() {
+        let case_id = fixture_case_id();
+
+        assert_eq!(
+            refusal(early_review_refusal, unreadable_existing_event()),
+            format!(
+                "refusal: recorded early-review event `{EXISTING_EVENT_PATH}` cannot be read: permission denied\nresolution: restore the recorded event before retrying the early-review override"
+            )
+        );
+        assert_invalid_event_refusal(
+            &refusal(early_review_refusal, invalid_existing_event()),
+            "early-review",
+            "early-review override",
+        );
+        assert_eq!(
+            refusal(early_review_refusal, prepared_identity_conflict()),
+            format!(
+                "refusal: case `{case_id}` has a revision conflict at sequence 2: event `{RECORDED_EVENT_ID}` is recorded instead of event `{PREPARED_EVENT_ID}`\nresolution: inspect sequence 2; retry its recorded identity if it is the intended early-review override, or prepare a new operation against revision 3"
+            )
+        );
+        assert_eq!(
+            refusal(early_review_refusal, content_drift()),
+            format!(
+                "refusal: early-review event identity `{RECORDED_EVENT_ID}` is already recorded with different content\nresolution: restore the exact previewed early-review event before retrying"
+            )
+        );
+        assert_eq!(
+            refusal(early_review_refusal, revision_conflict()),
+            format!(
+                "refusal: expected revision 1 does not match case `{case_id}` current revision 3\nresolution: run `case show {case_id}` and retry `case override {case_id}` with `--expected-revision 3` and the approved proposal"
+            )
+        );
+    }
+
+    #[test]
+    fn a_decision_publication_failure_names_the_reuse_decision() {
+        let case_id = fixture_case_id();
+
+        assert_eq!(
+            refusal(decision_refusal, unreadable_existing_event()),
+            format!(
+                "refusal: recorded reuse decision event `{EXISTING_EVENT_PATH}` cannot be read: permission denied\nresolution: restore the recorded event before retrying the reuse decision"
+            )
+        );
+        assert_invalid_event_refusal(
+            &refusal(decision_refusal, invalid_existing_event()),
+            "reuse decision",
+            "reuse decision",
+        );
+        assert_eq!(
+            refusal(decision_refusal, prepared_identity_conflict()),
+            format!(
+                "refusal: case `{case_id}` has a revision conflict at sequence 2: event `{RECORDED_EVENT_ID}` is recorded instead of event `{PREPARED_EVENT_ID}`\nresolution: inspect sequence 2; retry its recorded identity if it is the intended reuse decision, or prepare a new operation against revision 3"
+            )
+        );
+        assert_eq!(
+            refusal(decision_refusal, content_drift()),
+            format!(
+                "refusal: reuse decision event identity `{RECORDED_EVENT_ID}` is already recorded with different content\nresolution: restore the exact previewed reuse decision event before retrying"
+            )
+        );
+        assert_eq!(
+            refusal(decision_refusal, revision_conflict()),
+            format!(
+                "refusal: expected revision 1 does not match case `{case_id}` current revision 3\nresolution: run `case show {case_id}` and retry `case decide {case_id}` with `--expected-revision 3` and the approved proposal"
+            )
+        );
+    }
+
+    #[test]
+    fn an_identity_conflict_without_a_prepared_event_names_no_proposed_identity() {
+        let case_id = fixture_case_id();
+
+        assert_eq!(
+            refusal(append_refusal, identity_conflict(None)),
+            format!(
+                "refusal: case `{case_id}` has a revision conflict at sequence 2: event `{RECORDED_EVENT_ID}` is recorded instead of a newly prepared event\nresolution: inspect sequence 2; retry its recorded identity if it is the intended append, or prepare a distinct occurrence against revision 3"
+            )
+        );
+    }
+
+    #[test]
+    fn a_protocol_failure_reaches_the_terminal_unchanged() {
+        for render in [append_refusal, early_review_refusal, decision_refusal] {
+            assert_eq!(
+                refusal(
+                    render,
+                    publication::PublicationFailure::Protocol(TerminalFailure::unsafe_failure(
+                        "the case directory could not be locked"
+                    ))
+                ),
+                "unsafe failure: the case directory could not be locked"
+            );
+        }
     }
 }
