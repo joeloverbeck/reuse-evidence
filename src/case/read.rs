@@ -649,6 +649,20 @@ fn read_cases(
     Ok(cases)
 }
 
+/// Returns the first steward-local case whose opening event recorded private privacy.
+///
+/// Cases are read through the same validating reader used by the case queries. The ordering is
+/// deterministic by opaque case identity and needs no configured portfolio root.
+pub(crate) fn first_recorded_private_case(
+    repository_root: &Path,
+    steward_repository_id: Uuid,
+) -> Result<Option<Uuid>, TerminalFailure> {
+    Ok(read_cases(repository_root, steward_repository_id)?
+        .into_iter()
+        .find(|case| case.privacy == Visibility::Private)
+        .map(|case| case.case_id))
+}
+
 fn read_case(
     repository_root: &Path,
     relative_case_directory: &Path,

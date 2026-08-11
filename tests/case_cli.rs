@@ -121,6 +121,23 @@ fn run_without_portfolio_configuration(
         .expect("compiled reuse-evidence binary should run")
 }
 
+// Constructs a state the CLI now refuses so later-event defenses remain covered.
+fn force_marker_visibility(repository: &Path, from: &str, to: &str) {
+    let marker_path = repository.join("reuse-evidence.toml");
+    let marker = fs::read_to_string(&marker_path).expect("fixture marker should be readable");
+    let from_line = format!("visibility = \"{from}\"");
+    assert_eq!(
+        marker.matches(&from_line).count(),
+        1,
+        "fixture marker should contain exactly one expected visibility"
+    );
+    fs::write(
+        marker_path,
+        marker.replacen(&from_line, &format!("visibility = \"{to}\""), 1),
+    )
+    .expect("fixture marker visibility should be writable");
+}
+
 fn spawn_competing_later_event_writers(
     steward: &Path,
     root: &str,
@@ -2282,6 +2299,215 @@ fn second_reuse_decision_against_current_revision_refuses_without_writes() {
 }
 
 #[test]
+fn set_visibility_refuses_public_transition_for_recorded_private_cases_without_writes() {
+    let fixture = Fixture::new("visibility-private-case-guard");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "public");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    for (path, proposal) in [
+        (
+            fixture.root.join("first-case.toml"),
+            two_occurrence_proposal(),
+        ),
+        (
+            fixture.root.join("second-case.toml"),
+            two_occurrence_proposal().replace(CASE_ID, SECOND_CASE_ID),
+        ),
+    ] {
+        fs::write(&path, proposal).expect("case proposal should be writable");
+        let opened = run_in(
+            &steward,
+            &[
+                "case",
+                "open",
+                "--proposal",
+                path.to_str().expect("fixture path should be UTF-8"),
+                "--root",
+                root,
+            ],
+        );
+        assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    }
+    let configured_home = fixture.root.join("configured");
+    fs::create_dir_all(configured_home.join("reuse-evidence"))
+        .expect("portfolio configuration directory should be creatable");
+    fs::write(
+        configured_home.join("reuse-evidence/config.toml"),
+        format!("portfolio_roots = [\"{}\"]\n", fixture.root.display()),
+    )
+    .expect("portfolio configuration should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let unconfigured = run_without_portfolio_configuration(
+        &fixture,
+        &steward,
+        &["set-visibility", "--visibility", "public"],
+    );
+    let configured = Command::new(env!("CARGO_BIN_EXE_reuse-evidence"))
+        .args(["set-visibility", "--visibility", "public"])
+        .current_dir(&steward)
+        .env("XDG_CONFIG_HOME", configured_home)
+        .env("XDG_STATE_HOME", fixture.root.join("configured-state"))
+        .output()
+        .expect("compiled reuse-evidence binary should run");
+
+    for output in [&unconfigured, &configured] {
+        assert_eq!(output.status.code(), Some(3), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert_eq!(
+            String::from_utf8(output.stderr.clone()).expect("stderr should be UTF-8"),
+            format!(
+                "refusal: repository `{STEWARD_ID}` cannot be made public while it stewards private case `{CASE_ID}`\nresolution: keep the repository private while it stewards case `{CASE_ID}`; version 0.1 does not support stewardship transfer\n"
+            )
+        );
+    }
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "a private-case visibility refusal must preserve every fixture byte"
+    );
+}
+
+#[test]
+fn set_visibility_allows_public_transition_when_recorded_cases_are_public() {
+    let fixture = Fixture::new("visibility-public-case");
+    let steward = fixture.repository("steward", STEWARD_ID, "public");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            proposal.to_str().expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    force_marker_visibility(&steward, "public", "private");
+
+    let output = run_in(&steward, &["set-visibility", "--visibility", "public"]);
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert!(
+        String::from_utf8(output.stdout)
+            .expect("stdout should be UTF-8")
+            .starts_with("changed repository visibility\n"),
+        "the existing success receipt should be preserved"
+    );
+    assert!(
+        fs::read_to_string(steward.join("reuse-evidence.toml"))
+            .expect("changed marker should be readable")
+            .contains("visibility = \"public\"\n")
+    );
+}
+
+#[test]
+fn set_visibility_private_transition_ignores_malformed_or_unreadable_case_state() {
+    for (name, cases_path_is_file) in [("malformed", false), ("unreadable", true)] {
+        let fixture = Fixture::new(&format!("visibility-private-direction-{name}"));
+        let steward = fixture.repository("steward", STEWARD_ID, "public");
+        let cases_path = steward.join("reuse-evidence/cases");
+        if cases_path_is_file {
+            fs::create_dir_all(
+                cases_path
+                    .parent()
+                    .expect("cases path should have a parent"),
+            )
+            .expect("case storage parent should be creatable");
+            fs::write(&cases_path, "not a directory")
+                .expect("unreadable case fixture should be creatable");
+        } else {
+            fs::create_dir_all(cases_path.join("not-a-case-id"))
+                .expect("malformed case fixture should be creatable");
+        }
+
+        let output = run_in(&steward, &["set-visibility", "--visibility", "private"]);
+
+        assert_eq!(output.status.code(), Some(0), "{name}: {output:?}");
+        assert!(output.stderr.is_empty(), "{name}: {output:?}");
+        assert!(
+            fs::read_to_string(steward.join("reuse-evidence.toml"))
+                .expect("changed marker should be readable")
+                .contains("visibility = \"private\"\n"),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn set_visibility_public_noop_ignores_malformed_case_state() {
+    let fixture = Fixture::new("visibility-public-noop");
+    let steward = fixture.repository("steward", STEWARD_ID, "public");
+    fs::create_dir_all(steward.join("reuse-evidence/cases/not-a-case-id"))
+        .expect("malformed case fixture should be creatable");
+    let before = files_beneath(&fixture.root);
+
+    let output = run_in(&steward, &["set-visibility", "--visibility", "public"]);
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert!(
+        String::from_utf8(output.stdout)
+            .expect("stdout should be UTF-8")
+            .starts_with("repository visibility unchanged\n")
+    );
+    assert_eq!(files_beneath(&fixture.root), before);
+}
+
+#[test]
+fn set_visibility_public_transition_refuses_malformed_or_unreadable_case_state_without_writes() {
+    for (name, cases_path_is_file, expected_error) in [
+        (
+            "malformed",
+            false,
+            "case directory identity `not-a-case-id` is invalid",
+        ),
+        ("unreadable", true, "steward-local case directory"),
+    ] {
+        let fixture = Fixture::new(&format!("visibility-public-direction-{name}"));
+        let steward = fixture.repository("steward", STEWARD_ID, "private");
+        let cases_path = steward.join("reuse-evidence/cases");
+        if cases_path_is_file {
+            fs::create_dir_all(
+                cases_path
+                    .parent()
+                    .expect("cases path should have a parent"),
+            )
+            .expect("case storage parent should be creatable");
+            fs::write(&cases_path, "not a directory")
+                .expect("unreadable case fixture should be creatable");
+        } else {
+            fs::create_dir_all(cases_path.join("not-a-case-id"))
+                .expect("malformed case fixture should be creatable");
+        }
+        let before = files_beneath(&fixture.root);
+
+        let output = run_in(&steward, &["set-visibility", "--visibility", "public"]);
+
+        assert_eq!(output.status.code(), Some(3), "{name}: {output:?}");
+        assert!(output.stdout.is_empty(), "{name}: {output:?}");
+        assert!(
+            String::from_utf8(output.stderr)
+                .expect("stderr should be UTF-8")
+                .contains(expected_error),
+            "the existing steward-local case-read refusal should propagate: {name}"
+        );
+        assert_eq!(
+            files_beneath(&fixture.root),
+            before,
+            "a case-read visibility refusal must preserve every fixture byte: {name}"
+        );
+    }
+}
+
+#[test]
 fn currently_public_steward_refuses_a_private_case_decision_without_writes() {
     let fixture = Fixture::new("public-steward-private-decision");
     let steward = fixture.repository("steward", STEWARD_ID, "private");
@@ -2296,12 +2522,7 @@ fn currently_public_steward_refuses_a_private_case_decision_without_writes() {
         &["case", "open", "--proposal", proposal_path, "--root", root],
     );
     assert_eq!(opened.status.code(), Some(0), "{opened:?}");
-    let visibility_change = run_in(&steward, &["set-visibility", "--visibility", "public"]);
-    assert_eq!(
-        visibility_change.status.code(),
-        Some(0),
-        "{visibility_change:?}"
-    );
+    force_marker_visibility(&steward, "private", "public");
     fs::write(&proposal, change_decision_proposal()).expect("decision proposal should be writable");
     let before = files_beneath(&fixture.root);
 
@@ -2765,12 +2986,7 @@ fn case_read_reports_privacy_conflict_when_public_steward_holds_recorded_private
         "a private steward must record private case privacy: {opened_stdout}"
     );
 
-    let visibility_change = run_in(&steward, &["set-visibility", "--visibility", "public"]);
-    assert_eq!(
-        visibility_change.status.code(),
-        Some(0),
-        "{visibility_change:?}"
-    );
+    force_marker_visibility(&steward, "private", "public");
     let append_proposal = fixture.root.join("append-occurrence.toml");
     fs::write(&append_proposal, append_occurrence_proposal())
         .expect("append proposal should be writable");
@@ -4149,12 +4365,7 @@ fn review_r1_standards_2_public_steward_refuses_private_case_override_without_wr
         ],
     );
     assert_eq!(opened.status.code(), Some(0), "{opened:?}");
-    let visibility_change = run_in(&steward, &["set-visibility", "--visibility", "public"]);
-    assert_eq!(
-        visibility_change.status.code(),
-        Some(0),
-        "{visibility_change:?}"
-    );
+    force_marker_visibility(&steward, "private", "public");
     let override_proposal = fixture.root.join("override.toml");
     fs::write(&override_proposal, early_review_override_proposal())
         .expect("override proposal should be writable");
@@ -4326,12 +4537,7 @@ fn review_r2_standards_1_exact_override_retry_survives_steward_visibility_change
     fs::write(&override_proposal, event).expect("prepared event should be writable");
     let applied = run_in(&steward, &arguments);
     assert_eq!(applied.status.code(), Some(0), "{applied:?}");
-    let visibility_change = run_in(&steward, &["set-visibility", "--visibility", "public"]);
-    assert_eq!(
-        visibility_change.status.code(),
-        Some(0),
-        "{visibility_change:?}"
-    );
+    force_marker_visibility(&steward, "private", "public");
     let before_retry = files_beneath(&fixture.root);
 
     let retry_arguments = [
@@ -4410,12 +4616,7 @@ fn review_r2_spec_1_exact_override_retry_reports_recorded_event_after_public_tra
     fs::write(&override_proposal, event).expect("prepared event should be writable");
     let applied = run_in(&steward, &arguments);
     assert_eq!(applied.status.code(), Some(0), "{applied:?}");
-    let visibility_change = run_in(&steward, &["set-visibility", "--visibility", "public"]);
-    assert_eq!(
-        visibility_change.status.code(),
-        Some(0),
-        "{visibility_change:?}"
-    );
+    force_marker_visibility(&steward, "private", "public");
 
     let retry = run_in(&steward, &arguments);
 

@@ -4,9 +4,15 @@
 
 #[cfg(feature = "cli")]
 pub mod case;
+#[cfg(not(feature = "cli"))]
+#[allow(dead_code, unused_imports)]
+mod case;
 pub mod marker;
 #[cfg(feature = "cli")]
 pub mod portfolio;
+#[cfg(not(feature = "cli"))]
+#[allow(dead_code)]
+mod portfolio;
 
 use std::fmt;
 use std::fs::{self, OpenOptions};
@@ -285,7 +291,8 @@ pub fn enroll_with_expected_repository_id(
 /// # Errors
 ///
 /// Returns a refusal when the working directory is not inside a repository,
-/// the marker is absent or invalid.
+/// the marker is absent or invalid, a public-ward transition would expose a
+/// recorded-private steward-local case, or that case state cannot be read safely.
 /// Returns an unsafe failure when the replacement marker cannot be published.
 pub fn set_visibility(
     working_directory: &Path,
@@ -314,6 +321,20 @@ pub fn set_visibility(
             ecosystem_id: marker.ecosystem_id().to_owned(),
             visibility: marker.visibility(),
         });
+    }
+    if visibility == Visibility::Public
+        && let Some(case_id) =
+            case::first_recorded_private_case(&repository_root, marker.repository_id())?
+    {
+        return Err(EnrollmentError::refusal(
+            format!(
+                "repository `{}` cannot be made public while it stewards private case `{case_id}`",
+                marker.repository_id()
+            ),
+            format!(
+                "keep the repository private while it stewards case `{case_id}`; version 0.1 does not support stewardship transfer"
+            ),
+        ));
     }
     marker.set_visibility(visibility);
     let replacement = toml::to_string(&marker).map_err(|error| {

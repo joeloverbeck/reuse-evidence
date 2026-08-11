@@ -6,6 +6,7 @@ mod publication;
 mod read;
 
 pub use instant::RecordedInstant;
+pub(crate) use read::first_recorded_private_case;
 pub use read::{BriefOutcome, ListOutcome, ShowOutcome, brief, list, show};
 
 use std::collections::{BTreeMap, BTreeSet};
