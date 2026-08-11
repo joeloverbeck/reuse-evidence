@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-11T18:15:34.933066742Z",
+  "generated_at": "2026-08-11T18:57:24.235385874Z",
   "target_content_hash": "b9f458b0917db5368c6826732f0daf19b63f157b11d22034c023c8d465794ee6",
-  "qualifying_uses_on_current_hash": 17,
+  "qualifying_uses_on_current_hash": 18,
   "open_incident_ids": [
     "evt_fd786d97-7718-4253-9749-5a5f8b2de8f4",
     "evt_738194db-1039-42b1-93fe-c88f23541cd2",
@@ -17,7 +17,8 @@
     "evt_8f4ed02d-6410-4952-8790-b5df00a47dd9",
     "evt_21671b5b-d4d8-4349-afb3-fab3b5ed59f6",
     "evt_b3e69792-5f00-42a4-94fb-ea87c20ac99d",
-    "evt_290138a4-4642-4369-9039-54bb5c6830ac"
+    "evt_290138a4-4642-4369-9039-54bb5c6830ac",
+    "evt_0a582b78-6b3b-4ace-ae94-80aa48e7ae8d"
   ],
   "candidate_clusters": [
     {
@@ -37,6 +38,14 @@
       ],
       "independent_incidents": 1,
       "max_severity": "material_failure"
+    },
+    {
+      "symptom_key": "output",
+      "open_event_ids": [
+        "evt_0a582b78-6b3b-4ace-ae94-80aa48e7ae8d"
+      ],
+      "independent_incidents": 1,
+      "max_severity": "friction"
     }
   ],
   "state": "eligible",
@@ -53,7 +62,7 @@
   "review_reentry_basis": "post_review_incident",
   "target_name": "grilling",
   "target_repo_relative_path": ".claude/skills/grilling",
-  "derivation_session_id": "62e2f3c1-590d-4148-bb54-3d4e1342629c",
+  "derivation_session_id": "53ca1434-3a04-4954-a0b2-445411bf4a4d",
   "instrument_limited_incident_ids": [
     "evt_fd786d97-7718-4253-9749-5a5f8b2de8f4",
     "evt_738194db-1039-42b1-93fe-c88f23541cd2",

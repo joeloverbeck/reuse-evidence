@@ -714,7 +714,7 @@ pub fn append(
                     &located.relative_case_directory,
                     case_id,
                     located.steward.repository_id(),
-                    APPEND_UNSTEWARDED_RESOLUTION,
+                    located.unstewarded_resolution,
                 )
             },
             |_| Ok(()),
@@ -963,7 +963,7 @@ pub fn authorize_early_review(
                     &located.relative_case_directory,
                     case_id,
                     located.steward.repository_id(),
-                    EARLY_REVIEW_UNSTEWARDED_RESOLUTION,
+                    located.unstewarded_resolution,
                 )
             },
             case_privacy,
@@ -1080,7 +1080,7 @@ pub fn decide(
                     &located.relative_case_directory,
                     case_id,
                     located.steward.repository_id(),
-                    DECISION_UNSTEWARDED_RESOLUTION,
+                    located.unstewarded_resolution,
                 )
             },
             |_| Ok(()),
@@ -1118,6 +1118,9 @@ struct LocatedCase {
     steward: marker::Marker,
     relative_case_directory: PathBuf,
     case: read::CaseRecord,
+    /// The resolution this command's unstewarded-case refusal names, carried so the re-read
+    /// under the publication lock cannot answer that refusal differently from this location.
+    unstewarded_resolution: &'static str,
 }
 
 /// Locates the enrolled steward and the recorded case one later event would extend.
@@ -1129,7 +1132,7 @@ fn locate_later_event_case(
     working_directory: &Path,
     case_id: &str,
     expected_revision: i64,
-    unstewarded_resolution: &str,
+    unstewarded_resolution: &'static str,
 ) -> Result<LocatedCase, TerminalFailure> {
     let case_id = parse_case_id(case_id)?;
     let publication = publication::Publication::new(expected_revision)?;
@@ -1153,6 +1156,7 @@ fn locate_later_event_case(
         steward,
         relative_case_directory,
         case,
+        unstewarded_resolution,
     })
 }
 

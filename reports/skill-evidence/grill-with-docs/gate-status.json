@@ -1,12 +1,13 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-11T18:10:00.023158094Z",
+  "generated_at": "2026-08-11T18:50:58.978784704Z",
   "target_content_hash": "50ae74251f72b370e4b226fa12169ffaa18cac49a814ca5a5725460fe4e3063a",
-  "qualifying_uses_on_current_hash": 11,
+  "qualifying_uses_on_current_hash": 12,
   "open_incident_ids": [
     "evt_166c1b46-6a7a-44e0-aea0-352caca372e3",
     "evt_06d3a3bd-d439-4b33-8249-e8115dd36001",
-    "evt_6d0fa183-b912-4b94-a8b8-4104f0b84833"
+    "evt_6d0fa183-b912-4b94-a8b8-4104f0b84833",
+    "evt_cad6040a-7a80-451c-8dd9-bbabce154de8"
   ],
   "candidate_clusters": [
     {
@@ -21,9 +22,10 @@
       "symptom_key": "execution",
       "open_event_ids": [
         "evt_06d3a3bd-d439-4b33-8249-e8115dd36001",
-        "evt_6d0fa183-b912-4b94-a8b8-4104f0b84833"
+        "evt_6d0fa183-b912-4b94-a8b8-4104f0b84833",
+        "evt_cad6040a-7a80-451c-8dd9-bbabce154de8"
       ],
-      "independent_incidents": 2,
+      "independent_incidents": 3,
       "max_severity": "material_failure"
     }
   ],
@@ -40,5 +42,5 @@
   "review_reentry_basis": "post_review_incident",
   "target_name": "grill-with-docs",
   "target_repo_relative_path": ".claude/skills/grill-with-docs",
-  "derivation_session_id": "62e2f3c1-590d-4148-bb54-3d4e1342629c"
+  "derivation_session_id": "53ca1434-3a04-4954-a0b2-445411bf4a4d"
 }
