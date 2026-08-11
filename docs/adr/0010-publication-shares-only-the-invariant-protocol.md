@@ -4,6 +4,7 @@
 **Date:** 2026-08-10  
 **Decision owner:** Repository maintainer  
 **Governing principles:** [`FOUNDATIONS.md`](../principles/FOUNDATIONS.md), [`CONSUMER-CONTRACT.md`](../principles/CONSUMER-CONTRACT.md)
+**Amended:** 2026-08-11 by explicit maintainer acceptance while implementing the private-dominance visibility guard. "Opening a case takes no lock" means it takes no opening-event publication or revision lock. A non-preview opening may hold a transient operating-system lock on the existing repository marker solely to serialize with a private-to-public visibility transition, re-read stewardship under that lock, and retain it through opening-event creation. This creates no lock file, durable event, schema change, or broader publication protocol. Preview still takes no lock.
 
 ## Context
 
@@ -31,7 +32,7 @@ A shared internal publication module absorbs only the behavior ADR 0009 already 
 - The retry comparison reads a permissive recorded envelope. It takes no per-event-type parameter.
 - Proposal documents and their content validation, eligibility rules against the current case, and when and how case privacy is derived remain owned by each event type.
 - Which fields a receipt prints stays the event type's decision. A receipt field or field group may take one owner where it has one authority and one reason to change, as `ReportedPrivacy` already does for `privacy:` and its footers. The three event-type receipts share one spine — heading, `case_id`, `file`, `revision`, the readiness fields where present, privacy, then the exact event bytes on a preview — and that spine may have one owner. Opening's privacy is derived once and has no retry path; sharing the spine must not widen it into states it cannot reach.
-- Opening a case is not a publication and is not absorbed. It takes no lock, has no expected revision, and compares an existing record by semantic fields rather than by event identity and bytes.
+- Opening a case is not a publication and is not absorbed. It takes no opening-event publication or revision lock, has no expected revision, and compares an existing record by semantic fields rather than by event identity and bytes. A non-preview opening may hold the transient repository-marker lock authorized by the 2026-08-11 amendment only to serialize private dominance with a private-to-public visibility transition; preview takes no lock.
 - The publication ordering is enforced structurally: creating an event file is reachable only from a value that holds the lock and has re-read the case.
 - This authorizes sharing the protocol and the receipt spine. It does not authorize unifying proposal parsing, eligibility, or privacy derivation across event types; it does not authorize collapsing the case queries' output and the event-type receipts into one value, because the queries print a different shape for a different question; and it does not authorize extracting anything from this crate into a shared package.
 

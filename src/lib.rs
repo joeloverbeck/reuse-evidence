@@ -4,12 +4,18 @@
 
 #[cfg(feature = "cli")]
 pub mod case;
+#[cfg(not(feature = "cli"))]
+#[allow(dead_code, unused_imports)]
+mod case;
 pub mod marker;
 #[cfg(feature = "cli")]
 pub mod portfolio;
+#[cfg(not(feature = "cli"))]
+#[allow(dead_code)]
+mod portfolio;
 
 use std::fmt;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -315,6 +321,44 @@ pub fn set_visibility(
             visibility: marker.visibility(),
         });
     }
+    let _marker_lock = if visibility == Visibility::Public {
+        let marker_lock = lock_repository_marker(&repository_root)?;
+        let Some(current_marker) = marker_for_enrollment(&repository_root, &malformed_resolution)?
+        else {
+            return Err(EnrollmentError::refusal(
+                format!(
+                    "repository is not enrolled because `{}` does not exist",
+                    marker_path.display()
+                ),
+                "run `enroll` before changing visibility",
+            ));
+        };
+        marker = current_marker;
+        if marker.visibility() == visibility {
+            return Ok(Enrollment {
+                effect: EnrollmentEffect::VisibilityUnchanged,
+                marker_path,
+                repository_id: marker.repository_id(),
+                ecosystem_id: marker.ecosystem_id().to_owned(),
+                visibility: marker.visibility(),
+            });
+        }
+        Some(marker_lock)
+    } else {
+        None
+    };
+    if visibility == Visibility::Public
+        && let Some(case_id) =
+            case::private_case_stewarded_by(&repository_root, marker.repository_id())?
+    {
+        return Err(EnrollmentError::refusal(
+            format!(
+                "repository `{}` cannot become public while it stewards private case `{case_id}`",
+                marker.repository_id()
+            ),
+            "keep the repository private while it stewards that case; version 0.1 does not support stewardship transfer",
+        ));
+    }
     marker.set_visibility(visibility);
     let replacement = toml::to_string(&marker).map_err(|error| {
         EnrollmentError::unsafe_failure(format!("could not encode the repository marker: {error}"))
@@ -372,6 +416,29 @@ fn malformed_marker_error(
         ),
         resolution,
     )
+}
+
+pub(crate) fn lock_repository_marker(repository_root: &Path) -> Result<File, TerminalFailure> {
+    let marker_path = repository_root.join(MARKER_FILE);
+    let marker = File::open(&marker_path).map_err(|error| {
+        TerminalFailure::refusal(
+            format!(
+                "repository marker `{}` cannot be opened for visibility serialization: {error}",
+                marker_path.display()
+            ),
+            "restore a readable enrolled repository marker before retrying",
+        )
+    })?;
+    marker.lock().map_err(|error| {
+        TerminalFailure::refusal(
+            format!(
+                "repository marker `{}` cannot serialize case opening and visibility changes: {error}",
+                marker_path.display()
+            ),
+            "make the enrolled repository marker lockable before retrying",
+        )
+    })?;
+    Ok(marker)
 }
 
 pub(crate) enum CreateFileOutcome {

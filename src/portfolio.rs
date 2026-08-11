@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::marker::{self, MarkerRead, UnreadableMarker, UnsupportedMarker};
 use crate::{TerminalFailure, Visibility};
+#[cfg(feature = "cli")]
 use atomic_write_file::AtomicWriteFile;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -82,6 +83,7 @@ enum RootSelection {
 ///
 /// Returns a classified terminal failure when roots, markers, or derived state
 /// cannot be inspected safely.
+#[cfg(feature = "cli")]
 pub fn report(root_overrides: &[PathBuf]) -> Result<PortfolioReport, TerminalFailure> {
     let roots = selected_roots(root_overrides)?;
     let scan = scan(&roots)?;
@@ -530,6 +532,7 @@ impl Drop for StateLock {
     }
 }
 
+#[cfg(feature = "cli")]
 fn save_state(path: &Path, state: &PortfolioState) -> Result<(), TerminalFailure> {
     let bytes = toml::to_string(state).map_err(|error| {
         TerminalFailure::unsafe_failure(format!(
@@ -547,6 +550,7 @@ fn save_state(path: &Path, state: &PortfolioState) -> Result<(), TerminalFailure
     })
 }
 
+#[cfg(feature = "cli")]
 fn replace_state_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut temporary = AtomicWriteFile::open(path)?;
     temporary.write_all(bytes)?;

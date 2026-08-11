@@ -649,6 +649,17 @@ fn read_cases(
     Ok(cases)
 }
 
+/// Returns the first opaque identity, in case-reader order, whose recorded privacy is private.
+pub(crate) fn private_case_stewarded_by(
+    repository_root: &Path,
+    steward_repository_id: Uuid,
+) -> Result<Option<Uuid>, TerminalFailure> {
+    Ok(read_cases(repository_root, steward_repository_id)?
+        .into_iter()
+        .find(|case| case.privacy == Visibility::Private)
+        .map(|case| case.case_id))
+}
+
 fn read_case(
     repository_root: &Path,
     relative_case_directory: &Path,

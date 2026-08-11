@@ -46,7 +46,7 @@ That option verifies an existing identity only. It cannot assign a fresh identit
 reuse-evidence set-visibility --visibility public
 ```
 
-Fresh marker creation and visibility replacement publish a complete marker atomically. A malformed, truncated, or unsupported-version marker is refused rather than repaired or overwritten.
+Fresh marker creation and visibility replacement publish a complete marker atomically. A private-to-public visibility change refuses without writes when the repository stewards a case whose recorded privacy is private; privateward and unchanged requests do not inspect case state. A malformed, truncated, or unsupported-version marker is refused rather than repaired or overwritten.
 
 The marker is open, human-readable TOML with exactly these version 1 fields:
 

@@ -6,6 +6,7 @@ mod publication;
 mod read;
 
 pub use instant::RecordedInstant;
+pub(crate) use read::private_case_stewarded_by;
 pub use read::{BriefOutcome, ListOutcome, ShowOutcome, brief, list, show};
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -569,7 +570,14 @@ pub fn open(
     preview: bool,
 ) -> Result<OpenOutcome, TerminalFailure> {
     let repository_root = find_repository_root(working_directory)?;
-    let steward = read_steward(&repository_root)?;
+    let mut steward = read_steward(&repository_root)?;
+    let _marker_lock = if preview {
+        None
+    } else {
+        let marker_lock = crate::lock_repository_marker(&repository_root)?;
+        steward = read_steward(&repository_root)?;
+        Some(marker_lock)
+    };
     let proposal = read_proposal(proposal_path)?;
     let relative_case_directory =
         PathBuf::from("reuse-evidence/cases").join(proposal.case_id.to_string());
