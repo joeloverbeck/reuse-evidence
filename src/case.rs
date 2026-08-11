@@ -56,7 +56,7 @@ enum EarlyReviewProposalDocument {
 #[serde(untagged)]
 enum DecisionProposalDocument {
     Prepared(ReuseDecisionAcceptedEvent),
-    Human(HumanDecisionProposalDocument),
+    Human(DecisionContent),
 }
 
 #[derive(Debug, Deserialize)]
@@ -81,9 +81,9 @@ struct HumanEarlyReviewProposalDocument {
     evidence: Option<Vec<EvidenceReference>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct HumanDecisionProposalDocument {
+struct DecisionContent {
     identity_verdict: IdentityVerdict,
     action: DecisionAction,
     accepted_scope: String,
@@ -92,10 +92,15 @@ struct HumanDecisionProposalDocument {
     alternatives_rejected: Vec<RejectedAlternative>,
     compatibility_consequences: String,
     verification_conditions: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     invariant_contract: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     existing_packages_considered: Option<Vec<ExistingPackageConsidered>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     required_consumer_level_tests: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     migration_expectations: Option<Vec<MigrationExpectation>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     rollback_or_resplitting_path: Option<String>,
 }
 
@@ -144,19 +149,7 @@ struct PreparedEarlyReview {
 
 #[derive(Debug)]
 struct DecisionProposal {
-    identity_verdict: IdentityVerdict,
-    action: DecisionAction,
-    accepted_scope: String,
-    non_responsibilities: Vec<String>,
-    affected_consumers: Vec<AffectedConsumer>,
-    alternatives_rejected: Vec<RejectedAlternative>,
-    compatibility_consequences: String,
-    verification_conditions: Vec<String>,
-    invariant_contract: Option<String>,
-    existing_packages_considered: Option<Vec<ExistingPackageConsidered>>,
-    required_consumer_level_tests: Option<Vec<String>>,
-    migration_expectations: Option<Vec<MigrationExpectation>>,
-    rollback_or_resplitting_path: Option<String>,
+    content: DecisionContent,
     prepared: Option<PreparedDecision>,
 }
 
@@ -325,24 +318,8 @@ struct ReuseDecisionAcceptedEvent {
     event_id: Uuid,
     event_type: EventType,
     recorded_at: String,
-    identity_verdict: IdentityVerdict,
-    action: DecisionAction,
-    accepted_scope: String,
-    non_responsibilities: Vec<String>,
-    affected_consumers: Vec<AffectedConsumer>,
-    alternatives_rejected: Vec<RejectedAlternative>,
-    compatibility_consequences: String,
-    verification_conditions: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    invariant_contract: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    existing_packages_considered: Option<Vec<ExistingPackageConsidered>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    required_consumer_level_tests: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    migration_expectations: Option<Vec<MigrationExpectation>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    rollback_or_resplitting_path: Option<String>,
+    #[serde(flatten)]
+    content: DecisionContent,
 }
 
 impl publication::RevisionedCase for read::CaseRecord {
@@ -375,7 +352,7 @@ pub struct AppendOutcome {
     case_id: Uuid,
     event_path: PathBuf,
     revision: i64,
-    readiness: read::Readiness,
+    state: read::CaseState,
     privacy: ReportedPrivacy,
     event: String,
 }
@@ -455,15 +432,15 @@ enum DecisionEffect {
 /// The spine every event-type receipt prints, in order.
 ///
 /// Which fields an event type supplies stays that event type's decision under
-/// ADR 0010; the spine fixes only their order and spelling. `readiness` is
-/// absent for an event that reports none, and `preview_event` carries the exact
-/// event bytes a preview appends.
+/// ADR 0010; the spine fixes only their order and spelling. `state` is absent
+/// for an event that reports none, and `preview_event` carries the exact event
+/// bytes a preview appends.
 struct EventReceipt<'a> {
     heading: &'a str,
     case_id: Uuid,
     event_path: &'a Path,
     revision: i64,
-    readiness: Option<read::Readiness>,
+    state: Option<read::CaseState>,
     privacy: ReportedPrivacy,
     notice: Option<&'a str>,
     preview_event: Option<&'a str>,
@@ -475,8 +452,8 @@ impl Display for EventReceipt<'_> {
         writeln!(formatter, "case_id: {}", self.case_id)?;
         writeln!(formatter, "file: {}", self.event_path.display())?;
         writeln!(formatter, "revision: {}", self.revision)?;
-        if let Some(readiness) = self.readiness {
-            readiness.write_receipt_lines(formatter, "")?;
+        if let Some(state) = self.state {
+            state.write_receipt_lines(formatter, "")?;
         }
         self.privacy.write_receipt_line(formatter)?;
         if let Some(notice) = self.notice {
@@ -503,7 +480,7 @@ impl Display for OpenOutcome {
             case_id: self.case_id,
             event_path: &self.event_path,
             revision: OPENING_SEQUENCE,
-            readiness: None,
+            state: None,
             // Opening derives privacy once and has no retry path, so its stored
             // privacy stays a `Visibility` the spine widens only in passing.
             privacy: ReportedPrivacy::Derived(self.privacy),
@@ -527,7 +504,7 @@ impl Display for AppendOutcome {
             case_id: self.case_id,
             event_path: &self.event_path,
             revision: self.revision,
-            readiness: Some(self.readiness),
+            state: Some(self.state),
             privacy: self.privacy,
             notice: None,
             preview_event: (self.effect == AppendEffect::Preview).then_some(self.event.as_str()),
@@ -551,7 +528,7 @@ impl Display for EarlyReviewOutcome {
             revision: self.revision,
             // Stated as a constant rather than derived from the recorded
             // occurrence count, as ADR 0010 records.
-            readiness: Some(read::Readiness::ReviewReadyByEarlyReviewOverride),
+            state: Some(read::CaseState::ReviewReadyByEarlyReviewOverride),
             privacy: self.privacy,
             notice: None,
             preview_event: (self.effect == EarlyReviewEffect::Preview)
@@ -579,7 +556,7 @@ impl Display for DecisionOutcome {
             case_id: self.case_id,
             event_path: &self.event_path,
             revision: self.revision,
-            readiness: Some(read::Readiness::AwaitingVerification),
+            state: Some(read::CaseState::AwaitingVerification),
             privacy: self.privacy,
             notice: Some(notice),
             preview_event: (self.effect == DecisionEffect::Preview).then_some(self.event.as_str()),
@@ -736,7 +713,7 @@ pub fn append(
             case_id,
             event_path: relative_event_path,
             revision: sequence,
-            readiness: case.readiness_after_appending_occurrence(),
+            state: case.state_after_appending_occurrence(),
             privacy: ReportedPrivacy::Derived(privacy),
             event,
         });
@@ -771,7 +748,7 @@ pub fn append(
             case_id,
             event_path: relative_event_path,
             revision: sequence,
-            readiness: case.readiness_after_appending_occurrence(),
+            state: case.state_after_appending_occurrence(),
             privacy: ReportedPrivacy::Derived(validation),
             event,
         }),
@@ -799,7 +776,7 @@ fn append_retry_outcome(
         case_id,
         event_path,
         revision: event.sequence,
-        readiness: case.readiness(),
+        state: case.state(),
         privacy: retry_privacy(case, steward, root_overrides),
         event: event.bytes,
     }
@@ -1056,7 +1033,7 @@ pub fn decide(
                 existing,
                 &steward,
                 root_overrides,
-                proposal.action,
+                proposal.content.action,
             ));
         }
         if case.revision != expected_revision {
@@ -1075,7 +1052,7 @@ pub fn decide(
             relative_event_path,
             sequence,
             ReportedPrivacy::Derived(privacy),
-            proposal.action,
+            proposal.content.action,
             event,
         ));
     }
@@ -1115,7 +1092,7 @@ pub fn decide(
             relative_event_path,
             sequence,
             ReportedPrivacy::Derived(validation),
-            proposal.action,
+            proposal.content.action,
             event,
         )),
         publication::PublicationOutcome::Existing { case, event } => Ok(decision_retry_outcome(
@@ -1125,7 +1102,7 @@ pub fn decide(
             event,
             &steward,
             root_overrides,
-            proposal.action,
+            proposal.content.action,
         )),
     }
 }
@@ -1293,7 +1270,7 @@ fn validate_new_decision(
             "leave the recorded decision unchanged; superseding it requires the separately accepted reopen capability",
         ));
     }
-    if !case.readiness().authorizes_review() {
+    if !case.state().authorizes_review() {
         return Err(TerminalFailure::refusal(
             format!(
                 "case `{}` is watching and cannot record an accepted reuse decision",
@@ -1303,7 +1280,7 @@ fn validate_new_decision(
         ));
     }
     if let Some(affected) =
-        unrecorded_affected_consumer(&case.occurrences, &proposal.affected_consumers)
+        unrecorded_affected_consumer(&case.occurrences, &proposal.content.affected_consumers)
     {
         return Err(TerminalFailure::refusal(
             format!(
@@ -1335,17 +1312,19 @@ fn validate_recorded_decision_participants(
     occurrences: &[Occurrence],
     decision: &ReuseDecisionAcceptedEvent,
 ) -> Result<(), TerminalFailure> {
-    let Some(affected) = unrecorded_affected_consumer(occurrences, &decision.affected_consumers)
+    let Some(affected) =
+        unrecorded_affected_consumer(occurrences, &decision.content.affected_consumers)
     else {
         return Ok(());
     };
     Err(TerminalFailure::refusal(
         format!(
-            "decision affected consumer `{}` in participant `{}` is not recorded by case `{case_id}`",
+            "decision affected consumer `{}` in participant `{}` is not recorded before sequence {} in case `{case_id}`",
             affected.consumer.trim(),
-            affected.repository_id
+            affected.repository_id,
+            decision.sequence
         ),
-        "restore the accepted decision so every affected repository and consumer pair names a recorded case participant",
+        "restore the accepted decision so every affected repository and consumer pair names a participant recorded by an earlier event",
     ))
 }
 
@@ -1750,19 +1729,7 @@ fn decision_event_bytes(
         event_id: Uuid::new_v4(),
         event_type: EventType::ReuseDecisionAccepted,
         recorded_at: recorded_at.to_string(),
-        identity_verdict: proposal.identity_verdict,
-        action: proposal.action,
-        accepted_scope: proposal.accepted_scope.clone(),
-        non_responsibilities: proposal.non_responsibilities.clone(),
-        affected_consumers: proposal.affected_consumers.clone(),
-        alternatives_rejected: proposal.alternatives_rejected.clone(),
-        compatibility_consequences: proposal.compatibility_consequences.clone(),
-        verification_conditions: proposal.verification_conditions.clone(),
-        invariant_contract: proposal.invariant_contract.clone(),
-        existing_packages_considered: proposal.existing_packages_considered.clone(),
-        required_consumer_level_tests: proposal.required_consumer_level_tests.clone(),
-        migration_expectations: proposal.migration_expectations.clone(),
-        rollback_or_resplitting_path: proposal.rollback_or_resplitting_path.clone(),
+        content: proposal.content.clone(),
     };
     toml::to_string(&event).map_err(|error| {
         TerminalFailure::unsafe_failure(format!(
@@ -2092,23 +2059,23 @@ fn read_proposal(path: &Path) -> Result<OpenProposal, TerminalFailure> {
     Ok(proposal)
 }
 
-fn validate_decision_content(proposal: &DecisionProposal) -> Result<(), TerminalFailure> {
-    validate_common_decision_content(proposal)?;
-    if proposal.action.authorizes_implementation() {
-        validate_change_decision_content(proposal)
+fn validate_decision_content(content: &DecisionContent) -> Result<(), TerminalFailure> {
+    validate_common_decision_content(content)?;
+    if content.action.authorizes_implementation() {
+        validate_change_decision_content(content)
     } else {
-        validate_no_change_decision_content(proposal)
+        validate_no_change_decision_content(content)
     }
 }
 
-fn validate_common_decision_content(proposal: &DecisionProposal) -> Result<(), TerminalFailure> {
-    require_nonempty("accepted_scope", &proposal.accepted_scope)?;
-    require_nonempty_string_list("non_responsibilities", &proposal.non_responsibilities)?;
-    if proposal.affected_consumers.is_empty() {
+fn validate_common_decision_content(content: &DecisionContent) -> Result<(), TerminalFailure> {
+    require_nonempty("accepted_scope", &content.accepted_scope)?;
+    require_nonempty_string_list("non_responsibilities", &content.non_responsibilities)?;
+    if content.affected_consumers.is_empty() {
         return Err(missing_required_decision_item("affected_consumers"));
     }
     let mut affected_consumers = BTreeSet::new();
-    for (index, affected) in proposal.affected_consumers.iter().enumerate() {
+    for (index, affected) in content.affected_consumers.iter().enumerate() {
         require_nonempty(
             &format!("affected_consumers[{}].consumer", index + 1),
             &affected.consumer,
@@ -2128,10 +2095,10 @@ fn validate_common_decision_content(proposal: &DecisionProposal) -> Result<(), T
             ));
         }
     }
-    if proposal.alternatives_rejected.is_empty() {
+    if content.alternatives_rejected.is_empty() {
         return Err(missing_required_decision_item("alternatives_rejected"));
     }
-    for (index, alternative) in proposal.alternatives_rejected.iter().enumerate() {
+    for (index, alternative) in content.alternatives_rejected.iter().enumerate() {
         require_nonempty(
             &format!("alternatives_rejected[{}].alternative", index + 1),
             &alternative.alternative,
@@ -2143,37 +2110,37 @@ fn validate_common_decision_content(proposal: &DecisionProposal) -> Result<(), T
     }
     require_nonempty(
         "compatibility_consequences",
-        &proposal.compatibility_consequences,
+        &content.compatibility_consequences,
     )?;
-    require_nonempty_string_list("verification_conditions", &proposal.verification_conditions)?;
+    require_nonempty_string_list("verification_conditions", &content.verification_conditions)?;
     Ok(())
 }
 
-fn validate_change_decision_content(proposal: &DecisionProposal) -> Result<(), TerminalFailure> {
-    let invariant_contract = proposal
+fn validate_change_decision_content(content: &DecisionContent) -> Result<(), TerminalFailure> {
+    let invariant_contract = content
         .invariant_contract
         .as_deref()
         .ok_or_else(|| missing_change_decision_item("invariant_contract"))?;
     require_nonempty("invariant_contract", invariant_contract)?;
     require_nonempty_change_list(
         "existing_packages_considered",
-        proposal.existing_packages_considered.as_deref(),
+        content.existing_packages_considered.as_deref(),
     )?;
     require_nonempty_change_list(
         "required_consumer_level_tests",
-        proposal.required_consumer_level_tests.as_deref(),
+        content.required_consumer_level_tests.as_deref(),
     )?;
     require_nonempty_change_list(
         "migration_expectations",
-        proposal.migration_expectations.as_deref(),
+        content.migration_expectations.as_deref(),
     )?;
-    let rollback = proposal
+    let rollback = content
         .rollback_or_resplitting_path
         .as_deref()
         .ok_or_else(|| missing_change_decision_item("rollback_or_resplitting_path"))?;
     require_nonempty("rollback_or_resplitting_path", rollback)?;
 
-    let packages = proposal
+    let packages = content
         .existing_packages_considered
         .as_deref()
         .expect("change-action package list was required above");
@@ -2193,13 +2160,13 @@ fn validate_change_decision_content(proposal: &DecisionProposal) -> Result<(), T
     }
     require_nonempty_string_list(
         "required_consumer_level_tests",
-        proposal
+        content
             .required_consumer_level_tests
             .as_deref()
             .expect("change-action test list was required above"),
     )?;
     validate_migration_expectations(
-        proposal
+        content
             .migration_expectations
             .as_deref()
             .expect("change-action migration list was required above"),
@@ -2239,24 +2206,24 @@ fn validate_migration_expectations(
     Ok(())
 }
 
-fn validate_no_change_decision_content(proposal: &DecisionProposal) -> Result<(), TerminalFailure> {
+fn validate_no_change_decision_content(content: &DecisionContent) -> Result<(), TerminalFailure> {
     if let Some((field, _)) = [
-        ("invariant_contract", proposal.invariant_contract.is_some()),
+        ("invariant_contract", content.invariant_contract.is_some()),
         (
             "existing_packages_considered",
-            proposal.existing_packages_considered.is_some(),
+            content.existing_packages_considered.is_some(),
         ),
         (
             "required_consumer_level_tests",
-            proposal.required_consumer_level_tests.is_some(),
+            content.required_consumer_level_tests.is_some(),
         ),
         (
             "migration_expectations",
-            proposal.migration_expectations.is_some(),
+            content.migration_expectations.is_some(),
         ),
         (
             "rollback_or_resplitting_path",
-            proposal.rollback_or_resplitting_path.is_some(),
+            content.rollback_or_resplitting_path.is_some(),
         ),
     ]
     .into_iter()
@@ -2436,47 +2403,24 @@ fn read_decision_proposal(path: &Path) -> Result<DecisionProposal, TerminalFailu
         )
     })?;
     let proposal = match document {
-        DecisionProposalDocument::Human(document) => DecisionProposal {
-            identity_verdict: document.identity_verdict,
-            action: document.action,
-            accepted_scope: document.accepted_scope,
-            non_responsibilities: document.non_responsibilities,
-            affected_consumers: document.affected_consumers,
-            alternatives_rejected: document.alternatives_rejected,
-            compatibility_consequences: document.compatibility_consequences,
-            verification_conditions: document.verification_conditions,
-            invariant_contract: document.invariant_contract,
-            existing_packages_considered: document.existing_packages_considered,
-            required_consumer_level_tests: document.required_consumer_level_tests,
-            migration_expectations: document.migration_expectations,
-            rollback_or_resplitting_path: document.rollback_or_resplitting_path,
+        DecisionProposalDocument::Human(content) => DecisionProposal {
+            content,
             prepared: None,
         },
         DecisionProposalDocument::Prepared(event) => {
             validate_recorded_decision(&event)?;
+            let prepared = PreparedDecision {
+                sequence: event.sequence,
+                event_id: event.event_id,
+                bytes: text,
+            };
             DecisionProposal {
-                identity_verdict: event.identity_verdict,
-                action: event.action,
-                accepted_scope: event.accepted_scope,
-                non_responsibilities: event.non_responsibilities,
-                affected_consumers: event.affected_consumers,
-                alternatives_rejected: event.alternatives_rejected,
-                compatibility_consequences: event.compatibility_consequences,
-                verification_conditions: event.verification_conditions,
-                invariant_contract: event.invariant_contract,
-                existing_packages_considered: event.existing_packages_considered,
-                required_consumer_level_tests: event.required_consumer_level_tests,
-                migration_expectations: event.migration_expectations,
-                rollback_or_resplitting_path: event.rollback_or_resplitting_path,
-                prepared: Some(PreparedDecision {
-                    sequence: event.sequence,
-                    event_id: event.event_id,
-                    bytes: text,
-                }),
+                content: event.content,
+                prepared: Some(prepared),
             }
         }
     };
-    validate_decision_content(&proposal)?;
+    validate_decision_content(&proposal.content)?;
     Ok(proposal)
 }
 
@@ -2705,22 +2649,7 @@ fn validate_recorded_decision(event: &ReuseDecisionAcceptedEvent) -> Result<(), 
         "reuse decision",
         "case decide --preview",
     )?;
-    validate_decision_content(&DecisionProposal {
-        identity_verdict: event.identity_verdict,
-        action: event.action,
-        accepted_scope: event.accepted_scope.clone(),
-        non_responsibilities: event.non_responsibilities.clone(),
-        affected_consumers: event.affected_consumers.clone(),
-        alternatives_rejected: event.alternatives_rejected.clone(),
-        compatibility_consequences: event.compatibility_consequences.clone(),
-        verification_conditions: event.verification_conditions.clone(),
-        invariant_contract: event.invariant_contract.clone(),
-        existing_packages_considered: event.existing_packages_considered.clone(),
-        required_consumer_level_tests: event.required_consumer_level_tests.clone(),
-        migration_expectations: event.migration_expectations.clone(),
-        rollback_or_resplitting_path: event.rollback_or_resplitting_path.clone(),
-        prepared: None,
-    })
+    validate_decision_content(&event.content)
 }
 
 fn validate_early_review_content(

@@ -15,14 +15,14 @@ use super::{
 use crate::{TerminalFailure, Visibility, portfolio};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Readiness {
+pub(super) enum CaseState {
     Watching,
     ReviewReadyByOccurrenceCount,
     ReviewReadyByEarlyReviewOverride,
     AwaitingVerification,
 }
 
-impl Readiness {
+impl CaseState {
     pub(super) const fn from_occurrence_count(occurrence_count: usize) -> Self {
         if occurrence_count >= 3 {
             Self::ReviewReadyByOccurrenceCount
@@ -121,23 +121,23 @@ fn render_condition(value: Option<bool>) -> &'static str {
 }
 
 impl CaseRecord {
-    pub(super) fn readiness(&self) -> Readiness {
+    pub(super) fn state(&self) -> CaseState {
         if self.decision.is_some() {
-            Readiness::AwaitingVerification
+            CaseState::AwaitingVerification
         } else if self.early_review.is_some() {
-            Readiness::ReviewReadyByEarlyReviewOverride
+            CaseState::ReviewReadyByEarlyReviewOverride
         } else {
-            Readiness::from_occurrence_count(self.occurrences.len())
+            CaseState::from_occurrence_count(self.occurrences.len())
         }
     }
 
-    pub(super) fn readiness_after_appending_occurrence(&self) -> Readiness {
+    pub(super) fn state_after_appending_occurrence(&self) -> CaseState {
         if self.decision.is_some() {
-            Readiness::AwaitingVerification
+            CaseState::AwaitingVerification
         } else if self.early_review.is_some() {
-            Readiness::ReviewReadyByEarlyReviewOverride
+            CaseState::ReviewReadyByEarlyReviewOverride
         } else {
-            Readiness::from_occurrence_count(self.occurrences.len() + 1)
+            CaseState::from_occurrence_count(self.occurrences.len() + 1)
         }
     }
 
@@ -174,7 +174,7 @@ impl Display for ShowOutcome {
             case.revision,
             case.occurrences.len()
         )?;
-        case.readiness().write_receipt_lines(formatter, "")?;
+        case.state().write_receipt_lines(formatter, "")?;
         writeln!(
             formatter,
             "privacy_conflicted: {}\nstale: {}\noccurrences:",
@@ -240,7 +240,7 @@ impl Display for ListOutcome {
                 case.revision,
                 case.occurrences.len()
             )?;
-            case.readiness().write_receipt_lines(formatter, "  ")?;
+            case.state().write_receipt_lines(formatter, "  ")?;
             writeln!(
                 formatter,
                 "  privacy_conflicted: {}\n  stale: {}",
@@ -483,6 +483,7 @@ fn read_case(
                 }
             }
             CaseEvent::ReuseDecisionAccepted(event) => {
+                validate_decision_prefix(case_id, &occurrences, early_review.as_ref(), &event)?;
                 if decision.replace(event).is_some() {
                     return Err(TerminalFailure::refusal(
                         format!("case `{case_id}` records more than one accepted reuse decision"),
@@ -495,9 +496,6 @@ fn read_case(
 
     let opening = opening.expect("a validated case event set has one opening event");
     validate_unique_occurrences(case_id, &occurrences)?;
-    if let Some(decision) = &decision {
-        super::validate_recorded_decision_participants(case_id, &occurrences, decision)?;
-    }
 
     Ok(CaseRecord {
         case_id,
@@ -509,6 +507,29 @@ fn read_case(
         decision,
         conditions: Conditions::UNKNOWN,
     })
+}
+
+fn validate_decision_prefix(
+    case_id: Uuid,
+    occurrences: &[Occurrence],
+    early_review: Option<&EarlyReviewAuthorizedEvent>,
+    decision: &ReuseDecisionAcceptedEvent,
+) -> Result<(), TerminalFailure> {
+    let state = if early_review.is_some() {
+        CaseState::ReviewReadyByEarlyReviewOverride
+    } else {
+        CaseState::from_occurrence_count(occurrences.len())
+    };
+    if !state.authorizes_review() {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case `{case_id}` records a decision at sequence {} whose event prefix is not review-ready",
+                decision.sequence
+            ),
+            "restore a third earlier occurrence or an earlier human-authorized review override before the accepted decision",
+        ));
+    }
+    super::validate_recorded_decision_participants(case_id, occurrences, decision)
 }
 
 fn validate_unique_occurrences(

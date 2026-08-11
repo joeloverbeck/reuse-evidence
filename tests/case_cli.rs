@@ -376,6 +376,69 @@ fn no_change_decision_proposal() -> String {
     )
 }
 
+fn record_overridden_decision_then_append(fixture: &Fixture, steward: &Path) {
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    for (contents, arguments) in [
+        (
+            None,
+            vec!["case", "open", "--proposal", proposal_path, "--root", root],
+        ),
+        (
+            Some(early_review_override_proposal()),
+            vec![
+                "case",
+                "override",
+                CASE_ID,
+                "--expected-revision",
+                "1",
+                "--proposal",
+                proposal_path,
+                "--root",
+                root,
+            ],
+        ),
+        (
+            Some(change_decision_proposal()),
+            vec![
+                "case",
+                "decide",
+                CASE_ID,
+                "--expected-revision",
+                "2",
+                "--proposal",
+                proposal_path,
+                "--root",
+                root,
+            ],
+        ),
+        (
+            Some(append_occurrence_proposal()),
+            vec![
+                "case",
+                "append",
+                CASE_ID,
+                "--expected-revision",
+                "3",
+                "--proposal",
+                proposal_path,
+                "--root",
+                root,
+            ],
+        ),
+    ] {
+        if let Some(contents) = contents {
+            fs::write(&proposal, contents).expect("case operation proposal should be writable");
+        }
+        let output = run_in(steward, &arguments);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+    }
+}
+
 #[test]
 fn decision_preview_on_occurrence_ready_case_renders_the_event_without_writes() {
     let fixture = Fixture::new("decision-preview");
@@ -683,6 +746,136 @@ fn case_read_refuses_decision_naming_an_unrecorded_consumer_without_writes() {
         files_beneath(&fixture.root),
         before,
         "refusing an unrecorded affected consumer must write nothing"
+    );
+}
+
+#[test]
+fn case_read_refuses_decision_recorded_before_prefix_became_review_ready_without_writes() {
+    let fixture = Fixture::new("decision-before-ready-prefix");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&three_occurrence_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    for (contents, arguments) in [
+        (
+            None,
+            vec!["case", "open", "--proposal", proposal_path, "--root", root],
+        ),
+        (
+            Some(change_decision_proposal()),
+            vec![
+                "case",
+                "decide",
+                SECOND_CASE_ID,
+                "--expected-revision",
+                "1",
+                "--proposal",
+                proposal_path,
+                "--root",
+                root,
+            ],
+        ),
+        (
+            Some(two_occurrence_proposal()),
+            vec!["case", "open", "--proposal", proposal_path, "--root", root],
+        ),
+        (
+            Some(early_review_override_proposal()),
+            vec![
+                "case",
+                "override",
+                CASE_ID,
+                "--expected-revision",
+                "1",
+                "--proposal",
+                proposal_path,
+                "--root",
+                root,
+            ],
+        ),
+        (
+            Some(append_occurrence_proposal()),
+            vec![
+                "case",
+                "append",
+                CASE_ID,
+                "--expected-revision",
+                "2",
+                "--proposal",
+                proposal_path,
+                "--root",
+                root,
+            ],
+        ),
+    ] {
+        if let Some(contents) = contents {
+            fs::write(&proposal, contents).expect("case operation proposal should be writable");
+        }
+        let output = run_in(&steward, &arguments);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+    }
+    let donor_decision_path = case_event_path_at_sequence(&steward, SECOND_CASE_ID, 2);
+    let override_path = case_event_path_at_sequence(&steward, CASE_ID, 2);
+    let target_decision_path = override_path
+        .parent()
+        .expect("target case event should have a parent")
+        .join(
+            donor_decision_path
+                .file_name()
+                .expect("donor decision should have a file name"),
+        );
+    fs::remove_file(&override_path).expect("override fixture should be removable");
+    fs::copy(donor_decision_path, target_decision_path)
+        .expect("CLI-authored decision fixture should be copyable");
+    let before = files_beneath(&fixture.root);
+
+    let shown = run_without_portfolio_configuration(&fixture, &steward, &["case", "show", CASE_ID]);
+
+    assert_eq!(shown.status.code(), Some(3), "{shown:?}");
+    assert!(shown.stdout.is_empty(), "{shown:?}");
+    let stderr = String::from_utf8(shown.stderr).expect("stderr should be UTF-8");
+    assert!(stderr.contains("decision at sequence 2"), "{stderr}");
+    assert!(stderr.contains("not review-ready"), "{stderr}");
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "refusing a decision before its prefix was ready must write nothing"
+    );
+}
+
+#[test]
+fn case_read_refuses_decision_consumer_recorded_only_by_later_append_without_writes() {
+    let fixture = Fixture::new("decision-consumer-from-future");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    record_overridden_decision_then_append(&fixture, &steward);
+    let decision_path = case_event_path_at_sequence(&steward, CASE_ID, 3);
+    let invalid = fs::read_to_string(&decision_path)
+        .expect("decision event should be readable")
+        .replacen(FIRST_PARTICIPANT_ID, THIRD_PARTICIPANT_ID, 1)
+        .replacen("rust-release-tool", "desktop-packager", 1);
+    fs::write(&decision_path, invalid).expect("invalid decision fixture should be writable");
+    let before = files_beneath(&fixture.root);
+
+    let shown = run_without_portfolio_configuration(&fixture, &steward, &["case", "show", CASE_ID]);
+
+    assert_eq!(shown.status.code(), Some(3), "{shown:?}");
+    assert!(shown.stdout.is_empty(), "{shown:?}");
+    let stderr = String::from_utf8(shown.stderr).expect("stderr should be UTF-8");
+    assert!(
+        stderr.contains("affected consumer `desktop-packager`"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("not recorded before sequence 3"),
+        "{stderr}"
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before,
+        "a later occurrence must not retroactively legitimize a decision"
     );
 }
 
