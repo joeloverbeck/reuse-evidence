@@ -1,0 +1,96 @@
+{
+  "checkpoint_ids_consumed": [
+    "B01",
+    "B02",
+    "B03",
+    "B04",
+    "B05",
+    "B06",
+    "B07",
+    "B08",
+    "B09",
+    "B10",
+    "B11",
+    "B12"
+  ],
+  "phase_boundaries_crossed": [
+    "enter:normalize",
+    "normalize->select",
+    "select->render",
+    "exit:render"
+  ],
+  "ledger_entries_used": [
+    {
+      "key": "B01",
+      "answer": "The scratch fixture is the sole write target.",
+      "rationale": "The repository is outside the authorized write scope.",
+      "status": "ratified"
+    },
+    {
+      "key": "B02",
+      "answer": "The process has normalize, select, and render phases.",
+      "rationale": "These are the established process boundaries.",
+      "status": "ratified"
+    },
+    {
+      "key": "B03",
+      "answer": "Retain source key orchid during normalization.",
+      "rationale": "The normalized source was established at checkpoint.",
+      "status": "ratified"
+    },
+    {
+      "key": "B04",
+      "answer": "Map state ok to verified during normalization.",
+      "rationale": "The normalized state mapping was established at checkpoint.",
+      "status": "ratified"
+    },
+    {
+      "key": "B05",
+      "answer": "Exclude records marked private during selection.",
+      "rationale": "Private records are outside the selected result.",
+      "status": "ratified"
+    },
+    {
+      "key": "B06",
+      "answer": "Keep selected record IDs in lexical order.",
+      "rationale": "Lexical ordering is the established selection order.",
+      "status": "ratified"
+    },
+    {
+      "key": "B07",
+      "answer": "Render one JSON object followed by exactly one newline.",
+      "rationale": "This is the established output byte shape.",
+      "status": "ratified"
+    },
+    {
+      "key": "B08",
+      "answer": "Render fields in source, state, ids order.",
+      "rationale": "This is the established output field order.",
+      "status": "ratified"
+    },
+    {
+      "key": "B09",
+      "answer": "Consume input IDs zeta, alpha, and mu.",
+      "rationale": "These are the established input IDs.",
+      "status": "ratified"
+    },
+    {
+      "key": "B10",
+      "answer": "Treat mu as private.",
+      "rationale": "Its private marker triggers the B05 exclusion rule.",
+      "status": "ratified"
+    },
+    {
+      "key": "B11",
+      "answer": "Treat zeta as deprecated and exclude it.",
+      "rationale": "The late data check established the exclusion before rendering.",
+      "status": "evidence-resolved"
+    },
+    {
+      "key": "B12",
+      "answer": "Deliver only alpha.",
+      "rationale": "Applying the private and deprecated exclusions leaves alpha.",
+      "status": "derived"
+    }
+  ]
+}

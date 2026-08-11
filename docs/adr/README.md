@@ -28,6 +28,7 @@ Only the human decision owner can accept, supersede, or reject an ADR. Merge, im
 | [0011](0011-one-owner-for-case-event-naming.md) | Case event naming has one owner reached one way by publication and projection; the `case.rs`/`case/read.rs` boundary is not re-cut. |
 | [0012](0012-implementation-brief-is-a-projection.md) | The accepted decision is the single durable record; the implementation brief is projected from it and never authored. |
 | [0013](0013-one-outcome-carrier-for-later-case-events.md) | The three later case event types share one outcome carrier and effect enum; opening keeps its own shape. |
+| [0014](0014-one-type-for-the-case-event-envelope.md) | The case event envelope has one type and one validator, flattened into each body; recorded bytes and refusal wording are unchanged. |
 
 ## Adding or changing an ADR
 

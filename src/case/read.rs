@@ -781,7 +781,7 @@ fn validate_decision_prefix(
         return Err(TerminalFailure::refusal(
             format!(
                 "case `{case_id}` records a decision at sequence {} whose event prefix is not review-ready",
-                decision.sequence
+                decision.envelope.sequence
             ),
             "restore a third earlier occurrence or an earlier human-authorized review override before the accepted decision",
         ));
@@ -883,18 +883,18 @@ fn read_case_event(
         EventType::CaseOpened => {
             let event = toml::from_str::<CaseOpenedEvent>(&event_text)
                 .map_err(|error| invalid_event(event_path, &error))?;
-            validate_body_sequence(event_path, event.sequence, file_sequence)?;
-            if event.sequence != OPENING_SEQUENCE {
+            validate_body_sequence(event_path, event.envelope.sequence, file_sequence)?;
+            if event.envelope.sequence != OPENING_SEQUENCE {
                 return Err(TerminalFailure::refusal(
                     format!(
                         "case event `{}` records `case_opened` at sequence {}",
                         event_path.display(),
-                        event.sequence
+                        event.envelope.sequence
                     ),
                     "restore `case_opened` as the single sequence 1 opening event before reading the case",
                 ));
             }
-            if event.schema_version != CASE_SCHEMA_VERSION
+            if event.envelope.schema_version != CASE_SCHEMA_VERSION
                 || event.case_id != case_id
                 || event.steward_repository_id != steward_repository_id
             {
@@ -906,7 +906,7 @@ fn read_case_event(
                     "restore the event under the case and steward identities it records",
                 ));
             }
-            validate_file_event_type(case_id, file_name, file_sequence, event.event_type)?;
+            validate_file_event_type(case_id, file_name, file_sequence, event.envelope.event_type)?;
             super::validate_recorded_opening(&event)?;
             Ok((file_sequence, CaseEvent::Opened(event)))
         }
@@ -935,8 +935,8 @@ fn read_occurrence_appended_event(
 ) -> Result<(i64, CaseEvent), TerminalFailure> {
     let event = toml::from_str::<OccurrenceAppendedEvent>(event_text)
         .map_err(|error| invalid_event(event_path, &error))?;
-    validate_body_sequence(event_path, event.sequence, file_sequence)?;
-    if event.sequence == OPENING_SEQUENCE {
+    validate_body_sequence(event_path, event.envelope.sequence, file_sequence)?;
+    if event.envelope.sequence == OPENING_SEQUENCE {
         return Err(TerminalFailure::refusal(
             format!(
                 "case event `{}` records `occurrence_appended` at opening sequence 1",
@@ -945,7 +945,7 @@ fn read_occurrence_appended_event(
             "restore `case_opened` as sequence 1 and append occurrences only after it",
         ));
     }
-    validate_file_event_type(case_id, file_name, file_sequence, event.event_type)?;
+    validate_file_event_type(case_id, file_name, file_sequence, event.envelope.event_type)?;
     super::validate_recorded_append(&event)?;
     Ok((file_sequence, CaseEvent::OccurrenceAppended(event)))
 }
@@ -959,8 +959,8 @@ fn read_early_review_event(
 ) -> Result<(i64, CaseEvent), TerminalFailure> {
     let event = toml::from_str::<EarlyReviewAuthorizedEvent>(event_text)
         .map_err(|error| invalid_event(event_path, &error))?;
-    validate_body_sequence(event_path, event.sequence, file_sequence)?;
-    if event.sequence == OPENING_SEQUENCE {
+    validate_body_sequence(event_path, event.envelope.sequence, file_sequence)?;
+    if event.envelope.sequence == OPENING_SEQUENCE {
         return Err(TerminalFailure::refusal(
             format!(
                 "case event `{}` records `early_review_authorized` at opening sequence 1",
@@ -969,7 +969,7 @@ fn read_early_review_event(
             "restore `case_opened` as sequence 1 and authorize early review only after it",
         ));
     }
-    validate_file_event_type(case_id, file_name, file_sequence, event.event_type)?;
+    validate_file_event_type(case_id, file_name, file_sequence, event.envelope.event_type)?;
     super::validate_recorded_early_review(&event)?;
     Ok((file_sequence, CaseEvent::EarlyReviewAuthorized(event)))
 }
@@ -983,18 +983,18 @@ fn read_reuse_decision_event(
 ) -> Result<(i64, CaseEvent), TerminalFailure> {
     let event = toml::from_str::<ReuseDecisionAcceptedEvent>(event_text)
         .map_err(|error| invalid_event(event_path, &error))?;
-    validate_body_sequence(event_path, event.sequence, file_sequence)?;
-    if event.sequence == OPENING_SEQUENCE {
+    validate_body_sequence(event_path, event.envelope.sequence, file_sequence)?;
+    if event.envelope.sequence == OPENING_SEQUENCE {
         return Err(TerminalFailure::refusal(
             format!(
                 "case event `{}` records `{}` at opening sequence 1",
                 event_path.display(),
-                event.event_type.body_name()
+                event.envelope.event_type.body_name()
             ),
             "restore `case_opened` as sequence 1 and accept reuse decisions only after it",
         ));
     }
-    validate_file_event_type(case_id, file_name, file_sequence, event.event_type)?;
+    validate_file_event_type(case_id, file_name, file_sequence, event.envelope.event_type)?;
     super::validate_recorded_decision(&event)?;
     Ok((file_sequence, CaseEvent::ReuseDecisionAccepted(event)))
 }

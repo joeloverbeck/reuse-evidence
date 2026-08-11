@@ -1,0 +1,3 @@
+- `V1` — **Reject.** The authoritative contract says the command appends an event, so the write-free claim is contradicted.
+- `V2` — **Adopt.** The authoritative contract and test agree that exact retries return the original receipt, supporting idempotence.
+- `V3` — **Modify anchor.** The rule’s meaning is unchanged, but its citation should point to line 112 instead of line 90.

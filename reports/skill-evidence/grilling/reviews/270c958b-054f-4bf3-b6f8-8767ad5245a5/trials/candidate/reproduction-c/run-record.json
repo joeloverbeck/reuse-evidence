@@ -1,0 +1,32 @@
+{
+  "checkpoint_ids_consumed": [
+    "C01",
+    "C02",
+    "C03",
+    "C04",
+    "C05",
+    "C06",
+    "C07",
+    "C08",
+    "C09",
+    "C10",
+    "C11",
+    "C12"
+  ],
+  "boundary_crossed": {
+    "from": "completed local change with established checkpoint facts",
+    "to": "closeout preview and real veto window",
+    "outward_facing_mutation_boundary_crossed": false
+  },
+  "actions_actually_taken": [
+    {
+      "action": "prepared the exact three-mutation closeout sequence",
+      "external_mutation": false
+    },
+    {
+      "action": "presented a go-or-veto authorization window",
+      "external_mutation": false
+    }
+  ],
+  "external_mutations": []
+}

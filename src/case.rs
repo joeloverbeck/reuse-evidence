@@ -1,5 +1,6 @@
 //! Durable case recording and inspection mechanics.
 
+mod event;
 mod instant;
 mod naming;
 mod publication;
@@ -14,7 +15,6 @@ use std::fmt::{self, Display, Formatter};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use instant::MalformedInstant;
 use naming::{EventFileName, EventPosition, EventType, OPENING_SEQUENCE};
 
 use serde::{Deserialize, Serialize};
@@ -316,11 +316,8 @@ struct MigrationExpectation {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CaseOpenedEvent {
-    schema_version: i64,
-    sequence: i64,
-    event_id: Uuid,
-    event_type: EventType,
-    recorded_at: String,
+    #[serde(flatten)]
+    envelope: event::Envelope,
     case_id: Uuid,
     responsibility: String,
     steward_repository_id: Uuid,
@@ -331,22 +328,16 @@ struct CaseOpenedEvent {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct OccurrenceAppendedEvent {
-    schema_version: i64,
-    sequence: i64,
-    event_id: Uuid,
-    event_type: EventType,
-    recorded_at: String,
+    #[serde(flatten)]
+    envelope: event::Envelope,
     occurrence: Occurrence,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EarlyReviewAuthorizedEvent {
-    schema_version: i64,
-    sequence: i64,
-    event_id: Uuid,
-    event_type: EventType,
-    recorded_at: String,
+    #[serde(flatten)]
+    envelope: event::Envelope,
     reason: String,
     review_appetite: String,
     evidence: Vec<EvidenceReference>,
@@ -355,11 +346,8 @@ struct EarlyReviewAuthorizedEvent {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ReuseDecisionAcceptedEvent {
-    schema_version: i64,
-    sequence: i64,
-    event_id: Uuid,
-    event_type: EventType,
-    recorded_at: String,
+    #[serde(flatten)]
+    envelope: event::Envelope,
     #[serde(flatten)]
     content: DecisionContent,
 }
@@ -1375,7 +1363,7 @@ fn validate_recorded_decision_participants(
             "decision affected consumer `{}` in participant `{}` is not recorded before sequence {} in case `{case_id}`",
             affected.consumer.trim(),
             affected.repository_id,
-            decision.sequence
+            decision.envelope.sequence
         ),
         "restore the accepted decision so every affected repository and consumer pair names a participant recorded by an earlier event",
     ))
@@ -1725,11 +1713,7 @@ fn append_event_bytes(
         return Ok(prepared.bytes.clone());
     }
     let event = OccurrenceAppendedEvent {
-        schema_version: CASE_SCHEMA_VERSION,
-        sequence,
-        event_id: Uuid::new_v4(),
-        event_type: EventType::OccurrenceAppended,
-        recorded_at: recorded_at.to_string(),
+        envelope: event::Envelope::new(sequence, EventType::OccurrenceAppended, recorded_at),
         occurrence: proposal.occurrence.clone(),
     };
     toml::to_string(&event).map_err(|error| {
@@ -1748,11 +1732,7 @@ fn early_review_event_bytes(
         return Ok(prepared.bytes.clone());
     }
     let event = EarlyReviewAuthorizedEvent {
-        schema_version: CASE_SCHEMA_VERSION,
-        sequence,
-        event_id: Uuid::new_v4(),
-        event_type: EventType::EarlyReviewAuthorized,
-        recorded_at: recorded_at.to_string(),
+        envelope: event::Envelope::new(sequence, EventType::EarlyReviewAuthorized, recorded_at),
         reason: proposal.reason.clone(),
         review_appetite: proposal.review_appetite.clone(),
         evidence: proposal.evidence.clone(),
@@ -1773,11 +1753,7 @@ fn decision_event_bytes(
         return Ok(prepared.bytes.clone());
     }
     let event = ReuseDecisionAcceptedEvent {
-        schema_version: CASE_SCHEMA_VERSION,
-        sequence,
-        event_id: Uuid::new_v4(),
-        event_type: EventType::ReuseDecisionAccepted,
-        recorded_at: recorded_at.to_string(),
+        envelope: event::Envelope::new(sequence, EventType::ReuseDecisionAccepted, recorded_at),
         content: proposal.content.clone(),
     };
     toml::to_string(&event).map_err(|error| {
@@ -1817,11 +1793,7 @@ fn event_bytes(
     }
 
     let event = CaseOpenedEvent {
-        schema_version: CASE_SCHEMA_VERSION,
-        sequence: OPENING_SEQUENCE,
-        event_id: Uuid::new_v4(),
-        event_type: EventType::CaseOpened,
-        recorded_at: recorded_at.to_string(),
+        envelope: event::Envelope::new(OPENING_SEQUENCE, EventType::CaseOpened, recorded_at),
         case_id: proposal.case_id,
         responsibility: proposal.responsibility.clone(),
         steward_repository_id: steward.repository_id(),
@@ -1984,9 +1956,9 @@ fn existing_opening(
             "restore the supported recorded event or choose a new opaque case identity",
         )
     })?;
-    let matches = recorded.schema_version == CASE_SCHEMA_VERSION
-        && recorded.sequence == OPENING_SEQUENCE
-        && recorded.event_type == EventType::CaseOpened
+    let matches = recorded.envelope.schema_version == CASE_SCHEMA_VERSION
+        && recorded.envelope.sequence == OPENING_SEQUENCE
+        && recorded.envelope.event_type == EventType::CaseOpened
         && recorded.case_id == proposal.case_id
         && recorded.responsibility == proposal.responsibility
         && recorded.steward_repository_id == steward.repository_id()
@@ -2352,8 +2324,8 @@ fn read_append_proposal(path: &Path) -> Result<AppendProposal, TerminalFailure> 
             AppendProposal {
                 occurrence: event.occurrence,
                 prepared: Some(PreparedAppend {
-                    sequence: event.sequence,
-                    event_id: event.event_id,
+                    sequence: event.envelope.sequence,
+                    event_id: event.envelope.event_id,
                     bytes: text,
                 }),
             }
@@ -2416,8 +2388,8 @@ fn read_early_review_proposal(path: &Path) -> Result<EarlyReviewProposal, Termin
                 review_appetite: event.review_appetite,
                 evidence: event.evidence,
                 prepared: Some(PreparedEarlyReview {
-                    sequence: event.sequence,
-                    event_id: event.event_id,
+                    sequence: event.envelope.sequence,
+                    event_id: event.envelope.event_id,
                     bytes: text,
                 }),
             }
@@ -2459,8 +2431,8 @@ fn read_decision_proposal(path: &Path) -> Result<DecisionProposal, TerminalFailu
         DecisionProposalDocument::Prepared(event) => {
             validate_recorded_decision(&event)?;
             let prepared = PreparedDecision {
-                sequence: event.sequence,
-                event_id: event.event_id,
+                sequence: event.envelope.sequence,
+                event_id: event.envelope.event_id,
                 bytes: text,
             };
             DecisionProposal {
@@ -2510,26 +2482,40 @@ fn parse_case_id(value: &str) -> Result<Uuid, TerminalFailure> {
     Ok(case_id)
 }
 
-fn validate_prepared_event(event: &CaseOpenedEvent) -> Result<(), TerminalFailure> {
-    if event.schema_version != CASE_SCHEMA_VERSION
-        || event.sequence != OPENING_SEQUENCE
-        || event.event_type != EventType::CaseOpened
-    {
-        return Err(TerminalFailure::refusal(
-            "prepared opening event is not a supported revision 1 `case_opened` event",
-            "use the exact event rendered by `case open --preview`",
-        ));
-    }
-    if event.event_id.get_version_num() != 4 {
-        return Err(TerminalFailure::refusal(
-            format!(
-                "prepared opening event identity `{}` is not an opaque UUID version 4",
-                event.event_id
-            ),
-            "use the exact event rendered by `case open --preview`",
-        ));
-    }
-    validate_recorded_at(&event.recorded_at, "opening", "case open --preview")?;
+const OPENING_REFUSAL: event::EnvelopeRefusal<'static> = event::EnvelopeRefusal {
+    unsupported: "prepared opening event is not a supported revision 1 `case_opened` event",
+    noun: "opening",
+    instant_name: "opening",
+    preview_command: "case open --preview",
+};
+
+const APPEND_REFUSAL: event::EnvelopeRefusal<'static> = event::EnvelopeRefusal {
+    unsupported: "prepared append event is not a supported `occurrence_appended` event after revision 1",
+    noun: "append",
+    instant_name: "append",
+    preview_command: "case append --preview",
+};
+
+const EARLY_REVIEW_REFUSAL: event::EnvelopeRefusal<'static> = event::EnvelopeRefusal {
+    unsupported: "prepared early-review event is not a supported `early_review_authorized` event after revision 1",
+    noun: "early-review",
+    instant_name: "early-review authorization",
+    preview_command: "case override --preview",
+};
+
+const DECISION_REFUSAL: event::EnvelopeRefusal<'static> = event::EnvelopeRefusal {
+    unsupported: "prepared reuse decision event is not a supported later event",
+    noun: "reuse decision",
+    instant_name: "reuse decision",
+    preview_command: "case decide --preview",
+};
+
+fn validate_recorded_opening(event: &CaseOpenedEvent) -> Result<(), TerminalFailure> {
+    event.envelope.validate(
+        EventType::CaseOpened,
+        EventPosition::Opening,
+        &OPENING_REFUSAL,
+    )?;
     if event.case_id.get_version_num() != 4 {
         return Err(TerminalFailure::refusal(
             format!(
@@ -2539,11 +2525,6 @@ fn validate_prepared_event(event: &CaseOpenedEvent) -> Result<(), TerminalFailur
             "use a newly generated UUID version 4 as `case_id`",
         ));
     }
-    Ok(())
-}
-
-fn validate_recorded_opening(event: &CaseOpenedEvent) -> Result<(), TerminalFailure> {
-    validate_prepared_event(event)?;
     validate_opening_content(&event.responsibility, &event.occurrences)
 }
 
@@ -2623,80 +2604,30 @@ fn validate_occurrence(
 }
 
 fn validate_recorded_append(event: &OccurrenceAppendedEvent) -> Result<(), TerminalFailure> {
-    if event.schema_version != CASE_SCHEMA_VERSION
-        || event.sequence <= OPENING_SEQUENCE
-        || event.event_type != EventType::OccurrenceAppended
-    {
-        return Err(TerminalFailure::refusal(
-            "prepared append event is not a supported `occurrence_appended` event after revision 1",
-            "use the exact event rendered by `case append --preview`",
-        ));
-    }
-    if event.event_id.get_version_num() != 4 {
-        return Err(TerminalFailure::refusal(
-            format!(
-                "prepared append event identity `{}` is not an opaque UUID version 4",
-                event.event_id
-            ),
-            "use the exact event rendered by `case append --preview`",
-        ));
-    }
-    validate_recorded_at(&event.recorded_at, "append", "case append --preview")?;
+    event.envelope.validate(
+        EventType::OccurrenceAppended,
+        EventPosition::Later,
+        &APPEND_REFUSAL,
+    )?;
     validate_occurrence(&event.occurrence, 1, "occurrence.evidence")
 }
 
 fn validate_recorded_early_review(
     event: &EarlyReviewAuthorizedEvent,
 ) -> Result<(), TerminalFailure> {
-    if event.schema_version != CASE_SCHEMA_VERSION
-        || event.sequence <= OPENING_SEQUENCE
-        || event.event_type != EventType::EarlyReviewAuthorized
-    {
-        return Err(TerminalFailure::refusal(
-            "prepared early-review event is not a supported `early_review_authorized` event after revision 1",
-            "use the exact event rendered by `case override --preview`",
-        ));
-    }
-    if event.event_id.get_version_num() != 4 {
-        return Err(TerminalFailure::refusal(
-            format!(
-                "prepared early-review event identity `{}` is not an opaque UUID version 4",
-                event.event_id
-            ),
-            "use the exact event rendered by `case override --preview`",
-        ));
-    }
-    validate_recorded_at(
-        &event.recorded_at,
-        "early-review authorization",
-        "case override --preview",
+    event.envelope.validate(
+        EventType::EarlyReviewAuthorized,
+        EventPosition::Later,
+        &EARLY_REVIEW_REFUSAL,
     )?;
     validate_early_review_content(&event.reason, &event.review_appetite, &event.evidence)
 }
 
 fn validate_recorded_decision(event: &ReuseDecisionAcceptedEvent) -> Result<(), TerminalFailure> {
-    if event.schema_version != CASE_SCHEMA_VERSION
-        || event.sequence <= OPENING_SEQUENCE
-        || event.event_type != EventType::ReuseDecisionAccepted
-    {
-        return Err(TerminalFailure::refusal(
-            "prepared reuse decision event is not a supported later event",
-            "use the exact event rendered by `case decide --preview`",
-        ));
-    }
-    if event.event_id.get_version_num() != 4 {
-        return Err(TerminalFailure::refusal(
-            format!(
-                "prepared reuse decision event identity `{}` is not an opaque UUID version 4",
-                event.event_id
-            ),
-            "use the exact event rendered by `case decide --preview`",
-        ));
-    }
-    validate_recorded_at(
-        &event.recorded_at,
-        "reuse decision",
-        "case decide --preview",
+    event.envelope.validate(
+        EventType::ReuseDecisionAccepted,
+        EventPosition::Later,
+        &DECISION_REFUSAL,
     )?;
     validate_decision_content(&event.content)
 }
@@ -2726,31 +2657,6 @@ fn validate_early_review_content(
         }
     }
     Ok(())
-}
-
-fn validate_recorded_at(
-    value: &str,
-    event_name: &str,
-    preview_command: &str,
-) -> Result<(), TerminalFailure> {
-    RecordedInstant::parse(value)
-        .map(|_| ())
-        .map_err(|failure| {
-            let condition = match failure {
-                MalformedInstant::NotRfc3339 => {
-                    format!("prepared {event_name} event timestamp `{value}` is not UTC RFC 3339")
-                }
-                MalformedInstant::NotAValidInstant => {
-                    format!(
-                        "prepared {event_name} event timestamp `{value}` is not a valid UTC instant"
-                    )
-                }
-            };
-            TerminalFailure::refusal(
-                condition,
-                format!("use the exact event rendered by `{preview_command}`"),
-            )
-        })
 }
 
 fn require_nonempty(field: &str, value: &str) -> Result<(), TerminalFailure> {
@@ -2823,4 +2729,185 @@ fn resolve_participants(
         participants.insert(enrollment.repository_id, enrollment.visibility);
     }
     Ok(participants)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The exact bytes `CONSUMER-CONTRACT.md` §3 calls the hardest
+    /// compatibility surface. Nothing else pins the recorded layout, so a
+    /// serde or `toml` change that reorders or renames an envelope field
+    /// would otherwise reach recorded evidence unannounced.
+    const RECORDED_AT: &str = "2026-08-11T06:00:00Z";
+    const EVENT_ID: &str = "22222222-2222-4222-8222-222222222222";
+    const CASE_ID: &str = "33333333-3333-4333-8333-333333333333";
+    const PARTICIPANT_ID: &str = "11111111-1111-4111-8111-111111111111";
+
+    fn envelope(sequence: i64, event_type: EventType) -> event::Envelope {
+        event::Envelope {
+            schema_version: CASE_SCHEMA_VERSION,
+            sequence,
+            event_id: Uuid::parse_str(EVENT_ID).expect("the fixture identity is a valid UUID"),
+            event_type,
+            recorded_at: RECORDED_AT.to_owned(),
+        }
+    }
+
+    fn occurrence() -> Occurrence {
+        Occurrence {
+            repository_id: Uuid::parse_str(PARTICIPANT_ID)
+                .expect("the fixture participant is a valid UUID"),
+            consumer: "billing totals".to_owned(),
+            independence: "arose from a separate consumer need".to_owned(),
+            evidence: vec![EvidenceReference {
+                kind: EvidenceKind::Commit,
+                reference: "abc123".to_owned(),
+                path: Some("src/lib.rs".to_owned()),
+            }],
+        }
+    }
+
+    #[test]
+    fn every_event_type_records_its_envelope_in_one_order() {
+        let opening = toml::to_string(&CaseOpenedEvent {
+            envelope: envelope(OPENING_SEQUENCE, EventType::CaseOpened),
+            case_id: Uuid::parse_str(CASE_ID).expect("the fixture case is a valid UUID"),
+            responsibility: "one responsibility".to_owned(),
+            steward_repository_id: Uuid::parse_str(PARTICIPANT_ID)
+                .expect("the fixture steward is a valid UUID"),
+            privacy: Visibility::Private,
+            occurrences: vec![occurrence()],
+        })
+        .expect("the opening event should serialize");
+
+        assert_eq!(
+            opening,
+            concat!(
+                "schema_version = 1\n",
+                "sequence = 1\n",
+                "event_id = \"22222222-2222-4222-8222-222222222222\"\n",
+                "event_type = \"case_opened\"\n",
+                "recorded_at = \"2026-08-11T06:00:00Z\"\n",
+                "case_id = \"33333333-3333-4333-8333-333333333333\"\n",
+                "responsibility = \"one responsibility\"\n",
+                "steward_repository_id = \"11111111-1111-4111-8111-111111111111\"\n",
+                "privacy = \"private\"\n",
+                "\n",
+                "[[occurrences]]\n",
+                "repository_id = \"11111111-1111-4111-8111-111111111111\"\n",
+                "consumer = \"billing totals\"\n",
+                "independence = \"arose from a separate consumer need\"\n",
+                "\n",
+                "[[occurrences.evidence]]\n",
+                "kind = \"commit\"\n",
+                "reference = \"abc123\"\n",
+                "path = \"src/lib.rs\"\n",
+            ),
+            "the opening event's recorded layout is a compatibility surface"
+        );
+
+        let append = toml::to_string(&OccurrenceAppendedEvent {
+            envelope: envelope(2, EventType::OccurrenceAppended),
+            occurrence: occurrence(),
+        })
+        .expect("the append event should serialize");
+
+        assert!(
+            append.starts_with(concat!(
+                "schema_version = 1\n",
+                "sequence = 2\n",
+                "event_id = \"22222222-2222-4222-8222-222222222222\"\n",
+                "event_type = \"occurrence_appended\"\n",
+                "recorded_at = \"2026-08-11T06:00:00Z\"\n",
+                "\n",
+                "[occurrence]\n",
+            )),
+            "the append event must open with the envelope in order: {append}"
+        );
+
+        let early_review = toml::to_string(&EarlyReviewAuthorizedEvent {
+            envelope: envelope(3, EventType::EarlyReviewAuthorized),
+            reason: "waiting costs more".to_owned(),
+            review_appetite: "one afternoon".to_owned(),
+            evidence: vec![EvidenceReference {
+                kind: EvidenceKind::Commit,
+                reference: "def456".to_owned(),
+                path: None,
+            }],
+        })
+        .expect("the early-review event should serialize");
+
+        assert!(
+            early_review.starts_with(concat!(
+                "schema_version = 1\n",
+                "sequence = 3\n",
+                "event_id = \"22222222-2222-4222-8222-222222222222\"\n",
+                "event_type = \"early_review_authorized\"\n",
+                "recorded_at = \"2026-08-11T06:00:00Z\"\n",
+                "reason = \"waiting costs more\"\n",
+            )),
+            "the early-review event must open with the envelope in order: {early_review}"
+        );
+    }
+
+    /// Two flattened fields in one struct is the shape the decision event
+    /// takes once the envelope has a type. It must still emit the envelope
+    /// before the content, in the recorded order.
+    #[test]
+    fn the_decision_event_records_its_envelope_before_its_content() {
+        let decision = toml::to_string(&ReuseDecisionAcceptedEvent {
+            envelope: envelope(4, EventType::ReuseDecisionAccepted),
+            content: DecisionContent {
+                identity_verdict: IdentityVerdict::SameResponsibility,
+                action: DecisionAction::ExtractOrDeepenLocally,
+                accepted_scope: "one scope".to_owned(),
+                non_responsibilities: vec!["not this".to_owned()],
+                affected_consumers: Vec::new(),
+                alternatives_rejected: Vec::new(),
+                compatibility_consequences: "none".to_owned(),
+                verification_conditions: vec!["one condition".to_owned()],
+                invariant_contract: None,
+                existing_packages_considered: None,
+                required_consumer_level_tests: None,
+                migration_expectations: None,
+                rollback_or_resplitting_path: None,
+            },
+        })
+        .expect("the decision event should serialize");
+
+        assert!(
+            decision.starts_with(concat!(
+                "schema_version = 1\n",
+                "sequence = 4\n",
+                "event_id = \"22222222-2222-4222-8222-222222222222\"\n",
+                "event_type = \"reuse_decision_accepted\"\n",
+                "recorded_at = \"2026-08-11T06:00:00Z\"\n",
+                "identity_verdict = \"same_responsibility\"\n",
+                "action = \"extract_or_deepen_locally\"\n",
+            )),
+            "the decision event must open with the envelope in order: {decision}"
+        );
+    }
+
+    /// An unknown field in a recorded event is still refused. Flattening the
+    /// envelope keeps `deny_unknown_fields` in force but costs the span and
+    /// the expected-field list, which ADR 0014 names and requires witnessed.
+    #[test]
+    fn a_recorded_event_carrying_an_unknown_field_is_refused() {
+        let mut recorded = toml::to_string(&OccurrenceAppendedEvent {
+            envelope: envelope(2, EventType::OccurrenceAppended),
+            occurrence: occurrence(),
+        })
+        .expect("the append event should serialize");
+        recorded.insert_str(0, "surprise = \"extra\"\n");
+
+        let error = toml::from_str::<OccurrenceAppendedEvent>(&recorded)
+            .expect_err("an unknown field must be refused");
+
+        assert!(
+            error.to_string().contains("unknown field `surprise`"),
+            "the refusal must name the unknown field: {error}"
+        );
+    }
 }

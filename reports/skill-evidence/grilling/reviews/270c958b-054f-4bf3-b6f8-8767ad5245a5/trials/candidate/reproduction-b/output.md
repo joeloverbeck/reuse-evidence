@@ -1,0 +1,5 @@
+Created `deliverable.json` with the exact authorized JSON object and one trailing newline.
+
+The completed scratch-only scope was normalize, select, and render: source `orchid` was retained, state `ok` became `verified`, private `mu` and deprecated `zeta` were excluded, and the remaining ID `alpha` was rendered in the required `source`, `state`, `ids` field order. Checkpoints B01-B12 were consumed; the late-data decision B11 and its derived result B12 were applied before rendering. Repository modification, publication, and pushing remained out of scope.
+
+Artifact class: scratch JSON process output, required as the exact authorized deliverable. Provenance: checkpoint facts B01-B12 and the raw task's required-byte block. Convention checked: one JSON object in the required field order with exactly one trailing newline. No mirror, pointer, formatter, repository landing contract, or companion domain-doc update applied. The delivered artifact reconciles with the ratified scope; no evidence is unresolved, unavailable, or pending.
