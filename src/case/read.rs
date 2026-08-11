@@ -559,7 +559,10 @@ fn derive_conditions(
     };
     let scan = portfolio::scan(&roots)?;
     for case in cases {
-        let mut privacy_conflicted = false;
+        // Recorded case privacy is a term of complete case privacy, not only current participant
+        // visibility, so a steward that turned public after opening conflicts with its own case.
+        let mut privacy_conflicted =
+            steward_visibility == Visibility::Public && case.privacy == Visibility::Private;
         let mut stale = false;
         for occurrence in &case.occurrences {
             let matches = scan

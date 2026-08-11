@@ -2739,6 +2739,96 @@ fn case_read_recomputes_privacy_conflict_from_current_enrollment() {
 }
 
 #[test]
+fn case_read_reports_privacy_conflict_when_public_steward_holds_recorded_private_case() {
+    let fixture = Fixture::new("recorded-privacy-conflict");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "public");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            proposal.to_str().expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    let opened_stdout = String::from_utf8(opened.stdout).expect("stdout should be UTF-8");
+    assert!(
+        opened_stdout.contains("privacy: private\n"),
+        "a private steward must record private case privacy: {opened_stdout}"
+    );
+
+    let visibility_change = run_in(&steward, &["set-visibility", "--visibility", "public"]);
+    assert_eq!(
+        visibility_change.status.code(),
+        Some(0),
+        "{visibility_change:?}"
+    );
+    let append_proposal = fixture.root.join("append-occurrence.toml");
+    fs::write(&append_proposal, append_occurrence_proposal())
+        .expect("append proposal should be writable");
+    let before_read = files_beneath(&fixture.root);
+
+    let shown = run_in(&steward, &["case", "show", CASE_ID, "--root", root]);
+    assert_eq!(shown.status.code(), Some(0), "{shown:?}");
+    assert!(shown.stderr.is_empty(), "{shown:?}");
+    let shown_stdout = String::from_utf8(shown.stdout).expect("stdout should be UTF-8");
+    assert!(
+        shown_stdout.contains("privacy_conflicted: true\nstale: false\n"),
+        "{shown_stdout}"
+    );
+
+    let listed = run_in(&steward, &["case", "list", "--root", root]);
+    assert_eq!(listed.status.code(), Some(0), "{listed:?}");
+    let listed_stdout = String::from_utf8(listed.stdout).expect("stdout should be UTF-8");
+    assert!(
+        listed_stdout.contains("  privacy_conflicted: true\n  stale: false\n"),
+        "{listed_stdout}"
+    );
+
+    // The write path is the independent authority on the answer: it refuses this exact case for
+    // this exact conflict, so a projection reporting no conflict would be a second answer.
+    let refused = run_in(
+        &steward,
+        &[
+            "case",
+            "append",
+            CASE_ID,
+            "--expected-revision",
+            "1",
+            "--proposal",
+            append_proposal
+                .to_str()
+                .expect("fixture path should be UTF-8"),
+            "--preview",
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(refused.status.code(), Some(3), "{refused:?}");
+    let refusal = String::from_utf8(refused.stderr).expect("stderr should be UTF-8");
+    assert!(
+        refusal.contains(&format!(
+            "public steward `{STEWARD_ID}` cannot append to private case `{CASE_ID}`"
+        )),
+        "{refusal}"
+    );
+
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before_read,
+        "deriving a privacy conflict must write nothing"
+    );
+}
+
+#[test]
 fn case_read_uses_configured_portfolio_to_report_withdrawn_participant_as_stale() {
     let fixture = Fixture::new("stale-participant");
     let steward = fixture.repository("steward", STEWARD_ID, "public");
