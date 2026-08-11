@@ -70,6 +70,20 @@ fn run_in(repository: &Path, arguments: &[&str]) -> Output {
         .expect("compiled reuse-evidence binary should run")
 }
 
+fn run_in_with_configuration(
+    repository: &Path,
+    arguments: &[&str],
+    configuration_home: &Path,
+) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_reuse-evidence"))
+        .args(arguments)
+        .current_dir(repository)
+        .env("XDG_CONFIG_HOME", configuration_home)
+        .env("XDG_STATE_HOME", configuration_home.join("state"))
+        .output()
+        .expect("compiled reuse-evidence binary should run")
+}
+
 fn files_beneath(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     fn visit(root: &Path, directory: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
         for entry in fs::read_dir(directory).expect("fixture directory should be readable") {
@@ -163,6 +177,311 @@ fn fresh_enrollment_writes_exact_marker_in_npm_repository() {
     assert!(stdout.contains(repository_id));
     assert!(stdout.contains("npm-products"));
     assert!(stdout.contains("private"));
+}
+
+const CASE_STORAGE_CASE_ID: &str = "00000000-0000-4000-8000-000000000121";
+
+fn assert_populated_case_storage_refuses_independently_of_visibility_and_configuration(
+    fixture: &Fixture,
+) {
+    let populated = fixture.repository("populated-steward");
+    let case_directory = populated
+        .join("reuse-evidence/cases")
+        .join(CASE_STORAGE_CASE_ID);
+    fs::create_dir_all(&case_directory).expect("case directory should be creatable");
+    fs::write(
+        case_directory.join("0001-case-opened.toml"),
+        b"preserved recorded event bytes\n",
+    )
+    .expect("recorded event fixture should be writable");
+    let configuration_home = fixture.root.join("configured");
+    fs::create_dir_all(configuration_home.join("reuse-evidence"))
+        .expect("portfolio configuration directory should be creatable");
+    fs::write(
+        configuration_home.join("reuse-evidence/config.toml"),
+        format!("portfolio_roots = [\"{}\"]\n", fixture.root.display()),
+    )
+    .expect("portfolio configuration should be writable");
+    let before_populated_refusals = files_beneath(&populated);
+    let expected_refusal = format!(
+        "refusal: steward-local case directory `{}` is not empty in an unenrolled repository; fresh enrollment would mint a new repository identity and orphan every case recorded under the previous identity\nresolution: restore the committed `reuse-evidence.toml` marker that records those cases' steward identity, or set the case directory aside if this repository should not steward them\n",
+        populated.join("reuse-evidence/cases").display()
+    );
+    let public = run_in(
+        &populated,
+        &[
+            "enroll",
+            "--ecosystem-id",
+            "products",
+            "--visibility",
+            "public",
+        ],
+    );
+    let private = run_in(
+        &populated,
+        &[
+            "enroll",
+            "--ecosystem-id",
+            "products",
+            "--visibility",
+            "private",
+        ],
+    );
+    let configured = run_in_with_configuration(
+        &populated,
+        &[
+            "enroll",
+            "--ecosystem-id",
+            "products",
+            "--visibility",
+            "public",
+        ],
+        &configuration_home,
+    );
+    for refusal in [&public, &private, &configured] {
+        assert_eq!(refusal.status.code(), Some(3), "{refusal:?}");
+        assert!(refusal.stdout.is_empty(), "{refusal:?}");
+        assert_eq!(
+            String::from_utf8(refusal.stderr.clone()).expect("stderr should be UTF-8"),
+            expected_refusal
+        );
+    }
+    assert_eq!(public.stderr, private.stderr);
+    assert_eq!(public.stderr, configured.stderr);
+    assert!(!populated.join("reuse-evidence.toml").exists());
+    assert_eq!(
+        files_beneath(&populated),
+        before_populated_refusals,
+        "every populated-storage refusal must preserve every repository byte"
+    );
+}
+
+fn assert_non_case_entry_refuses_without_classification(fixture: &Fixture) {
+    let non_case_entry = fixture.repository("non-case-entry");
+    fs::create_dir_all(non_case_entry.join("reuse-evidence/cases"))
+        .expect("case storage should be creatable");
+    fs::write(
+        non_case_entry.join("reuse-evidence/cases/README.txt"),
+        b"not a case directory\n",
+    )
+    .expect("non-case entry should be writable");
+    let before_non_case_refusal = files_beneath(&non_case_entry);
+    let non_case_refusal = run_in(
+        &non_case_entry,
+        &[
+            "enroll",
+            "--ecosystem-id",
+            "products",
+            "--visibility",
+            "private",
+        ],
+    );
+    assert_eq!(
+        non_case_refusal.status.code(),
+        Some(3),
+        "{non_case_refusal:?}"
+    );
+    assert!(non_case_refusal.stdout.is_empty(), "{non_case_refusal:?}");
+    assert_eq!(
+        files_beneath(&non_case_entry),
+        before_non_case_refusal,
+        "the guard must classify no entry before refusing"
+    );
+}
+
+fn assert_empty_case_storage_enrolls(fixture: &Fixture) {
+    let empty = fixture.repository("empty-case-storage");
+    let empty_case_storage = empty.join("reuse-evidence/cases");
+    fs::create_dir_all(&empty_case_storage).expect("empty case storage should be creatable");
+    let empty_enrollment = run_in(
+        &empty,
+        &[
+            "enroll",
+            "--ecosystem-id",
+            "products",
+            "--visibility",
+            "private",
+        ],
+    );
+    assert_eq!(
+        empty_enrollment.status.code(),
+        Some(0),
+        "{empty_enrollment:?}"
+    );
+    assert!(empty_enrollment.stderr.is_empty(), "{empty_enrollment:?}");
+    assert!(empty.join("reuse-evidence.toml").is_file());
+    assert_eq!(
+        fs::read_dir(&empty_case_storage)
+            .expect("empty case storage should remain readable")
+            .count(),
+        0
+    );
+}
+
+#[cfg(unix)]
+fn assert_unreadable_case_storage_refuses_without_writes(fixture: &Fixture) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let unreadable = fixture.repository("unreadable-case-storage");
+    let unreadable_case_storage = unreadable.join("reuse-evidence/cases");
+    fs::create_dir_all(&unreadable_case_storage)
+        .expect("unreadable case storage should be creatable");
+    let before_unreadable_refusal = files_beneath(&unreadable);
+    let original_permissions = fs::metadata(&unreadable_case_storage)
+        .expect("case storage metadata should be readable")
+        .permissions();
+    fs::set_permissions(&unreadable_case_storage, fs::Permissions::from_mode(0o000))
+        .expect("case storage should become unreadable");
+    let unreadable_refusal = run_in(
+        &unreadable,
+        &[
+            "enroll",
+            "--ecosystem-id",
+            "products",
+            "--visibility",
+            "private",
+        ],
+    );
+    fs::set_permissions(&unreadable_case_storage, original_permissions)
+        .expect("case storage permissions should be restorable");
+    assert_eq!(
+        unreadable_refusal.status.code(),
+        Some(3),
+        "{unreadable_refusal:?}"
+    );
+    assert!(
+        unreadable_refusal.stdout.is_empty(),
+        "{unreadable_refusal:?}"
+    );
+    assert!(!unreadable.join("reuse-evidence.toml").exists());
+    assert_eq!(
+        files_beneath(&unreadable),
+        before_unreadable_refusal,
+        "unreadable case storage must refuse without changing repository bytes"
+    );
+}
+
+fn record_recoverable_case(fixture: &Fixture) -> (PathBuf, Vec<u8>) {
+    let steward = fixture.repository("recoverable-steward");
+    let first_consumer = fixture.repository("first-consumer");
+    let second_consumer = fixture.repository("second-consumer");
+    for (repository, visibility) in [
+        (&steward, "private"),
+        (&first_consumer, "public"),
+        (&second_consumer, "public"),
+    ] {
+        let enrollment = run_in(
+            repository,
+            &[
+                "enroll",
+                "--ecosystem-id",
+                "products",
+                "--visibility",
+                visibility,
+            ],
+        );
+        assert_eq!(enrollment.status.code(), Some(0), "{enrollment:?}");
+    }
+    let steward_marker_path = steward.join("reuse-evidence.toml");
+    let steward_marker = fs::read(&steward_marker_path).expect("steward marker should be readable");
+    let first_marker = fs::read(first_consumer.join("reuse-evidence.toml"))
+        .expect("first consumer marker should be readable");
+    let second_marker = fs::read(second_consumer.join("reuse-evidence.toml"))
+        .expect("second consumer marker should be readable");
+    let proposal = fixture.root.join("case-proposal.toml");
+    fs::write(
+        &proposal,
+        format!(
+            "case_id = \"{CASE_STORAGE_CASE_ID}\"\nresponsibility = \"preserve steward identity continuity\"\n\n[[occurrences]]\nrepository_id = \"{}\"\nconsumer = \"first-consumer\"\nindependence = \"independent first lifecycle\"\n\n[[occurrences.evidence]]\nkind = \"commit\"\nreference = \"1111111\"\npath = \"src/first.rs\"\n\n[[occurrences]]\nrepository_id = \"{}\"\nconsumer = \"second-consumer\"\nindependence = \"independent second lifecycle\"\n\n[[occurrences.evidence]]\nkind = \"commit\"\nreference = \"2222222\"\npath = \"src/second.rs\"\n",
+            marker_repository_id(&first_marker),
+            marker_repository_id(&second_marker),
+        ),
+    )
+    .expect("case proposal should be writable");
+    let opened = run_in(
+        &steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            proposal.to_str().expect("proposal path should be UTF-8"),
+            "--root",
+            fixture.root.to_str().expect("fixture root should be UTF-8"),
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    let marker_present_reenrollment = run_in(
+        &steward,
+        &[
+            "enroll",
+            "--ecosystem-id",
+            "products",
+            "--visibility",
+            "private",
+            "--expected-repository-id",
+            marker_repository_id(&steward_marker),
+        ],
+    );
+    assert_eq!(
+        marker_present_reenrollment.status.code(),
+        Some(0),
+        "{marker_present_reenrollment:?}"
+    );
+    (steward, steward_marker)
+}
+
+fn assert_restoring_original_marker_recovers_stewarded_case(fixture: &Fixture) {
+    let (steward, steward_marker) = record_recoverable_case(fixture);
+    let steward_marker_path = steward.join("reuse-evidence.toml");
+    fs::remove_file(&steward_marker_path).expect("marker loss should be reproducible");
+    let before_recovery_refusal = files_beneath(&steward);
+    let recovery_refusal = run_in(
+        &steward,
+        &[
+            "enroll",
+            "--ecosystem-id",
+            "products",
+            "--visibility",
+            "public",
+        ],
+    );
+    assert_eq!(
+        recovery_refusal.status.code(),
+        Some(3),
+        "{recovery_refusal:?}"
+    );
+    assert!(!steward_marker_path.exists());
+    assert_eq!(files_beneath(&steward), before_recovery_refusal);
+    fs::write(&steward_marker_path, &steward_marker)
+        .expect("the committed steward marker should be restorable");
+    let recovered = run_in(
+        &steward,
+        &[
+            "case",
+            "list",
+            "--root",
+            fixture.root.to_str().expect("fixture root should be UTF-8"),
+        ],
+    );
+    assert_eq!(recovered.status.code(), Some(0), "{recovered:?}");
+    assert!(recovered.stderr.is_empty(), "{recovered:?}");
+    let recovered = String::from_utf8(recovered.stdout).expect("stdout should be UTF-8");
+    assert!(
+        recovered.contains(&format!("case_id: {CASE_STORAGE_CASE_ID}\n")),
+        "{recovered}"
+    );
+    assert!(recovered.contains("state: watching\n"), "{recovered}");
+}
+
+#[test]
+fn fresh_enrollment_guards_steward_case_storage_before_assigning_identity() {
+    let fixture = Fixture::new("fresh-enrollment-case-storage-guard");
+    assert_populated_case_storage_refuses_independently_of_visibility_and_configuration(&fixture);
+    assert_non_case_entry_refuses_without_classification(&fixture);
+    assert_empty_case_storage_enrolls(&fixture);
+    #[cfg(unix)]
+    assert_unreadable_case_storage_refuses_without_writes(&fixture);
+    assert_restoring_original_marker_recovers_stewarded_case(&fixture);
 }
 
 #[test]

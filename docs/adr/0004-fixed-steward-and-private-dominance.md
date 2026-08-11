@@ -4,6 +4,7 @@
 **Date:** 2026-08-09  
 **Decision owner:** Repository maintainer  
 **Governing principles:** [`FOUNDATIONS.md`](../principles/FOUNDATIONS.md), [`PORTFOLIO-PRIVACY-AND-STEWARDSHIP.md`](../principles/PORTFOLIO-PRIVACY-AND-STEWARDSHIP.md)
+**Amended:** 2026-08-11 by explicit maintainer acceptance during triage of #21. Stewardship is bound to the recorded opaque repository identity, not to the steward's directory. Because version 0.1 supports no stewardship transfer and no identity restoration, fresh enrollment refuses in a repository whose steward-local case directory is not empty, regardless of the requested visibility; restoring the committed marker or setting the case directory aside are the only remedies.
 
 ## Context
 

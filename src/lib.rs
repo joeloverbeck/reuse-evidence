@@ -203,7 +203,8 @@ pub fn enroll(
 ///
 /// Returns a refusal under the same conditions as [`enroll`], when an existing
 /// marker has a different identity, or when an identity is supplied for a fresh
-/// enrollment. Returns an unsafe failure when marker encoding or writing fails.
+/// enrollment. Fresh enrollment also refuses when steward-local case storage is
+/// not empty. Returns an unsafe failure when marker encoding or writing fails.
 pub fn enroll_with_expected_repository_id(
     working_directory: &Path,
     ecosystem_id: &str,
@@ -269,6 +270,7 @@ pub fn enroll_with_expected_repository_id(
             "omit `--expected-repository-id`; fresh enrollment generates the opaque identity",
         ));
     }
+    refuse_fresh_enrollment_over_steward_case_storage(&repository_root)?;
 
     let repository_id = Uuid::new_v4();
     let marker = marker::Marker::new(repository_id, ecosystem_id.to_owned(), visibility);
@@ -415,6 +417,33 @@ fn malformed_marker_error(
             marker_path.display()
         ),
         resolution,
+    )
+}
+
+fn refuse_fresh_enrollment_over_steward_case_storage(
+    repository_root: &Path,
+) -> Result<(), EnrollmentError> {
+    let case_directory = repository_root.join("reuse-evidence/cases");
+    let metadata = match fs::symlink_metadata(&case_directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(nonempty_case_storage_enrollment_refusal(&case_directory)),
+    };
+    if metadata.is_dir()
+        && fs::read_dir(&case_directory).is_ok_and(|mut entries| entries.next().is_none())
+    {
+        return Ok(());
+    }
+    Err(nonempty_case_storage_enrollment_refusal(&case_directory))
+}
+
+fn nonempty_case_storage_enrollment_refusal(case_directory: &Path) -> EnrollmentError {
+    EnrollmentError::refusal(
+        format!(
+            "steward-local case directory `{}` is not empty in an unenrolled repository; fresh enrollment would mint a new repository identity and orphan every case recorded under the previous identity",
+            case_directory.display()
+        ),
+        "restore the committed `reuse-evidence.toml` marker that records those cases' steward identity, or set the case directory aside if this repository should not steward them",
     )
 }
 
