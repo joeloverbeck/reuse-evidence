@@ -1,0 +1,3 @@
+# Every path is owned by the maintainer, so any pull request auto-requests their review.
+# This also raises the notification reason from `subscribed` to `review_requested`.
+* @joeloverbeck

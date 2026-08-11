@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-11T12:00:00Z",
+  "target_content_hash": "4afeb7a7b5544e5efee1896502eff01bbf2ab3d08222597f278bd3b8cfd489d4",
+  "qualifying_uses_on_current_hash": 0,
+  "open_incident_ids": [],
+  "candidate_clusters": [],
+  "state": "closed",
+  "authorized_workflow": null,
+  "authorization_reason": null,
+  "trigger_event_ids": [],
+  "threshold_session_id": null,
+  "not_before": null,
+  "active_review_id": null,
+  "last_completed_review_id": null,
+  "review_reentry_basis": null,
+  "target_name": "prototype",
+  "target_repo_relative_path": ".claude/skills/prototype",
+  "derivation_session_id": "verify-adr-0008"
+}

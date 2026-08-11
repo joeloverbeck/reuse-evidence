@@ -1,0 +1,10 @@
+# Blank issues stay enabled: the maintainer files structured issues directly, in the shape
+# described by AGENTS.md under "Required reasoning for material proposals".
+blank_issues_enabled: true
+contact_links:
+  - name: Before you write code
+    url: https://github.com/joeloverbeck/reuse-evidence/blob/main/CONTRIBUTING.md
+    about: Unsolicited pull requests are closed. Open an issue and wait to be assigned.
+  - name: Project boundaries
+    url: https://github.com/joeloverbeck/reuse-evidence/blob/main/AGENTS.md
+    about: Things this project has explicitly refused to build. Check here before proposing a feature.

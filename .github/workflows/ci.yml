@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege. Fork pull requests get a read-only token and no secrets, because this
+# workflow uses `pull_request` rather than `pull_request_target`.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  gate:
+    name: Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins 1.93.0, so rustup installs exactly the declared
+      # minimum supported version and every step below is an MSRV check.
+      - name: Show toolchain
+        run: |
+          rustup show active-toolchain
+          cargo --version
+          rustc --version
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (all features)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Clippy (library only)
+        run: cargo clippy --no-default-features --all-targets -- -D warnings
+
+      - name: Tests (all features)
+        run: cargo test --all-features
+
+      # The command-line integration tests are gated behind `required-features = ["cli"]`.
+      # Without that gate they resolve a stale default-feature binary through
+      # CARGO_BIN_EXE_reuse-evidence and pass without exercising anything.
+      - name: Tests (library only)
+        run: cargo test --no-default-features
+
+      - name: Build (all features)
+        run: cargo build --all-features
+
+      - name: Build (library only)
+        run: cargo build --no-default-features --lib
+
+      - name: Whitespace
+        run: git diff --check

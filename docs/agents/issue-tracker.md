@@ -19,6 +19,13 @@ Infer the repository from `git remote -v`; `gh` does this automatically when run
 
 External contributors' PRs run through the same labels and states as issues. Maintainers' and collaborators' in-flight PRs do not.
 
+Triage the PR, not only the code. [`CONTRIBUTING.md`](../../CONTRIBUTING.md) accepts external pull requests only against an issue the maintainer assigned to that contributor. So the first triage question is whether the PR was solicited:
+
+- **Unsolicited** — close it with thanks and point at `CONTRIBUTING.md`. Do not label it into the work queue and do not review it as if it were assigned work. Read the diff far enough to say whether anything in it is worth salvaging separately, and credit the contributor if something is taken.
+- **Assigned** — triage it with the labels above like any other request.
+
+A close is not a judgment on the code. Concurrent independent implementations of a tightly specified issue converge, so a contributor who lost a race can produce a correct patch that is still not mergeable.
+
 - **Read a PR**: `gh pr view <number> --comments` and `gh pr diff <number>`
 - **List external PRs for triage**: `gh pr list --state open --json number,title,body,labels,author,authorAssociation,comments`, then keep only `CONTRIBUTOR`, `FIRST_TIME_CONTRIBUTOR`, or `NONE` author associations.
 - **Comment, label, or close**: use `gh pr comment`, `gh pr edit --add-label` or `--remove-label`, and `gh pr close`.

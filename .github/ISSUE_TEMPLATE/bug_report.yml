@@ -1,0 +1,54 @@
+name: Bug report
+description: Report behavior that contradicts the documented contract.
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Reports are welcome. Pull requests are not, unless the maintainer assigned the issue to
+        you — see [CONTRIBUTING.md](https://github.com/joeloverbeck/reuse-evidence/blob/main/CONTRIBUTING.md).
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: What happened, and which command or library call produced it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected instead, and why.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Exact steps, including the commit or version, marker state, and exit codes.
+      placeholder: |
+        Reproduced against <commit>:
+        1. ...
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: authority
+    attributes:
+      label: Authority it appears to violate
+      description: >
+        Optional but valuable. Which principle, ADR, or documented contract does this contradict?
+        See docs/principles/ and docs/adr/.
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+    validations:
+      required: true

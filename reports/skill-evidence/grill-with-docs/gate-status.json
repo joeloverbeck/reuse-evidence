@@ -1,12 +1,14 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-11T03:02:40.564624053Z",
+  "generated_at": "2026-08-11T12:44:01.606916804Z",
   "target_content_hash": "50ae74251f72b370e4b226fa12169ffaa18cac49a814ca5a5725460fe4e3063a",
-  "qualifying_uses_on_current_hash": 7,
+  "qualifying_uses_on_current_hash": 9,
   "open_incident_ids": [
     "evt_166c1b46-6a7a-44e0-aea0-352caca372e3",
     "evt_1e1cdc1b-2144-48f1-8007-5b2ac55f31c4",
-    "evt_7bee43cc-9ce4-4b3d-ac0e-8dc9c7771374"
+    "evt_7bee43cc-9ce4-4b3d-ac0e-8dc9c7771374",
+    "evt_60350ac6-63fc-45f3-9251-bea956578a22",
+    "evt_7de2cfa4-32fe-4a25-88cb-3cbfdd2d12a1"
   ],
   "candidate_clusters": [
     {
@@ -21,9 +23,11 @@
       "symptom_key": "execution",
       "open_event_ids": [
         "evt_1e1cdc1b-2144-48f1-8007-5b2ac55f31c4",
-        "evt_7bee43cc-9ce4-4b3d-ac0e-8dc9c7771374"
+        "evt_7bee43cc-9ce4-4b3d-ac0e-8dc9c7771374",
+        "evt_60350ac6-63fc-45f3-9251-bea956578a22",
+        "evt_7de2cfa4-32fe-4a25-88cb-3cbfdd2d12a1"
       ],
-      "independent_incidents": 2,
+      "independent_incidents": 4,
       "max_severity": "material_failure"
     }
   ],
@@ -41,5 +45,5 @@
   "review_reentry_basis": "first_eligibility",
   "target_name": "grill-with-docs",
   "target_repo_relative_path": ".claude/skills/grill-with-docs",
-  "derivation_session_id": "019fed25-7a36-7c60-b714-0155c812ec88"
+  "derivation_session_id": "69e6563e-2a3f-4c7d-8549-91cd457342c7"
 }

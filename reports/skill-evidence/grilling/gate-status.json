@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-11T10:30:34.609806186Z",
+  "generated_at": "2026-08-11T12:46:16.783403222Z",
   "target_content_hash": "b9f458b0917db5368c6826732f0daf19b63f157b11d22034c023c8d465794ee6",
-  "qualifying_uses_on_current_hash": 13,
+  "qualifying_uses_on_current_hash": 15,
   "open_incident_ids": [
     "evt_fd786d97-7718-4253-9749-5a5f8b2de8f4",
     "evt_738194db-1039-42b1-93fe-c88f23541cd2",
@@ -10,7 +10,11 @@
     "evt_a197d32e-168a-482b-8086-5b883450b449",
     "evt_5b87579d-8e13-417a-a1d4-563f339f140b",
     "evt_16e8d2c5-3a35-4dae-9630-fc45ca657a64",
-    "evt_24e795dc-3678-4f64-8d52-ca3b9f892c3a"
+    "evt_24e795dc-3678-4f64-8d52-ca3b9f892c3a",
+    "evt_0ef5941b-3fac-484b-8609-4a472204ef21",
+    "evt_ee02c57c-0f0d-465b-b3f3-a19adba00e4e",
+    "evt_f27e5981-cfc7-40cc-9783-65b77778a86a",
+    "evt_8f4ed02d-6410-4952-8790-b5df00a47dd9"
   ],
   "candidate_clusters": [
     {
@@ -22,10 +26,21 @@
         "evt_a197d32e-168a-482b-8086-5b883450b449",
         "evt_5b87579d-8e13-417a-a1d4-563f339f140b",
         "evt_16e8d2c5-3a35-4dae-9630-fc45ca657a64",
-        "evt_24e795dc-3678-4f64-8d52-ca3b9f892c3a"
+        "evt_24e795dc-3678-4f64-8d52-ca3b9f892c3a",
+        "evt_0ef5941b-3fac-484b-8609-4a472204ef21",
+        "evt_ee02c57c-0f0d-465b-b3f3-a19adba00e4e",
+        "evt_f27e5981-cfc7-40cc-9783-65b77778a86a"
       ],
-      "independent_incidents": 7,
+      "independent_incidents": 9,
       "max_severity": "material_failure"
+    },
+    {
+      "symptom_key": "coordination",
+      "open_event_ids": [
+        "evt_8f4ed02d-6410-4952-8790-b5df00a47dd9"
+      ],
+      "independent_incidents": 1,
+      "max_severity": "friction"
     }
   ],
   "state": "eligible",
@@ -43,5 +58,5 @@
   "review_reentry_basis": "first_eligibility",
   "target_name": "grilling",
   "target_repo_relative_path": ".claude/skills/grilling",
-  "derivation_session_id": "df1e6a07-7c6a-4f2e-902d-e8dc3ece89da"
+  "derivation_session_id": "69e6563e-2a3f-4c7d-8549-91cd457342c7"
 }

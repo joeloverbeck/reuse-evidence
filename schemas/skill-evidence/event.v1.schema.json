@@ -211,6 +211,30 @@
                 "items": { "type": "string", "minLength": 1 },
                 "description": "Subset of adjudicated_event_ids this review could not decide: either no trial could express the mechanism those events record, or the acceptance gate grades outcome while their evidence bears no outcome claim. Asserts nothing about whether the mechanism reproduced. Omitted when the review decided everything it covered, which is what every close written before this key existed asserts."
               },
+              "external_owners": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["event_id", "kind", "reference"],
+                  "properties": {
+                    "event_id": { "type": "string", "minLength": 1 },
+                    "kind": {
+                      "enum": [
+                        "skill",
+                        "contract",
+                        "tool",
+                        "environment",
+                        "model_limitation",
+                        "user_instruction"
+                      ]
+                    },
+                    "reference": { "type": "string", "minLength": 1 }
+                  },
+                  "additionalProperties": false
+                },
+                "description": "Positive external owner recorded per concluded event by an outside_target close. Omitted when no owner was recorded, including every close written before this key existed."
+              },
               "trial_count": {
                 "type": "integer",
                 "minimum": 1,
@@ -228,7 +252,16 @@
     },
     {
       "if": {
-        "properties": { "event_type": { "const": "review_started" } },
+        "properties": {
+          "event_type": {
+            "enum": [
+              "review_started",
+              "validation_completed",
+              "change_landed",
+              "review_disposition"
+            ]
+          }
+        },
         "required": ["event_type"]
       },
       "then": {
@@ -241,7 +274,11 @@
               "operating_skill_hash": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Content hash computed from the operating Skill Evolution package when the claim opted to record it. Omitted when that operating-package identity was not recorded; absence never means it matched the package running now."
+                "description": "Content hash computed from the operating Skill Evolution package when this lifecycle event was written. Optional only for compatibility with history written before unconditional identity recording; absence never means the package matched the one operating now."
+              },
+              "operating_package_matches_shipped": {
+                "type": "boolean",
+                "description": "Whether the installed Skill Evolution package matched the copy this crate rendered for the consumer when this lifecycle event was written. Computed by the crate, never asserted by the caller. Optional only for compatibility with history written before package comparison; absence means unknown, not false."
               }
             }
           }
