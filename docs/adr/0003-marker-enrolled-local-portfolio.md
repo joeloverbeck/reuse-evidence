@@ -3,7 +3,8 @@
 **Status:** Accepted  
 **Date:** 2026-08-09  
 **Decision owner:** Repository maintainer  
-**Governing principles:** [`FOUNDATIONS.md`](../principles/FOUNDATIONS.md), [`PORTFOLIO-PRIVACY-AND-STEWARDSHIP.md`](../principles/PORTFOLIO-PRIVACY-AND-STEWARDSHIP.md)
+**Governing principles:** [`FOUNDATIONS.md`](../principles/FOUNDATIONS.md), [`PORTFOLIO-PRIVACY-AND-STEWARDSHIP.md`](../principles/PORTFOLIO-PRIVACY-AND-STEWARDSHIP.md)  
+**Amended:** 2026-08-11 by explicit maintainer acceptance during triage of #24. The change-class enumeration includes substituted repositories: a previously recorded identity that appears in no current enrollment and whose recorded path is now enrolled under a different identity. A previous identity is reported in the same run that observes the substitution, before portfolio state drops it.
 
 ## Context
 

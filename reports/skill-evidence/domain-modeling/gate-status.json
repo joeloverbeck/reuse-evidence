@@ -1,16 +1,27 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-11T09:28:22.687825013Z",
+  "generated_at": "2026-08-11T10:32:36.380125992Z",
   "target_content_hash": "97f7208528885b6bf219d45525f5e086b45291c8b1f66090915d6e8bd6709dc8",
-  "qualifying_uses_on_current_hash": 5,
+  "qualifying_uses_on_current_hash": 6,
   "open_incident_ids": [
-    "evt_cd6909a5-672b-4417-8511-8230a0a58eb7"
+    "evt_cd6909a5-672b-4417-8511-8230a0a58eb7",
+    "evt_e15b05bb-72d5-4f15-ae16-456c32e819aa",
+    "evt_69865ad3-a4f2-42e9-a118-9f10d6aa17bf"
   ],
   "candidate_clusters": [
     {
       "symptom_key": "coordination",
       "open_event_ids": [
         "evt_cd6909a5-672b-4417-8511-8230a0a58eb7"
+      ],
+      "independent_incidents": 1,
+      "max_severity": "friction"
+    },
+    {
+      "symptom_key": "execution",
+      "open_event_ids": [
+        "evt_e15b05bb-72d5-4f15-ae16-456c32e819aa",
+        "evt_69865ad3-a4f2-42e9-a118-9f10d6aa17bf"
       ],
       "independent_incidents": 1,
       "max_severity": "friction"
@@ -27,5 +38,5 @@
   "review_reentry_basis": null,
   "target_name": "domain-modeling",
   "target_repo_relative_path": ".claude/skills/domain-modeling",
-  "derivation_session_id": "b71a3c3b-b4bb-4c3d-b9f1-df84ff2eecd6"
+  "derivation_session_id": "df1e6a07-7c6a-4f2e-902d-e8dc3ece89da"
 }
