@@ -3168,26 +3168,40 @@ fn case_read_uses_configured_portfolio_to_report_withdrawn_participant_as_stale(
         .expect("fixture participant marker should be removable");
     let before_read = files_beneath(&fixture.root);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_reuse-evidence"))
+    let shown = Command::new(env!("CARGO_BIN_EXE_reuse-evidence"))
         .args(["case", "show", CASE_ID])
         .current_dir(&steward)
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_STATE_HOME", fixture.root.join("configured-state"))
         .output()
         .expect("compiled reuse-evidence binary should run");
+    let listed = Command::new(env!("CARGO_BIN_EXE_reuse-evidence"))
+        .args(["case", "list"])
+        .current_dir(&steward)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_STATE_HOME", fixture.root.join("configured-state"))
+        .output()
+        .expect("compiled reuse-evidence binary should run");
 
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
-    assert!(output.stderr.is_empty(), "{output:?}");
-    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+    assert_eq!(shown.status.code(), Some(0), "{shown:?}");
+    assert!(shown.stderr.is_empty(), "{shown:?}");
+    let shown_stdout = String::from_utf8(shown.stdout).expect("stdout should be UTF-8");
     assert!(
-        stdout.contains("privacy_conflicted: false\nstale: true\n"),
-        "{stdout}"
+        shown_stdout.contains("privacy_conflicted: unknown\nstale: true\n"),
+        "{shown_stdout}"
     );
     assert!(
-        stdout.contains(&format!(
+        shown_stdout.contains(&format!(
             "- repository_id: {SECOND_PARTICIPANT_ID}\n  consumer: web-deployment-tool\n  independence: independent npm workspace and owner\n  evidence:\n  - kind: commit\n    reference: 2222222\n    path: packages/events/src/id.ts\n"
         )),
-        "the withdrawn participant's occurrence must remain fully visible: {stdout}"
+        "the withdrawn participant's occurrence must remain fully visible: {shown_stdout}"
+    );
+    assert_eq!(listed.status.code(), Some(0), "{listed:?}");
+    assert!(listed.stderr.is_empty(), "{listed:?}");
+    let listed_stdout = String::from_utf8(listed.stdout).expect("stdout should be UTF-8");
+    assert!(
+        listed_stdout.contains("  privacy_conflicted: unknown\n  stale: true\n"),
+        "{listed_stdout}"
     );
     assert_eq!(
         fs::read(&event_path).expect("opening event should remain readable"),
@@ -3198,6 +3212,156 @@ fn case_read_uses_configured_portfolio_to_report_withdrawn_participant_as_stale(
         files_beneath(&fixture.root),
         before_read,
         "deriving staleness must write nothing"
+    );
+}
+
+fn assert_case_queries_report_definite_conflict_with_unresolved_participant(
+    fixture: &Fixture,
+    steward: &Path,
+    root: &str,
+    write_message: &str,
+) {
+    let before_read = files_beneath(&fixture.root);
+    let shown = run_in(steward, &["case", "show", CASE_ID, "--root", root]);
+    let listed = run_in(steward, &["case", "list", "--root", root]);
+
+    assert_eq!(shown.status.code(), Some(0), "{shown:?}");
+    assert!(shown.stderr.is_empty(), "{shown:?}");
+    let shown_stdout = String::from_utf8(shown.stdout).expect("stdout should be UTF-8");
+    assert!(
+        shown_stdout.contains("privacy_conflicted: true\nstale: true\n"),
+        "{shown_stdout}"
+    );
+    assert!(
+        shown_stdout.contains(&format!("- repository_id: {SECOND_PARTICIPANT_ID}\n")),
+        "the unresolved participant's occurrence must remain visible: {shown_stdout}"
+    );
+    assert_eq!(listed.status.code(), Some(0), "{listed:?}");
+    assert!(listed.stderr.is_empty(), "{listed:?}");
+    let listed_stdout = String::from_utf8(listed.stdout).expect("stdout should be UTF-8");
+    assert!(
+        listed_stdout.contains("  privacy_conflicted: true\n  stale: true\n"),
+        "{listed_stdout}"
+    );
+    assert_eq!(files_beneath(&fixture.root), before_read, "{write_message}");
+}
+
+#[test]
+fn case_read_keeps_definite_privacy_conflict_when_another_participant_is_unresolved() {
+    {
+        let fixture = Fixture::new("current-private-conflict-with-unresolved-participant");
+        let steward = fixture.repository("steward", STEWARD_ID, "public");
+        let private = fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+        let withdrawn = fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "public");
+        let proposal = fixture.proposal(&two_occurrence_proposal());
+        let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+        let opened = run_in(
+            &steward,
+            &[
+                "case",
+                "open",
+                "--proposal",
+                proposal.to_str().expect("fixture path should be UTF-8"),
+                "--root",
+                root,
+            ],
+        );
+        assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+        let visibility_change = run_in(&private, &["set-visibility", "--visibility", "private"]);
+        assert_eq!(
+            visibility_change.status.code(),
+            Some(0),
+            "{visibility_change:?}"
+        );
+        fs::remove_file(withdrawn.join("reuse-evidence.toml"))
+            .expect("fixture participant marker should be removable");
+        assert_case_queries_report_definite_conflict_with_unresolved_participant(
+            &fixture,
+            &steward,
+            root,
+            "deriving a current-participant conflict must write nothing",
+        );
+    }
+
+    {
+        let fixture = Fixture::new("recorded-private-conflict-with-unresolved-participant");
+        let steward = fixture.repository("steward", STEWARD_ID, "private");
+        fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+        let withdrawn = fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "public");
+        let proposal = fixture.proposal(&two_occurrence_proposal());
+        let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+        let opened = run_in(
+            &steward,
+            &[
+                "case",
+                "open",
+                "--proposal",
+                proposal.to_str().expect("fixture path should be UTF-8"),
+                "--root",
+                root,
+            ],
+        );
+        assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+        force_public_steward_fixture(&steward);
+        fs::remove_file(withdrawn.join("reuse-evidence.toml"))
+            .expect("fixture participant marker should be removable");
+        assert_case_queries_report_definite_conflict_with_unresolved_participant(
+            &fixture,
+            &steward,
+            root,
+            "deriving a recorded-privacy conflict must write nothing",
+        );
+    }
+}
+
+#[test]
+fn case_read_reports_privacy_unknown_for_multiple_public_matches() {
+    let fixture = Fixture::new("multiple-public-participant-matches");
+    let steward = fixture.repository("steward", STEWARD_ID, "public");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "public");
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            proposal.to_str().expect("fixture path should be UTF-8"),
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+    fixture.repository("first-consumer-copy", FIRST_PARTICIPANT_ID, "public");
+    let before_read = files_beneath(&fixture.root);
+
+    let shown = run_in(&steward, &["case", "show", CASE_ID, "--root", root]);
+    let listed = run_in(&steward, &["case", "list", "--root", root]);
+
+    assert_eq!(shown.status.code(), Some(0), "{shown:?}");
+    assert!(shown.stderr.is_empty(), "{shown:?}");
+    let shown_stdout = String::from_utf8(shown.stdout).expect("stdout should be UTF-8");
+    assert!(
+        shown_stdout.contains("privacy_conflicted: unknown\nstale: true\n"),
+        "{shown_stdout}"
+    );
+    assert!(
+        shown_stdout.contains(&format!("- repository_id: {FIRST_PARTICIPANT_ID}\n")),
+        "the ambiguously resolved participant's occurrence must remain visible: {shown_stdout}"
+    );
+    assert_eq!(listed.status.code(), Some(0), "{listed:?}");
+    assert!(listed.stderr.is_empty(), "{listed:?}");
+    let listed_stdout = String::from_utf8(listed.stdout).expect("stdout should be UTF-8");
+    assert!(
+        listed_stdout.contains("  privacy_conflicted: unknown\n  stale: true\n"),
+        "{listed_stdout}"
+    );
+    assert_eq!(
+        files_beneath(&fixture.root),
+        before_read,
+        "deriving ambiguous participant privacy must write nothing"
     );
 }
 

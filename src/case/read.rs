@@ -563,6 +563,7 @@ fn derive_conditions(
         // visibility, so a steward that turned public after opening conflicts with its own case.
         let mut privacy_conflicted =
             steward_visibility == Visibility::Public && case.privacy == Visibility::Private;
+        let mut privacy_underivable = false;
         let mut stale = false;
         for occurrence in &case.occurrences {
             let matches = scan
@@ -570,14 +571,22 @@ fn derive_conditions(
                 .iter()
                 .filter(|enrollment| enrollment.repository_id == occurrence.repository_id)
                 .collect::<Vec<_>>();
-            stale |= matches.len() != 1;
+            let participant_unresolved = matches.len() != 1;
+            privacy_underivable |= participant_unresolved;
+            stale |= participant_unresolved;
             privacy_conflicted |= steward_visibility == Visibility::Public
                 && matches
                     .iter()
                     .any(|enrollment| enrollment.visibility == Visibility::Private);
         }
         case.conditions = Conditions {
-            privacy_conflicted: Some(privacy_conflicted),
+            privacy_conflicted: if privacy_conflicted {
+                Some(true)
+            } else if privacy_underivable {
+                None
+            } else {
+                Some(false)
+            },
             stale: Some(stale),
         };
     }
