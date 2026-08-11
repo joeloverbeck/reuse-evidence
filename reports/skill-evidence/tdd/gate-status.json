@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-11T02:36:09.868326365Z",
+  "generated_at": "2026-08-11T03:58:44.640571906Z",
   "target_content_hash": "fa4587c9947cd3836cebbf6ebda49196f0b9fb0cef1b7b7ff5d03fc01f20d31f",
-  "qualifying_uses_on_current_hash": 13,
+  "qualifying_uses_on_current_hash": 14,
   "open_incident_ids": [
     "evt_920ddf63-df49-4525-bfc0-366b2975ed73",
     "evt_a86195b4-5a88-408f-a22a-f6ada76d20f5",
@@ -12,15 +12,18 @@
     "evt_1a8fe1eb-c697-4ff9-afe2-c9dc793307ec",
     "evt_a44e1ee6-4e09-4699-9795-5dce022af241",
     "evt_6e5891ed-ed07-463f-b4e1-bdfbb54dfd14",
-    "evt_7fe9ea29-3979-4bcf-82f8-50f00d4be2e3"
+    "evt_7fe9ea29-3979-4bcf-82f8-50f00d4be2e3",
+    "evt_c496aaf9-b42c-4735-9b2e-b647fa9b33c8",
+    "evt_5f9bca66-d65f-410b-998d-3c953330e6b2"
   ],
   "candidate_clusters": [
     {
       "symptom_key": "execution",
       "open_event_ids": [
-        "evt_920ddf63-df49-4525-bfc0-366b2975ed73"
+        "evt_920ddf63-df49-4525-bfc0-366b2975ed73",
+        "evt_5f9bca66-d65f-410b-998d-3c953330e6b2"
       ],
-      "independent_incidents": 1,
+      "independent_incidents": 2,
       "max_severity": "material_failure"
     },
     {
@@ -33,9 +36,10 @@
         "evt_1a8fe1eb-c697-4ff9-afe2-c9dc793307ec",
         "evt_a44e1ee6-4e09-4699-9795-5dce022af241",
         "evt_6e5891ed-ed07-463f-b4e1-bdfbb54dfd14",
-        "evt_7fe9ea29-3979-4bcf-82f8-50f00d4be2e3"
+        "evt_7fe9ea29-3979-4bcf-82f8-50f00d4be2e3",
+        "evt_c496aaf9-b42c-4735-9b2e-b647fa9b33c8"
       ],
-      "independent_incidents": 7,
+      "independent_incidents": 8,
       "max_severity": "material_failure"
     }
   ],
@@ -53,5 +57,5 @@
   "review_reentry_basis": "first_eligibility",
   "target_name": "tdd",
   "target_repo_relative_path": ".claude/skills/tdd",
-  "derivation_session_id": "019fee50-b547-75c1-a5ef-34f2b51edf5a"
+  "derivation_session_id": "019feec0-d505-7611-955f-65e5351371fa"
 }
