@@ -1,9 +1,13 @@
+mod support;
+
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
+
+use support::TempRoot;
 
 const CASE_ID: &str = "00000000-0000-4000-8000-000000000011";
 const SECOND_CASE_ID: &str = "00000000-0000-4000-8000-000000000021";
@@ -15,7 +19,7 @@ const DIFFERENT_APPEND_EVENT_ID: &str = "00000000-0000-4000-8000-000000000099";
 const DIFFERENT_DECISION_EVENT_ID: &str = "00000000-0000-4000-8000-000000000098";
 
 struct Fixture {
-    root: PathBuf,
+    root: TempRoot,
 }
 
 struct WriteProtection {
@@ -50,40 +54,19 @@ impl Drop for WriteProtection {
 
 impl Fixture {
     fn new(name: &str) -> Self {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock should be after the Unix epoch")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "reuse-evidence-case-{name}-{}-{nonce}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&root).expect("fixture root should be creatable");
-        Self { root }
+        Self {
+            root: TempRoot::new(&format!("case-{name}")),
+        }
     }
 
     fn repository(&self, name: &str, repository_id: &str, visibility: &str) -> PathBuf {
         let repository = self.git_repository(name);
-        fs::write(
-            repository.join("reuse-evidence.toml"),
-            format!(
-                "schema_version = 1\nrepository_id = \"{repository_id}\"\necosystem_id = \"products\"\nvisibility = \"{visibility}\"\n"
-            ),
-        )
-        .expect("repository fixture should be enrolled");
+        support::enrollment_marker(&repository, repository_id, visibility);
         repository
     }
 
     fn git_repository(&self, name: &str) -> PathBuf {
-        let repository = self.root.join(name);
-        fs::create_dir_all(repository.join(".git"))
-            .expect("repository fixture should be creatable");
-        fs::write(
-            repository.join(".git").join("HEAD"),
-            b"ref: refs/heads/main\n",
-        )
-        .expect("repository fixture should contain recognizable Git metadata");
-        repository
+        support::git_repository(&self.root, name)
     }
 
     fn proposal(&self, contents: &str) -> PathBuf {
@@ -105,12 +88,6 @@ impl Fixture {
         )
         .expect("portfolio configuration should be writable");
         config_home
-    }
-}
-
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
     }
 }
 
@@ -2502,7 +2479,7 @@ fn competing_decision_and_append_against_one_revision_publish_exactly_one_event(
         steward
             .join("reuse-evidence/cases")
             .join(CASE_ID)
-            .join("0001-case-opened.toml"),
+            .join(support::CASE_OPENED_AT_1),
     )
     .expect("opening event should be readable");
     opening
@@ -3026,7 +3003,7 @@ fn review_r1_standards_1_case_open_and_publicward_transition_serialize_private_d
         steward
             .join("reuse-evidence/cases")
             .join(CASE_ID)
-            .join("0001-case-opened.toml"),
+            .join(support::CASE_OPENED_AT_1),
     )
     .expect("opening event should be recorded");
     let marker = marker
@@ -3150,7 +3127,7 @@ fn case_read_uses_configured_portfolio_to_report_withdrawn_participant_as_stale(
     let event_path = steward
         .join("reuse-evidence/cases")
         .join(CASE_ID)
-        .join("0001-case-opened.toml");
+        .join(support::CASE_OPENED_AT_1);
     let recorded_event = fs::read(&event_path).expect("opening event should be readable");
     let config_home = fixture.root.join("config-home");
     fs::create_dir_all(config_home.join("reuse-evidence"))
@@ -3386,7 +3363,7 @@ fn case_read_refuses_duplicated_sequence_number_without_writes() {
     assert_eq!(opened.status.code(), Some(0), "{opened:?}");
     let case_directory = steward.join("reuse-evidence/cases").join(CASE_ID);
     fs::copy(
-        case_directory.join("0001-case-opened.toml"),
+        case_directory.join(support::CASE_OPENED_AT_1),
         case_directory.join("0001-duplicate.toml"),
     )
     .expect("damaged duplicate-sequence fixture should be creatable");
@@ -3444,7 +3421,7 @@ fn review_r1_case_read_refuses_duplicate_occurrence_across_events_without_writes
     let append_event = steward
         .join("reuse-evidence/cases")
         .join(CASE_ID)
-        .join("0002-occurrence-appended.toml");
+        .join(support::OCCURRENCE_APPENDED_AT_2);
     let duplicate_event = fs::read_to_string(&append_event)
         .expect("append event should be readable")
         .replace(THIRD_PARTICIPANT_ID, FIRST_PARTICIPANT_ID)
@@ -3493,7 +3470,7 @@ fn review_r1_spec_2_case_read_refuses_body_sequence_that_disagrees_with_filename
     let case_directory = steward.join("reuse-evidence/cases").join(CASE_ID);
     let mismatched_event = case_directory.join("0002-case-opened.toml");
     fs::copy(
-        case_directory.join("0001-case-opened.toml"),
+        case_directory.join(support::CASE_OPENED_AT_1),
         &mismatched_event,
     )
     .expect("damaged body-sequence fixture should be creatable");
@@ -3539,7 +3516,7 @@ fn review_r1_standards_1_case_read_refuses_second_case_opened_event() {
     assert_eq!(opened.status.code(), Some(0), "{opened:?}");
     let case_directory = steward.join("reuse-evidence/cases").join(CASE_ID);
     let second_opening = case_directory.join("0002-case-opened.toml");
-    let second_opening_bytes = fs::read_to_string(case_directory.join("0001-case-opened.toml"))
+    let second_opening_bytes = fs::read_to_string(case_directory.join(support::CASE_OPENED_AT_1))
         .expect("opening event should be readable")
         .replacen("sequence = 1", "sequence = 2", 1);
     fs::write(&second_opening, second_opening_bytes)
@@ -3591,7 +3568,7 @@ fn review_r2_standards_1_case_read_refuses_invalid_opening_filename_and_content_
     assert_eq!(opened.status.code(), Some(0), "{opened:?}");
     let suffix_case_directory = suffix_steward.join("reuse-evidence/cases").join(CASE_ID);
     fs::rename(
-        suffix_case_directory.join("0001-case-opened.toml"),
+        suffix_case_directory.join(support::CASE_OPENED_AT_1),
         suffix_case_directory.join("0001-arbitrary.toml"),
     )
     .expect("wrong event-type suffix fixture should be creatable");
@@ -3627,7 +3604,7 @@ fn review_r2_standards_1_case_read_refuses_invalid_opening_filename_and_content_
     let content_event = content_steward
         .join("reuse-evidence/cases")
         .join(CASE_ID)
-        .join("0001-case-opened.toml");
+        .join(support::CASE_OPENED_AT_1);
     let invalid_content = fs::read_to_string(&content_event)
         .expect("opening event should be readable")
         .replacen("consumer = \"rust-release-tool\"", "consumer = \"   \"", 1);
@@ -3690,7 +3667,7 @@ fn case_read_refuses_missing_sequence_number_without_writes() {
     assert_eq!(opened.status.code(), Some(0), "{opened:?}");
     let case_directory = steward.join("reuse-evidence/cases").join(CASE_ID);
     fs::rename(
-        case_directory.join("0001-case-opened.toml"),
+        case_directory.join(support::CASE_OPENED_AT_1),
         case_directory.join("0002-case-opened.toml"),
     )
     .expect("damaged missing-sequence fixture should be creatable");
@@ -3866,7 +3843,7 @@ fn preview_renders_exact_case_opened_event_without_writes() {
             steward
                 .join("reuse-evidence/cases")
                 .join(CASE_ID)
-                .join("0001-case-opened.toml")
+                .join(support::CASE_OPENED_AT_1)
         )
         .expect("approved event should be recorded"),
         event,
@@ -3940,7 +3917,7 @@ fn opening_creates_one_case_event_and_reports_the_exact_consequence() {
     let relative_event = PathBuf::from("steward")
         .join("reuse-evidence/cases")
         .join(CASE_ID)
-        .join("0001-case-opened.toml");
+        .join(support::CASE_OPENED_AT_1);
     let mut after = files_beneath(&fixture.root);
     let event = after
         .remove(&relative_event)
@@ -4015,7 +3992,7 @@ fn appending_third_occurrence_creates_one_event_and_derives_review_ready() {
     let relative_event = PathBuf::from("steward")
         .join("reuse-evidence/cases")
         .join(CASE_ID)
-        .join("0002-occurrence-appended.toml");
+        .join(support::OCCURRENCE_APPENDED_AT_2);
     let mut after = files_beneath(&fixture.root);
     let event = after
         .remove(&relative_event)
@@ -4126,7 +4103,7 @@ fn recording_early_review_override_creates_one_event_and_derives_override_ready(
     let relative_event = PathBuf::from("steward")
         .join("reuse-evidence/cases")
         .join(CASE_ID)
-        .join("0002-early-review-authorized.toml");
+        .join(support::EARLY_REVIEW_AUTHORIZED_AT_2);
     let mut after = files_beneath(&fixture.root);
     let event = after
         .remove(&relative_event)
@@ -4238,7 +4215,7 @@ fn approved_early_review_preview_is_byte_exact_and_retry_is_idempotent() {
             steward
                 .join("reuse-evidence/cases")
                 .join(CASE_ID)
-                .join("0002-early-review-authorized.toml")
+                .join(support::EARLY_REVIEW_AUTHORIZED_AT_2)
         )
         .expect("approved early-review event should be recorded"),
         event,
@@ -4326,7 +4303,7 @@ fn exact_early_review_retry_without_portfolio_reports_unknown_privacy_without_wr
     let event_path = steward
         .join("reuse-evidence/cases")
         .join(CASE_ID)
-        .join("0002-early-review-authorized.toml");
+        .join(support::EARLY_REVIEW_AUTHORIZED_AT_2);
     let _write_protection = WriteProtection::for_file_and_parent(&event_path);
 
     let retry = run_without_portfolio_configuration(
@@ -4412,7 +4389,7 @@ fn exact_early_review_retry_with_unresolvable_participant_reports_unknown_privac
     let event_path = steward
         .join("reuse-evidence/cases")
         .join(CASE_ID)
-        .join("0002-early-review-authorized.toml");
+        .join(support::EARLY_REVIEW_AUTHORIZED_AT_2);
     let _write_protection = WriteProtection::for_file_and_parent(&event_path);
 
     let retry = run_in(&steward, &arguments[..arguments.len() - 1]);
@@ -4465,7 +4442,7 @@ fn review_r1_standards_1_concurrent_later_event_writers_publish_one_sequence() {
         steward
             .join("reuse-evidence/cases")
             .join(CASE_ID)
-            .join("0001-case-opened.toml"),
+            .join(support::CASE_OPENED_AT_1),
     )
     .expect("opening event should be readable");
     opening
@@ -4550,7 +4527,7 @@ fn review_r1_spec_1_cross_event_loser_refuses_stale_without_duplicate_sequence()
         steward
             .join("reuse-evidence/cases")
             .join(CASE_ID)
-            .join("0001-case-opened.toml"),
+            .join(support::CASE_OPENED_AT_1),
     )
     .expect("opening event should be readable");
     opening
@@ -4878,7 +4855,7 @@ fn review_r2_spec_1_exact_override_retry_reports_recorded_event_after_public_tra
     let event_path = steward
         .join("reuse-evidence/cases")
         .join(CASE_ID)
-        .join("0002-early-review-authorized.toml");
+        .join(support::EARLY_REVIEW_AUTHORIZED_AT_2);
     assert_eq!(
         fs::read_to_string(event_path).expect("recorded event should remain readable"),
         event,
@@ -5539,7 +5516,7 @@ fn approved_append_preview_is_byte_exact_and_retry_is_idempotent() {
             steward
                 .join("reuse-evidence/cases")
                 .join(CASE_ID)
-                .join("0002-occurrence-appended.toml")
+                .join(support::OCCURRENCE_APPENDED_AT_2)
         )
         .expect("approved append event should be recorded"),
         event,
@@ -5612,7 +5589,7 @@ fn exact_append_retry_without_portfolio_reports_unknown_privacy_without_writes()
     let event_path = steward
         .join("reuse-evidence/cases")
         .join(CASE_ID)
-        .join("0002-occurrence-appended.toml");
+        .join(support::OCCURRENCE_APPENDED_AT_2);
     let _write_protection = WriteProtection::for_file_and_parent(&event_path);
 
     let retry = run_without_portfolio_configuration(
@@ -5687,7 +5664,7 @@ fn exact_append_retry_with_unresolvable_participant_reports_unknown_privacy_with
     let event_path = steward
         .join("reuse-evidence/cases")
         .join(CASE_ID)
-        .join("0002-occurrence-appended.toml");
+        .join(support::OCCURRENCE_APPENDED_AT_2);
     let _write_protection = WriteProtection::for_file_and_parent(&event_path);
 
     let retry = run_in(&steward, &arguments[..arguments.len() - 1]);
@@ -5948,7 +5925,7 @@ fn review_r1_interrupted_append_staging_leaves_case_readable_and_retryable() {
     assert_eq!(applied.status.code(), Some(0), "{applied:?}");
     assert!(applied.stderr.is_empty(), "{applied:?}");
     assert_eq!(
-        fs::read_to_string(case_directory.join("0002-occurrence-appended.toml"))
+        fs::read_to_string(case_directory.join(support::OCCURRENCE_APPENDED_AT_2))
             .expect("the retried append should publish its authoritative event"),
         event,
     );
@@ -6991,7 +6968,7 @@ fn interrupted_write_publishes_no_case_event() {
 
     let case_directory = steward.join("reuse-evidence/cases").join(CASE_ID);
     assert!(
-        !case_directory.join("0001-case-opened.toml").exists(),
+        !case_directory.join(support::CASE_OPENED_AT_1).exists(),
         "an interrupted write must not publish the authoritative event path"
     );
     if case_directory.exists() {
@@ -6999,7 +6976,7 @@ fn interrupted_write_publishes_no_case_event() {
             let entry = entry.expect("case directory entry should be readable");
             assert_ne!(
                 entry.file_name(),
-                "0001-case-opened.toml",
+                support::CASE_OPENED_AT_1,
                 "no file that a case reader accepts may survive interruption"
             );
         }
@@ -7028,7 +7005,7 @@ fn interrupted_write_publishes_no_case_event() {
     case_entries.sort();
     assert_eq!(
         case_entries,
-        ["0001-case-opened.toml"],
+        [support::CASE_OPENED_AT_1],
         "recovery must leave exactly the authoritative event file"
     );
 }
@@ -7078,7 +7055,7 @@ fn symlinked_case_directory_refuses_without_cross_repository_write() {
         "a case storage symlink refusal must preserve every repository byte"
     );
     assert!(
-        !redirected.join("0001-case-opened.toml").exists(),
+        !redirected.join(support::CASE_OPENED_AT_1).exists(),
         "the steward command must not write through a symlink"
     );
 }

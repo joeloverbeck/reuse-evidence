@@ -1,49 +1,31 @@
+mod support;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
+
+use support::TempRoot;
 
 struct Fixture {
-    root: PathBuf,
+    root: TempRoot,
 }
 
 impl Fixture {
     fn new(name: &str) -> Self {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock should be after the Unix epoch")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "reuse-evidence-{name}-{}-{nonce}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&root).expect("fixture root should be creatable");
-        Self { root }
+        Self {
+            root: TempRoot::new(name),
+        }
     }
 
     fn repository(&self, portfolio_root: &Path, name: &str) -> PathBuf {
         assert!(
-            portfolio_root.starts_with(&self.root),
+            portfolio_root.starts_with(&*self.root),
             "repository fixtures must stay beneath their fixture root"
         );
-        let repository = portfolio_root.join(name);
-        fs::create_dir_all(repository.join(".git"))
-            .expect("repository fixture should be creatable");
-        fs::write(
-            repository.join(".git").join("HEAD"),
-            b"ref: refs/heads/main\n",
-        )
-        .expect("repository fixture should contain recognizable Git metadata");
-        repository
+        support::git_repository(portfolio_root, name)
             .canonicalize()
             .expect("repository fixture path should be canonicalizable")
-    }
-}
-
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
     }
 }
 

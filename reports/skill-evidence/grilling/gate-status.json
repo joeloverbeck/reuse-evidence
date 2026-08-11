@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-11T18:57:24.235385874Z",
+  "generated_at": "2026-08-11T19:37:38.175041553Z",
   "target_content_hash": "b9f458b0917db5368c6826732f0daf19b63f157b11d22034c023c8d465794ee6",
-  "qualifying_uses_on_current_hash": 18,
+  "qualifying_uses_on_current_hash": 19,
   "open_incident_ids": [
     "evt_fd786d97-7718-4253-9749-5a5f8b2de8f4",
     "evt_738194db-1039-42b1-93fe-c88f23541cd2",
@@ -18,7 +18,9 @@
     "evt_21671b5b-d4d8-4349-afb3-fab3b5ed59f6",
     "evt_b3e69792-5f00-42a4-94fb-ea87c20ac99d",
     "evt_290138a4-4642-4369-9039-54bb5c6830ac",
-    "evt_0a582b78-6b3b-4ace-ae94-80aa48e7ae8d"
+    "evt_0a582b78-6b3b-4ace-ae94-80aa48e7ae8d",
+    "evt_bc46ea5e-44c7-40ab-a91a-a9793d6bfa2d",
+    "evt_53775056-9332-4a10-8abf-eec5c5319eb2"
   ],
   "candidate_clusters": [
     {
@@ -34,17 +36,19 @@
       "symptom_key": "execution",
       "open_event_ids": [
         "evt_b3e69792-5f00-42a4-94fb-ea87c20ac99d",
-        "evt_290138a4-4642-4369-9039-54bb5c6830ac"
+        "evt_290138a4-4642-4369-9039-54bb5c6830ac",
+        "evt_bc46ea5e-44c7-40ab-a91a-a9793d6bfa2d"
       ],
-      "independent_incidents": 1,
+      "independent_incidents": 2,
       "max_severity": "material_failure"
     },
     {
       "symptom_key": "output",
       "open_event_ids": [
-        "evt_0a582b78-6b3b-4ace-ae94-80aa48e7ae8d"
+        "evt_0a582b78-6b3b-4ace-ae94-80aa48e7ae8d",
+        "evt_53775056-9332-4a10-8abf-eec5c5319eb2"
       ],
-      "independent_incidents": 1,
+      "independent_incidents": 2,
       "max_severity": "friction"
     }
   ],
@@ -62,7 +66,7 @@
   "review_reentry_basis": "post_review_incident",
   "target_name": "grilling",
   "target_repo_relative_path": ".claude/skills/grilling",
-  "derivation_session_id": "53ca1434-3a04-4954-a0b2-445411bf4a4d",
+  "derivation_session_id": "1569a7c1-bc7c-4964-accc-f088ce688ec4",
   "instrument_limited_incident_ids": [
     "evt_fd786d97-7718-4253-9749-5a5f8b2de8f4",
     "evt_738194db-1039-42b1-93fe-c88f23541cd2",

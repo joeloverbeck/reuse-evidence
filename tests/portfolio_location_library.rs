@@ -9,46 +9,31 @@
 //! absence that makes `portfolio` refuse leaves `case list` succeeding with
 //! unknown conditions.
 
+mod support;
+
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use reuse_evidence::case::RecordedInstant;
 use reuse_evidence::portfolio::PortfolioLocation;
 use reuse_evidence::{Visibility, case, enroll, portfolio};
+use support::TempRoot;
 
 const CASE_ID: &str = "00000000-0000-4000-8000-000000000011";
 
 struct Fixture {
-    root: PathBuf,
+    root: TempRoot,
 }
 
 impl Fixture {
     fn new() -> Self {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock should be after the Unix epoch")
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "reuse-evidence-portfolio-location-{}-{nonce}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&root).expect("portfolio fixture should be creatable");
-        Self { root }
+        Self {
+            root: TempRoot::new("portfolio-location"),
+        }
     }
 
     fn repository(&self, name: &str) -> PathBuf {
-        let path = self.root.join(name);
-        fs::create_dir_all(path.join(".git")).expect("repository fixture should be creatable");
-        fs::write(path.join(".git/HEAD"), b"ref: refs/heads/main\n")
-            .expect("repository fixture should contain recognizable Git metadata");
-        path
-    }
-}
-
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
+        support::git_repository(&self.root, name)
     }
 }
 
@@ -95,7 +80,7 @@ fn steward_with_one_open_case(fixture: &Fixture) -> PathBuf {
     .expect("open proposal should be writable");
 
     let configured =
-        PortfolioLocation::from_user_directories(vec![fixture.root.clone()], None, None);
+        PortfolioLocation::from_user_directories(vec![fixture.root.to_path_buf()], None, None);
     case::open(
         &steward,
         &proposal_path,
@@ -142,7 +127,7 @@ fn case_list_derives_conditions_once_the_same_location_supplies_roots() {
     let steward = steward_with_one_open_case(&fixture);
 
     let configured =
-        PortfolioLocation::from_user_directories(vec![fixture.root.clone()], None, None);
+        PortfolioLocation::from_user_directories(vec![fixture.root.to_path_buf()], None, None);
     let listed = case::list(&steward, &configured).expect("listing under a root should succeed");
 
     let rendered = listed.to_string();

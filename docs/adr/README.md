@@ -31,6 +31,14 @@ Only the human decision owner can accept, supersede, or reject an ADR. Merge, im
 | [0014](0014-one-type-for-the-case-event-envelope.md) | The case event envelope has one type and one validator, flattened into each body; recorded bytes and refusal wording are unchanged. |
 | [0015](0015-portfolio-location-resolved-at-the-edge.md) | The portfolio location is resolved once at the edge as a value that carries its own absence; each consumer keeps its own interpretation, so the `portfolio` refusal and the `case list` degraded projection both stand. |
 
+## Proposed decisions
+
+Informative only; not authority until the decision owner accepts them.
+
+| ADR | Decision |
+|---|---|
+| [0016](0016-terminal-contract-at-the-process-boundary.md) | The process boundary tests the terminal contract; behaviour is tested across the module interface. New behaviour goes in process; existing CLI tests are not converted. |
+
 ## Adding or changing an ADR
 
 Use [`ADR-TEMPLATE.md`](ADR-TEMPLATE.md). Keep the decision as small as the real pressure allows. Name the governing principle, live decision, alternatives, consequences, compatibility effect, and supersession path.

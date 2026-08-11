@@ -1,16 +1,21 @@
+mod support;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
+
+use support::TempRoot;
 
 struct Fixture {
-    root: PathBuf,
+    root: TempRoot,
 }
 
 impl Fixture {
     fn new(name: &str) -> Self {
-        Self::beneath(&std::env::temp_dir(), name)
+        Self {
+            root: TempRoot::new(name),
+        }
     }
 
     fn outside_repository(name: &str) -> Self {
@@ -26,39 +31,14 @@ impl Fixture {
                     .ancestors()
                     .all(|ancestor| !ancestor.join(".git").exists())
         })
-        .map(|candidate| Self::beneath(&candidate, name))
+        .map(|candidate| Self {
+            root: TempRoot::beneath(&candidate, name),
+        })
         .expect("the test environment should provide a temporary directory outside Git")
     }
 
-    fn beneath(parent: &Path, name: &str) -> Self {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock should be after the Unix epoch")
-            .as_nanos();
-        let root = parent.join(format!(
-            "reuse-evidence-{name}-{}-{nonce}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&root).expect("fixture root should be creatable");
-        Self { root }
-    }
-
     fn repository(&self, name: &str) -> PathBuf {
-        let repository = self.root.join(name);
-        fs::create_dir_all(repository.join(".git"))
-            .expect("repository fixture should be creatable");
-        fs::write(
-            repository.join(".git").join("HEAD"),
-            b"ref: refs/heads/main\n",
-        )
-        .expect("repository fixture should contain recognizable Git metadata");
-        repository
-    }
-}
-
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
+        support::git_repository(&self.root, name)
     }
 }
 
@@ -190,7 +170,7 @@ fn assert_populated_case_storage_refuses_independently_of_visibility_and_configu
         .join(CASE_STORAGE_CASE_ID);
     fs::create_dir_all(&case_directory).expect("case directory should be creatable");
     fs::write(
-        case_directory.join("0001-case-opened.toml"),
+        case_directory.join(support::CASE_OPENED_AT_1),
         b"preserved recorded event bytes\n",
     )
     .expect("recorded event fixture should be writable");
