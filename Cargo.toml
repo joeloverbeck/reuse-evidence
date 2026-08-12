@@ -63,6 +63,11 @@ name = "case_library"
 path = "tests/case_library.rs"
 required-features = ["cli"]
 
+[[test]]
+name = "portfolio_report_library"
+path = "tests/portfolio_report_library.rs"
+required-features = ["cli"]
+
 [lints.rust]
 unsafe_code = "forbid"
 

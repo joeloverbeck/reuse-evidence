@@ -151,6 +151,7 @@ pub fn report(location: &PortfolioLocation) -> Result<String, TerminalFailure> {
             &scan,
             &identity_paths,
             None,
+            None,
         )));
     }
 
@@ -159,6 +160,7 @@ pub fn report(location: &PortfolioLocation) -> Result<String, TerminalFailure> {
     let _state_lock = acquire_state_lock(&state_path)?;
     let previous_state = load_state(&state_path)?;
     let previous_repositories = previous_state
+        .state
         .repositories
         .into_iter()
         .map(|repository| (repository.repository_id, repository))
@@ -169,7 +171,12 @@ pub fn report(location: &PortfolioLocation) -> Result<String, TerminalFailure> {
         enrollments: &scan.enrollments,
     };
     let changes = derive_changes(&observation, &previous_repositories);
-    let output = render_report(&scan, &identity_paths, Some(&changes));
+    let output = render_report(
+        &scan,
+        &identity_paths,
+        Some(&changes),
+        previous_state.unreadable.as_ref(),
+    );
     save_state(
         &state_path,
         &next_state(&observation, previous_repositories),
@@ -304,11 +311,13 @@ fn render_report(
     scan: &Scan,
     identity_paths: &BTreeMap<Uuid, Vec<PathBuf>>,
     changes: Option<&PortfolioChanges>,
+    unreadable_state: Option<&UnreadableState>,
 ) -> String {
     PortfolioReportView {
         scan,
         identity_paths,
         changes,
+        unreadable_state,
     }
     .to_string()
 }
@@ -317,6 +326,7 @@ struct PortfolioReportView<'a> {
     scan: &'a Scan,
     identity_paths: &'a BTreeMap<Uuid, Vec<PathBuf>>,
     changes: Option<&'a PortfolioChanges>,
+    unreadable_state: Option<&'a UnreadableState>,
 }
 
 enum RepositoryEntryView<'a> {
@@ -514,6 +524,15 @@ impl Display for PortfolioReportView<'_> {
                 writeln!(formatter, "  reason: {}", marker.reason())?;
             }
         }
+        if let Some(unreadable_state) = self.unreadable_state {
+            writeln!(formatter, "unreadable portfolio state:")?;
+            writeln!(formatter, "- state: {}", unreadable_state.path.display())?;
+            writeln!(formatter, "  reason: {}", unreadable_state.reason)?;
+            writeln!(
+                formatter,
+                "  consequence: every enrolled repository is reported as new"
+            )?;
+        }
         if let Some(changes) = self.changes {
             write!(formatter, "{changes}")?;
         }
@@ -609,11 +628,33 @@ fn resolve_path_through_existing_ancestor(path: &Path) -> std::io::Result<PathBu
     Ok(resolved)
 }
 
-fn load_state(path: &Path) -> Result<PortfolioState, TerminalFailure> {
+/// The previous observation, and whether it had to be discarded to get it.
+struct LoadedState {
+    state: PortfolioState,
+    unreadable: Option<UnreadableState>,
+}
+
+/// A present user-local state file whose bytes could not be decoded.
+///
+/// `PORTFOLIO-PRIVACY-AND-STEWARDSHIP.md` §9 makes this file disposable and
+/// rebuildable, so an undecodable one does not refuse the report. It does
+/// change what the report can say: every repository appears as new, and a
+/// genuine move, visibility change or identity substitution goes unreported for
+/// that run. The condition is named for the same reason an undecodable marker
+/// is.
+struct UnreadableState {
+    path: PathBuf,
+    reason: String,
+}
+
+fn load_state(path: &Path) -> Result<LoadedState, TerminalFailure> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(PortfolioState::default());
+            return Ok(LoadedState {
+                state: PortfolioState::default(),
+                unreadable: None,
+            });
         }
         Err(error) => {
             return Err(TerminalFailure::unsafe_failure(format!(
@@ -622,10 +663,25 @@ fn load_state(path: &Path) -> Result<PortfolioState, TerminalFailure> {
             )));
         }
     };
-    let Ok(text) = std::str::from_utf8(&bytes) else {
-        return Ok(PortfolioState::default());
+    let reason = match std::str::from_utf8(&bytes) {
+        Err(error) => error.to_string(),
+        Ok(text) => match toml::from_str(text) {
+            Ok(state) => {
+                return Ok(LoadedState {
+                    state,
+                    unreadable: None,
+                });
+            }
+            Err(error) => error.message().to_owned(),
+        },
     };
-    Ok(toml::from_str(text).unwrap_or_default())
+    Ok(LoadedState {
+        state: PortfolioState::default(),
+        unreadable: Some(UnreadableState {
+            path: path.to_path_buf(),
+            reason,
+        }),
+    })
 }
 
 fn acquire_state_lock(state_path: &Path) -> Result<StateLock, TerminalFailure> {
