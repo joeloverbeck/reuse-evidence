@@ -13,6 +13,16 @@ use super::{
 };
 use crate::{TerminalFailure, Visibility, portfolio};
 
+/// What each query command tells a reader to do about a steward marker it
+/// cannot use. ADR 0018 makes the fault's wording shared and this sentence the
+/// command's; `case` holds the four for the recording commands.
+const LIST_MARKER_RESOLUTION: &str =
+    "restore a supported `reuse-evidence.toml` marker before listing cases";
+const SHOW_MARKER_RESOLUTION: &str =
+    "restore a supported `reuse-evidence.toml` marker before showing a case";
+const BRIEF_MARKER_RESOLUTION: &str =
+    "restore a supported `reuse-evidence.toml` marker before projecting an implementation brief";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CaseState {
     Watching,
@@ -165,7 +175,7 @@ pub fn list(
     location: &portfolio::PortfolioLocation,
 ) -> Result<ListOutcome, TerminalFailure> {
     let repository_root = find_repository_root(working_directory)?;
-    let steward = read_steward(&repository_root)?;
+    let steward = read_steward(&repository_root, LIST_MARKER_RESOLUTION)?;
     let mut cases = read_cases(&repository_root, steward.repository_id())?;
     let portfolio_available = derive_conditions(&mut cases, steward.visibility(), location)?;
     Ok(ListOutcome {
@@ -188,7 +198,7 @@ pub fn show(
 ) -> Result<ShowOutcome, TerminalFailure> {
     let case_id = parse_recorded_case_id(case_id)?;
     let repository_root = find_repository_root(working_directory)?;
-    let steward = read_steward(&repository_root)?;
+    let steward = read_steward(&repository_root, SHOW_MARKER_RESOLUTION)?;
     let relative_case_directory = naming::case_directory(case_id);
     validate_case_storage_path(&repository_root, &relative_case_directory)?;
     let mut case = read_case(
@@ -221,7 +231,7 @@ pub fn brief(
 ) -> Result<BriefOutcome, TerminalFailure> {
     let case_id = parse_recorded_case_id(case_id)?;
     let repository_root = find_repository_root(working_directory)?;
-    let steward = read_steward(&repository_root)?;
+    let steward = read_steward(&repository_root, BRIEF_MARKER_RESOLUTION)?;
     let relative_case_directory = naming::case_directory(case_id);
     validate_case_storage_path(&repository_root, &relative_case_directory)?;
     let case = read_case_for(

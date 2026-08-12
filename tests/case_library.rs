@@ -7,9 +7,8 @@
 //!
 //! - A terminal *meaning* is observable at the boundary only through its exit status, and status
 //!   `1` covers every non-refusal failure. Asserting `ExitMeaning` directly is exact. Doing so
-//!   showed that `UnsafeFailure` is not merely uncovered by the case suite but unreachable from
-//!   it: `read_steward` collapses a genuine marker read failure into the same refusal it gives a
-//!   malformed marker, while `marker_for_enrollment` calls that input an unsafe failure.
+//!   showed that one unreadable marker meant two different things to two surfaces. ADR 0018
+//!   resolved that: every marker fault is a refusal, and both surfaces now name which fault it is.
 //! - Two writers competing for one revision needed two child processes and a timed sleep. Two
 //!   threads and a barrier state the same race exactly, because the marker lock is held per open
 //!   file description and so contends within one process.
@@ -115,33 +114,18 @@ fn make_marker_unreadable(repository: &Path) {
 }
 
 #[test]
-fn one_unreadable_marker_is_an_unsafe_failure_to_enrollment_and_a_refusal_to_the_case_surface() {
+fn one_unreadable_marker_means_the_same_thing_to_enrollment_and_to_the_case_surface() {
     let fixture = Fixture::new("marker-classification");
 
-    // `marker::read` reports four outcomes; its callers assign the meanings. `enroll` separates
-    // a genuine read failure from a malformed marker, so it is the only surface from which
-    // `ExitMeaning::UnsafeFailure` is reachable with this input.
+    // ADR 0018: one input, one meaning. Nothing has been written when a marker is read, so the
+    // no-write guarantee a refusal carries is truthful at both sites, and `UnsafeFailure` — which
+    // is defined by the absence of that guarantee — would state something untrue about the run.
     let enrolling = fixture.repository("enrolling", STEWARD_ID, "private");
     make_marker_unreadable(&enrolling);
     let Err(enrollment_failure) = enroll(&enrolling, "products", Visibility::Private) else {
         panic!("enrolling over an unreadable marker must fail");
     };
-    assert_eq!(
-        enrollment_failure.meaning(),
-        ExitMeaning::UnsafeFailure,
-        "{enrollment_failure}"
-    );
-    assert_eq!(
-        enrollment_failure.meaning().status(),
-        1,
-        "the unsafe-failure meaning maps to status 1"
-    );
 
-    // `case::read_steward` collapses every non-supported outcome into one refusal, so the same
-    // input reaches the case surface as a safe refusal. Nothing has been written at this point,
-    // so the no-write guarantee a refusal carries is truthful — but the two surfaces disagree
-    // about what an unreadable marker means, and this pins that divergence rather than
-    // asserting either answer is the intended one.
     let steward = fixture.repository("steward", STEWARD_ID, "private");
     let proposal = fixture.write("open-case.toml", &two_occurrence_proposal());
     make_marker_unreadable(&steward);
@@ -149,11 +133,45 @@ fn one_unreadable_marker_is_an_unsafe_failure_to_enrollment_and_a_refusal_to_the
     else {
         panic!("opening a case under an unreadable marker must fail");
     };
+
+    assert_eq!(
+        enrollment_failure.meaning(),
+        ExitMeaning::Refusal,
+        "{enrollment_failure}"
+    );
     assert_eq!(
         case_failure.meaning(),
-        ExitMeaning::Refusal,
-        "{case_failure}"
+        enrollment_failure.meaning(),
+        "the two surfaces must agree about one unreadable marker"
     );
+    assert_eq!(
+        case_failure.meaning().status(),
+        3,
+        "the refusal meaning maps to status 3"
+    );
+
+    // The shared classification names the fault and its cause; only the resolution differs,
+    // because it names the command that ran.
+    for (failure, expected_resolution) in [
+        (
+            &enrollment_failure,
+            "restore a complete valid version 1 marker before rerunning enrollment",
+        ),
+        (
+            &case_failure,
+            "restore a supported `reuse-evidence.toml` marker before opening a case",
+        ),
+    ] {
+        let rendered = failure.to_string();
+        assert!(
+            rendered.starts_with("refusal: could not read `"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.ends_with(&format!("\nresolution: {expected_resolution}")),
+            "{rendered}"
+        );
+    }
     assert!(
         !case_directory(&steward).exists(),
         "the refusal must have written nothing"

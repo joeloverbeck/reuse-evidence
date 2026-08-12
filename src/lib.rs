@@ -242,7 +242,7 @@ pub fn enroll_with_expected_repository_id(
         "restore a complete valid version {} marker before rerunning enrollment",
         marker::SUPPORTED_SCHEMA_VERSION
     );
-    if let Some(marker) = marker_for_enrollment(&repository_root, &malformed_resolution)? {
+    if let Some(marker) = read_supported_marker(&repository_root, &malformed_resolution)? {
         if marker.visibility() != visibility {
             return Err(TerminalFailure::refusal(
                 format!(
@@ -330,7 +330,7 @@ pub fn set_visibility(
         "restore a complete valid version {} marker before changing visibility",
         marker::SUPPORTED_SCHEMA_VERSION
     );
-    let Some(mut marker) = marker_for_enrollment(&repository_root, &malformed_resolution)? else {
+    let Some(mut marker) = read_supported_marker(&repository_root, &malformed_resolution)? else {
         return Err(TerminalFailure::refusal(
             format!(
                 "repository is not enrolled because `{}` does not exist",
@@ -350,7 +350,7 @@ pub fn set_visibility(
     }
     let _marker_lock = if visibility == Visibility::Public {
         let marker_lock = lock_repository_marker(&repository_root)?;
-        let Some(current_marker) = marker_for_enrollment(&repository_root, &malformed_resolution)?
+        let Some(current_marker) = read_supported_marker(&repository_root, &malformed_resolution)?
         else {
             return Err(TerminalFailure::refusal(
                 format!(
@@ -406,9 +406,23 @@ pub fn set_visibility(
     })
 }
 
-fn marker_for_enrollment(
+/// Reads the marker at `repository_root`, refusing one that is present but unusable.
+///
+/// Under ADR 0018 this is the only place a non-supported `marker::MarkerRead`
+/// becomes a classified failure. `marker` reports the four outcomes and names
+/// none of them; every fault is a refusal here, because nothing has been
+/// written when a marker is read and `ExitMeaning::UnsafeFailure` promises the
+/// opposite. Each fault names itself, the marker path and its cause.
+///
+/// `resolution` is the caller's, because it names the command that ran. The
+/// unsupported-version resolution is derived from the version instead: what to
+/// do about it does not vary by command.
+///
+/// An absent marker is `Ok(None)`. Absence is not a fault, and what it means is
+/// the caller's to say.
+pub(crate) fn read_supported_marker(
     repository_root: &Path,
-    malformed_resolution: &str,
+    resolution: &str,
 ) -> Result<Option<marker::Marker>, TerminalFailure> {
     match marker::read(repository_root) {
         Some(marker::MarkerRead::Supported(marker)) => Ok(Some(marker)),
@@ -422,16 +436,14 @@ fn marker_for_enrollment(
             ))
         }
         Some(marker::MarkerRead::Unreadable(marker)) if marker.is_read_failure() => {
-            Err(TerminalFailure::unsafe_failure(format!(
-                "could not read `{}`: {marker}",
-                marker.path().display()
-            )))
+            Err(TerminalFailure::refusal(
+                format!("could not read `{}`: {marker}", marker.path().display()),
+                resolution,
+            ))
         }
-        Some(marker::MarkerRead::Unreadable(marker)) => Err(malformed_marker_error(
-            marker.path(),
-            &marker,
-            malformed_resolution,
-        )),
+        Some(marker::MarkerRead::Unreadable(marker)) => {
+            Err(malformed_marker_error(marker.path(), &marker, resolution))
+        }
         None => Ok(None),
     }
 }

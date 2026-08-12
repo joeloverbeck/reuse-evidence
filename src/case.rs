@@ -21,7 +21,7 @@ use naming::{EventFileName, EventPosition, EventType, OPENING_SEQUENCE};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::marker::{self, MarkerRead};
+use crate::marker;
 use crate::portfolio;
 use crate::{TerminalFailure, Visibility, create_file_atomically};
 
@@ -33,6 +33,19 @@ const APPEND_UNSTEWARDED_RESOLUTION: &str =
     "run `case list` in this steward repository and retry with a recorded case identity";
 const EARLY_REVIEW_UNSTEWARDED_RESOLUTION: &str = "run `case list` in this steward repository and retry `case override` with a recorded watching case identity";
 const DECISION_UNSTEWARDED_RESOLUTION: &str = "run `case list` in this steward repository and retry `case decide` with a recorded review-ready case identity";
+/// What each command tells a reader to do about a steward marker it cannot use.
+///
+/// ADR 0018 makes the marker fault's own wording shared and this sentence the
+/// command's, because it names the command to retry. `case::read` holds the
+/// three for the query commands.
+const OPEN_MARKER_RESOLUTION: &str =
+    "restore a supported `reuse-evidence.toml` marker before opening a case";
+const APPEND_MARKER_RESOLUTION: &str =
+    "restore a supported `reuse-evidence.toml` marker before appending an occurrence";
+const EARLY_REVIEW_MARKER_RESOLUTION: &str =
+    "restore a supported `reuse-evidence.toml` marker before authorizing early review";
+const DECISION_MARKER_RESOLUTION: &str =
+    "restore a supported `reuse-evidence.toml` marker before recording a reuse decision";
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -660,12 +673,12 @@ pub fn open(
     preview: bool,
 ) -> Result<OpenOutcome, TerminalFailure> {
     let repository_root = find_repository_root(working_directory)?;
-    let mut steward = read_steward(&repository_root)?;
+    let mut steward = read_steward(&repository_root, OPEN_MARKER_RESOLUTION)?;
     let _marker_lock = if preview {
         None
     } else {
         let marker_lock = crate::lock_repository_marker(&repository_root)?;
-        steward = read_steward(&repository_root)?;
+        steward = read_steward(&repository_root, OPEN_MARKER_RESOLUTION)?;
         Some(marker_lock)
     };
     let proposal = read_proposal(proposal_path)?;
@@ -752,6 +765,7 @@ pub fn append(
         working_directory,
         case_id,
         expected_revision,
+        APPEND_MARKER_RESOLUTION,
         APPEND_UNSTEWARDED_RESOLUTION,
     )?;
     let case_id = located.case_id;
@@ -923,6 +937,7 @@ pub fn authorize_early_review(
         working_directory,
         case_id,
         expected_revision,
+        EARLY_REVIEW_MARKER_RESOLUTION,
         EARLY_REVIEW_UNSTEWARDED_RESOLUTION,
     )?;
     let case_id = located.case_id;
@@ -1041,6 +1056,7 @@ pub fn decide(
         working_directory,
         case_id,
         expected_revision,
+        DECISION_MARKER_RESOLUTION,
         DECISION_UNSTEWARDED_RESOLUTION,
     )?;
     let case_id = located.case_id;
@@ -1161,13 +1177,14 @@ fn locate_later_event_case(
     working_directory: &Path,
     case_id: &str,
     expected_revision: i64,
+    marker_resolution: &'static str,
     unstewarded_resolution: &'static str,
 ) -> Result<LocatedCase, TerminalFailure> {
     let case_id = parse_case_id(case_id)?;
     let publication = publication::Publication::new(expected_revision)?;
     let sequence = publication.sequence();
     let repository_root = find_repository_root(working_directory)?;
-    let steward = read_steward(&repository_root)?;
+    let steward = read_steward(&repository_root, marker_resolution)?;
     let relative_case_directory = naming::case_directory(case_id);
     validate_case_storage_path(&repository_root, &relative_case_directory)?;
     let case = read::read_case_for(
@@ -1896,21 +1913,25 @@ fn find_repository_root(working_directory: &Path) -> Result<PathBuf, TerminalFai
     })
 }
 
-fn read_steward(repository_root: &Path) -> Result<marker::Marker, TerminalFailure> {
-    match marker::read(repository_root) {
-        Some(MarkerRead::Supported(marker)) => Ok(marker),
-        None => Err(TerminalFailure::refusal(
+/// Reads the enrolled steward whose cases this command works against.
+///
+/// Under ADR 0018 a present-but-unusable marker is classified by
+/// `crate::read_supported_marker`, which names which fault it is, the marker
+/// path and its cause. `marker_resolution` is this command's sentence for
+/// fixing it, because it names the command that ran.
+fn read_steward(
+    repository_root: &Path,
+    marker_resolution: &str,
+) -> Result<marker::Marker, TerminalFailure> {
+    crate::read_supported_marker(repository_root, marker_resolution)?.ok_or_else(|| {
+        TerminalFailure::refusal(
             format!(
                 "repository is not enrolled because `{}` does not exist",
                 repository_root.join(crate::MARKER_FILE).display()
             ),
             "run `enroll` before opening a case",
-        )),
-        Some(_) => Err(TerminalFailure::refusal(
-            "the steward repository is not validly enrolled",
-            "restore a supported `reuse-evidence.toml` marker before opening a case",
-        )),
-    }
+        )
+    })
 }
 
 fn read_proposal(path: &Path) -> Result<OpenProposal, TerminalFailure> {
