@@ -193,6 +193,115 @@ fn event_files(steward: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     files
 }
 
+struct ClosedCaseWithSupersededEvents {
+    fixture: Fixture,
+    steward: PathBuf,
+    early_review: PathBuf,
+    append: PathBuf,
+    decision: PathBuf,
+    parked_verification: PathBuf,
+}
+
+fn closed_case_with_superseded_events(name: &str) -> ClosedCaseWithSupersededEvents {
+    let fixture = Fixture::new(name);
+    let steward = steward_with_one_open_case(&fixture);
+
+    let early_review = fixture.write("early-review.toml", &early_review_override_proposal());
+    case::authorize_early_review(
+        &steward,
+        CASE_ID,
+        1,
+        &early_review,
+        &fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect("the early-review override should publish");
+    replace_proposal_with_recorded_event(
+        &steward,
+        support::EARLY_REVIEW_AUTHORIZED_AT_2,
+        &early_review,
+    );
+
+    let append = fixture.write("append.toml", &append_occurrence_proposal());
+    case::append(
+        &steward,
+        CASE_ID,
+        2,
+        &append,
+        &fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect("the third occurrence should publish after the override");
+    replace_proposal_with_recorded_event(&steward, support::OCCURRENCE_APPENDED_AT_3, &append);
+
+    let decision = fixture.write("decision.toml", &change_decision_proposal());
+    case::decide(
+        &steward,
+        CASE_ID,
+        3,
+        &decision,
+        &fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect("the accepted decision should publish");
+    replace_proposal_with_recorded_event(
+        &steward,
+        support::REUSE_DECISION_ACCEPTED_AT_4,
+        &decision,
+    );
+
+    let parked_verification = fixture.write(
+        "parked-verification.toml",
+        &unsuccessful_verification_proposal("parked"),
+    );
+    case::verify(
+        &steward,
+        CASE_ID,
+        4,
+        &parked_verification,
+        &fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect("the parked verification should publish");
+    replace_proposal_with_recorded_event(
+        &steward,
+        support::VERIFICATION_RECORDED_AT_5,
+        &parked_verification,
+    );
+
+    let closed_verification =
+        fixture.write("closed-verification.toml", &closed_verification_proposal());
+    case::verify(
+        &steward,
+        CASE_ID,
+        5,
+        &closed_verification,
+        &fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect("the closing verification should publish after the parked verification");
+
+    ClosedCaseWithSupersededEvents {
+        fixture,
+        steward,
+        early_review,
+        append,
+        decision,
+        parked_verification,
+    }
+}
+
+fn replace_proposal_with_recorded_event(steward: &Path, event_file: &str, proposal: &Path) {
+    let event = fs::read(case_directory(steward).join(event_file))
+        .expect("the recorded event should be readable for an exact retry");
+    fs::write(proposal, event).expect("the recorded event should become the prepared retry");
+}
+
 fn refused_verification(
     steward: &Path,
     expected_revision: i64,
@@ -217,6 +326,126 @@ fn refused_verification(
         "a verification refusal must preserve every recorded event byte"
     );
     failure
+}
+
+#[test]
+fn a_superseded_early_review_retry_reports_the_closed_case_and_writes_nothing() {
+    let closed = closed_case_with_superseded_events("superseded-early-review-retry");
+    let before = event_files(&closed.steward);
+
+    let retry = case::authorize_early_review(
+        &closed.steward,
+        CASE_ID,
+        1,
+        &closed.early_review,
+        &closed.fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect("an exact superseded early-review retry should succeed");
+
+    assert_eq!(
+        retry.to_string(),
+        format!(
+            "early review already authorized\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/{}\nrevision: 2\nstate: closed\nprivacy: private\n",
+            support::EARLY_REVIEW_AUTHORIZED_AT_2
+        )
+    );
+    assert_eq!(
+        event_files(&closed.steward),
+        before,
+        "a superseded early-review retry must preserve every event byte"
+    );
+}
+
+#[test]
+fn a_superseded_decision_retry_reports_the_closed_case_and_writes_nothing() {
+    let closed = closed_case_with_superseded_events("superseded-decision-retry");
+    let before = event_files(&closed.steward);
+
+    let retry = case::decide(
+        &closed.steward,
+        CASE_ID,
+        3,
+        &closed.decision,
+        &closed.fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect("an exact superseded reuse-decision retry should succeed");
+
+    assert_eq!(
+        retry.to_string(),
+        format!(
+            "reuse decision already recorded\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/{}\nrevision: 4\nstate: closed\nprivacy: private\ndecision: authorizes implementation outside the reuse lifecycle; does not perform it\n",
+            support::REUSE_DECISION_ACCEPTED_AT_4
+        )
+    );
+    assert_eq!(
+        event_files(&closed.steward),
+        before,
+        "a superseded reuse-decision retry must preserve every event byte"
+    );
+}
+
+#[test]
+fn a_superseded_append_retry_keeps_its_live_closed_receipt_and_writes_nothing() {
+    let closed = closed_case_with_superseded_events("superseded-append-retry");
+    let before = event_files(&closed.steward);
+
+    let retry = case::append(
+        &closed.steward,
+        CASE_ID,
+        2,
+        &closed.append,
+        &closed.fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect("an exact superseded occurrence-append retry should succeed");
+
+    assert_eq!(
+        retry.to_string(),
+        format!(
+            "occurrence already recorded\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/{}\nrevision: 3\nstate: closed\nprivacy: private\n",
+            support::OCCURRENCE_APPENDED_AT_3
+        )
+    );
+    assert_eq!(
+        event_files(&closed.steward),
+        before,
+        "a superseded occurrence-append retry must preserve every event byte"
+    );
+}
+
+#[test]
+fn a_superseded_verification_retry_keeps_its_parked_event_voice_and_writes_nothing() {
+    let closed = closed_case_with_superseded_events("superseded-verification-retry");
+    let before = event_files(&closed.steward);
+
+    let retry = case::verify(
+        &closed.steward,
+        CASE_ID,
+        4,
+        &closed.parked_verification,
+        &closed.fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect("an exact superseded parked-verification retry should succeed");
+
+    assert_eq!(
+        retry.to_string(),
+        format!(
+            "verification already recorded: parked\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/{}\nrevision: 5\nstate: closed\nprivacy: private\ndisposition: parked\n",
+            support::VERIFICATION_RECORDED_AT_5
+        )
+    );
+    assert_eq!(
+        event_files(&closed.steward),
+        before,
+        "a superseded verification retry must preserve every event byte"
+    );
 }
 
 #[test]

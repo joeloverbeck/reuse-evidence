@@ -1072,6 +1072,7 @@ pub fn authorize_early_review(
                 case_id,
                 event_path,
                 located.sequence,
+                read::CaseState::ReviewReadyByEarlyReviewOverride,
                 ReportedPrivacy::Derived(privacy),
                 event,
             )
@@ -1143,7 +1144,10 @@ pub fn decide(
                 event_path,
                 located.sequence,
                 ReportedPrivacy::Derived(privacy),
-                proposal.content.action,
+                DecisionReceiptFields {
+                    state: read::CaseState::AwaitingVerification,
+                    action: proposal.content.action,
+                },
                 event,
             )
         },
@@ -1535,17 +1539,24 @@ impl LaterEventExecution<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct DecisionReceiptFields {
+    state: read::CaseState,
+    action: DecisionAction,
+}
+
 /// Builds one reuse-decision receipt.
 ///
 /// Whether the notice authorizes implementation is the accepted action's decision, not the
-/// receipt's.
+/// receipt's. A fresh receipt projects `awaiting-verification`; an exact retry reports the case's
+/// live derived state under ADR 0010.
 fn decision_outcome(
     effect: LaterEventEffect,
     case_id: Uuid,
     event_path: PathBuf,
     revision: i64,
     privacy: ReportedPrivacy,
-    action: DecisionAction,
+    fields: DecisionReceiptFields,
     event: String,
 ) -> LaterEventOutcome {
     LaterEventOutcome {
@@ -1554,13 +1565,9 @@ fn decision_outcome(
         case_id,
         event_path,
         revision,
-        state: Some(read::CaseState::AwaitingVerification),
+        state: Some(fields.state),
         privacy,
-        notice: Some(if action.authorizes_implementation() {
-            IMPLEMENTATION_NOTICE
-        } else {
-            NO_IMPLEMENTATION_NOTICE
-        }),
+        notice: Some(decision_notice(fields.action)),
         event,
     }
 }
@@ -1580,9 +1587,20 @@ fn decision_retry_outcome(
         event_path,
         event.sequence,
         reported_privacy(case, steward, location),
-        action,
+        DecisionReceiptFields {
+            state: case.state(),
+            action,
+        },
         event.bytes,
     )
+}
+
+const fn decision_notice(action: DecisionAction) -> &'static str {
+    if action.authorizes_implementation() {
+        IMPLEMENTATION_NOTICE
+    } else {
+        NO_IMPLEMENTATION_NOTICE
+    }
 }
 
 fn validate_new_decision(
@@ -1696,13 +1714,15 @@ fn validate_prepared_decision_sequence(
 
 /// Builds one early-review receipt.
 ///
-/// Its readiness is stated as a constant rather than derived from the recorded occurrence count,
-/// as ADR 0010 records, and the override authorizes no implementation, so it reports no notice.
+/// A fresh receipt projects early-review readiness rather than deriving it from the occurrence
+/// count. An exact retry receives the case's live derived state under ADR 0010. The override
+/// authorizes no implementation, so neither path reports a notice.
 fn early_review_outcome(
     effect: LaterEventEffect,
     case_id: Uuid,
     event_path: PathBuf,
     revision: i64,
+    state: read::CaseState,
     privacy: ReportedPrivacy,
     event: String,
 ) -> LaterEventOutcome {
@@ -1712,7 +1732,7 @@ fn early_review_outcome(
         case_id,
         event_path,
         revision,
-        state: Some(read::CaseState::ReviewReadyByEarlyReviewOverride),
+        state: Some(state),
         privacy,
         notice: None,
         event,
@@ -1732,6 +1752,7 @@ fn early_review_retry_outcome(
         case_id,
         event_path,
         event.sequence,
+        case.state(),
         reported_privacy(case, steward, location),
         event.bytes,
     )
