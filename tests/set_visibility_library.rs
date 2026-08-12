@@ -60,3 +60,26 @@ fn library_set_visibility_validates_cases_without_the_cli_surface() {
         "the library path must preserve the marker byte-for-byte"
     );
 }
+
+#[test]
+fn library_set_visibility_renders_its_receipt_without_the_cli_surface() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.root.join("reuse-evidence.toml"),
+        format!(
+            "schema_version = 1\nrepository_id = \"{STEWARD_ID}\"\necosystem_id = \"products\"\nvisibility = \"private\"\n"
+        ),
+    )
+    .expect("marker fixture should be writable");
+
+    let enrollment = set_visibility(&fixture.root, Visibility::Public)
+        .expect("an unstewarded repository may become public");
+
+    assert_eq!(
+        enrollment.to_string(),
+        format!(
+            "changed repository visibility\nmarker: {}\nrepository_id: {STEWARD_ID}\necosystem_id: products\nvisibility: public\n",
+            fixture.root.join("reuse-evidence.toml").display()
+        )
+    );
+}

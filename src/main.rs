@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand, error::ErrorKind};
 use reuse_evidence::{
-    EnrollmentEffect, ExitMeaning, TerminalFailure, Visibility, case, case::RecordedInstant,
+    ExitMeaning, TerminalFailure, Visibility, case, case::RecordedInstant,
     enroll_with_expected_repository_id, portfolio, set_visibility,
 };
 use uuid::Uuid;
@@ -472,7 +472,7 @@ fn run_enroll(
         expected_repository_id,
     )?;
 
-    report_enrollment(&enrollment);
+    print!("{enrollment}");
     Ok(())
 }
 
@@ -485,19 +485,6 @@ fn run_set_visibility(visibility: Option<String>) -> Result<(), TerminalFailure>
     })?;
     let visibility = Visibility::parse(&visibility)?;
     let enrollment = set_visibility(Path::new("."), visibility)?;
-    report_enrollment(&enrollment);
+    print!("{enrollment}");
     Ok(())
-}
-
-fn report_enrollment(enrollment: &reuse_evidence::Enrollment) {
-    match enrollment.effect {
-        EnrollmentEffect::Created => println!("enrolled repository"),
-        EnrollmentEffect::Existing => println!("existing enrollment"),
-        EnrollmentEffect::VisibilityChanged => println!("changed repository visibility"),
-        EnrollmentEffect::VisibilityUnchanged => println!("repository visibility unchanged"),
-    }
-    println!("marker: {}", enrollment.marker_path.display());
-    println!("repository_id: {}", enrollment.repository_id);
-    println!("ecosystem_id: {}", enrollment.ecosystem_id);
-    println!("visibility: {}", enrollment.visibility);
 }

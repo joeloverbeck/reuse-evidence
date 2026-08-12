@@ -98,6 +98,18 @@ pub enum EnrollmentEffect {
     VisibilityUnchanged,
 }
 
+impl EnrollmentEffect {
+    /// The receipt heading this effect prints.
+    const fn heading(self) -> &'static str {
+        match self {
+            Self::Created => "enrolled repository",
+            Self::Existing => "existing enrollment",
+            Self::VisibilityChanged => "changed repository visibility",
+            Self::VisibilityUnchanged => "repository visibility unchanged",
+        }
+    }
+}
+
 /// The observable result of enrollment.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Enrollment {
@@ -111,6 +123,22 @@ pub struct Enrollment {
     pub ecosystem_id: String,
     /// The declared repository visibility.
     pub visibility: Visibility,
+}
+
+/// The `enroll` and `set-visibility` receipt, in the shape the terminal prints.
+///
+/// Every other command renders its receipt from a value that implements
+/// `Display`, which is what lets ADR 0016's in-process suites assert receipt
+/// prose without spawning the binary. These two built theirs with `println!`
+/// inside `main`, so their success text was reachable only through a process.
+impl fmt::Display for Enrollment {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(formatter, "{}", self.effect.heading())?;
+        writeln!(formatter, "marker: {}", self.marker_path.display())?;
+        writeln!(formatter, "repository_id: {}", self.repository_id)?;
+        writeln!(formatter, "ecosystem_id: {}", self.ecosystem_id)?;
+        writeln!(formatter, "visibility: {}", self.visibility)
+    }
 }
 
 /// A classified failure carrying the terminal contract for an owned command.
