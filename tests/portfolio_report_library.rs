@@ -12,6 +12,7 @@ mod support;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use reuse_evidence::ExitMeaning;
 use reuse_evidence::portfolio::{self, PortfolioLocation};
 use support::TempRoot;
 
@@ -35,8 +36,7 @@ impl Fixture {
         self.root.join("state")
     }
 
-    /// Writes `bytes` where the report expects its previous observation.
-    fn write_state(&self, bytes: &[u8]) -> PathBuf {
+    fn state_path(&self) -> PathBuf {
         let state_path = self
             .state_directory()
             .join("reuse-evidence")
@@ -47,7 +47,22 @@ impl Fixture {
                 .expect("the state path always has a parent"),
         )
         .expect("state directory should be creatable");
+        state_path
+    }
+
+    /// Writes `bytes` where the report expects its previous observation.
+    fn write_state(&self, bytes: &[u8]) -> PathBuf {
+        let state_path = self.state_path();
         fs::write(&state_path, bytes).expect("state fixture should be writable");
+        state_path
+    }
+
+    /// Puts a directory where the state file belongs, so reading it fails in
+    /// the I/O layer rather than in the decoder. A directory fails the read for
+    /// every user, where a permission bit would not fail it for root.
+    fn make_state_unreadable(&self) -> PathBuf {
+        let state_path = self.state_path();
+        fs::create_dir(&state_path).expect("state path should become an unreadable directory");
         state_path
     }
 
@@ -102,6 +117,30 @@ fn a_non_utf8_state_file_is_reported_with_the_same_shape() {
             state_path.display()
         )),
         "{report}"
+    );
+}
+
+#[test]
+fn a_state_file_that_cannot_be_read_at_all_is_an_unsafe_failure() {
+    let fixture = Fixture::new("portfolio-state-unreadable");
+    let state_path = fixture.make_state_unreadable();
+
+    let Err(failure) = portfolio::report(&fixture.location()) else {
+        panic!("a state file that cannot be read must not report success");
+    };
+
+    // The contrast the two branches draw. An undecodable state file is a
+    // reported condition, because §9 makes the file disposable and its content
+    // rebuildable. A file the I/O layer will not yield at all is not the same
+    // claim: nothing establishes that the path holds recoverable state, so the
+    // run stops rather than overwriting whatever is there.
+    assert_eq!(failure.meaning(), ExitMeaning::UnsafeFailure, "{failure}");
+    assert_eq!(
+        failure.to_string(),
+        format!(
+            "unsafe failure: user-local portfolio state `{}` cannot be read: Is a directory (os error 21)",
+            state_path.display()
+        )
     );
 }
 

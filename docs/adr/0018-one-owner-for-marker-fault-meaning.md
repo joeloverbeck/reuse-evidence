@@ -4,7 +4,10 @@
 **Date:** 2026-08-12  
 **Decision owner:** Repository maintainer  
 **Governing principles:** [`FOUNDATIONS.md`](../principles/FOUNDATIONS.md), [`CONSUMER-CONTRACT.md`](../principles/CONSUMER-CONTRACT.md)  
-**Amended:** 2026-08-12 by explicit maintainer acceptance, on implementing this decision. One consequence bullet claimed `ExitMeaning::UnsafeFailure` remains reachable only from post-write failures. It is also reachable from a stdout that rejects a write, which `/dev/full` provokes cheaply. The coverage this decision costs is narrower than the bullet stated: what is missing is an assertion of the meaning as a value from a command, not a way to reach it. The decision, its boundary and its authorization are unchanged.
+**Amended:** both entries below by explicit maintainer acceptance, on implementing this decision. Neither changes the decision, its boundary, or what it authorizes; both correct the `ExitMeaning::UnsafeFailure` coverage bullet under *Negative and risks*.
+
+- 2026-08-12 — the bullet claimed the meaning remains reachable only from post-write failures. It is also reachable from a stdout that rejects a write, which `/dev/full` provokes cheaply. The cost was narrower than stated: a missing assertion, not a missing route.
+- 2026-08-12 — that remaining cost is now retired. `tests/portfolio_report_library.rs` asserts the meaning as a value from `portfolio::report`, so the coverage ADR 0016 §53 recorded is restored on a different path.
 
 ## Context
 
@@ -64,7 +67,7 @@ This authorizes the classification owner, the meaning change, and the wording th
 ### Negative and risks
 
 - `enroll` and `set-visibility` change from status 1 to status 3 for an unreadable marker. That is a `CONSUMER-CONTRACT.md` §1 terminal-meaning change, permitted during `0.x` under §8, but it is a real change for anything scripting those commands.
-- `ExitMeaning::UnsafeFailure` loses its only coverage from a command surface — the coverage ADR 0016 §53 recorded as a gain. Nothing now asserts it as an `ExitMeaning` value produced by one of this crate's own commands: `tests/terminal_failure.rs` constructs one by hand, and the status-1 assertions in `tests/skills_cli.rs` and `tests/terminal_contract_cli.rs` state the exit status rather than the meaning. It stays reachable from an atomic publish that fails after a temporary file exists and from a stdout that rejects a write, so the gap this decision leaves is in what is asserted, not in what is reachable.
+- `ExitMeaning::UnsafeFailure` loses the coverage the marker path gave it — what ADR 0016 §53 recorded as a gain. The cost was real and has since been paid on another path: `tests/portfolio_report_library.rs` asserts the meaning as a value from `portfolio::report`, in process, by putting a directory where the user-local state file belongs. A directory is what makes that deterministic for every user, where a permission bit would not fail the read for root. The meaning also stays reachable from an atomic publish that fails after a temporary file exists and from a stdout that rejects a write.
 - Refusal text on the case surface changes, so any consumer matching that sentence must update. §1 and §8 again.
 - `tests/case_library.rs:118` must be replaced. That is intended: ADR 0016 wrote it to pin a divergence, not to defend it.
 
