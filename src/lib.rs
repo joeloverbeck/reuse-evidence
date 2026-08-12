@@ -390,7 +390,12 @@ pub fn set_visibility(
     let replacement = toml::to_string(&marker).map_err(|error| {
         TerminalFailure::unsafe_failure(format!("could not encode the repository marker: {error}"))
     })?;
-    replace_file_atomically(&marker_path, replacement.as_bytes())?;
+    replace_file_atomically(&marker_path, replacement.as_bytes()).map_err(|error| {
+        TerminalFailure::unsafe_failure(format!(
+            "could not atomically replace `{}`: {error}",
+            marker_path.display()
+        ))
+    })?;
 
     Ok(Enrollment {
         effect: EnrollmentEffect::VisibilityChanged,
@@ -541,22 +546,22 @@ pub(crate) fn create_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), Te
     }
 }
 
-fn replace_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), TerminalFailure> {
+/// Durably replaces `path` with `bytes`, leaving no partial file behind.
+///
+/// The mechanism is shared; the refusal wording is not. Every caller names the
+/// file it was publishing, so this returns the underlying I/O error rather than
+/// a classified failure that would have to be worded for all of them.
+pub(crate) fn replace_file_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let temporary_path = temporary_path_for(path);
     let result = (|| {
         write_temporary_file(&temporary_path, bytes)?;
         fs::rename(&temporary_path, path)?;
-        sync_parent(path)?;
-        Ok::<(), std::io::Error>(())
+        sync_parent(path)
     })();
-    if let Err(error) = result {
+    if result.is_err() {
         let _ = fs::remove_file(&temporary_path);
-        return Err(TerminalFailure::unsafe_failure(format!(
-            "could not atomically replace `{}`: {error}",
-            path.display()
-        )));
     }
-    Ok(())
+    result
 }
 
 fn write_temporary_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {

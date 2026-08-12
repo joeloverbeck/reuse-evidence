@@ -7,8 +7,6 @@ use std::path::{Path, PathBuf};
 
 use crate::marker::{self, MarkerRead, UnreadableMarker, UnsupportedMarker};
 use crate::{TerminalFailure, Visibility};
-#[cfg(feature = "cli")]
-use atomic_write_file::AtomicWriteFile;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -745,19 +743,12 @@ fn save_state(path: &Path, state: &PortfolioState) -> Result<(), TerminalFailure
     if fs::read(path).is_ok_and(|current| current == bytes.as_bytes()) {
         return Ok(());
     }
-    replace_state_atomically(path, bytes.as_bytes()).map_err(|error| {
+    crate::replace_file_atomically(path, bytes.as_bytes()).map_err(|error| {
         TerminalFailure::unsafe_failure(format!(
             "user-local portfolio state `{}` cannot be published atomically: {error}",
             path.display()
         ))
     })
-}
-
-#[cfg(feature = "cli")]
-fn replace_state_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut temporary = AtomicWriteFile::open(path)?;
-    temporary.write_all(bytes)?;
-    temporary.commit()
 }
 
 /// Selects the roots to scan, refusing when neither the command line nor the
