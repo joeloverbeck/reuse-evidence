@@ -238,7 +238,7 @@ impl Publication {
     }
 
     pub(super) fn publish<C, B, V>(
-        self,
+        &self,
         target: PublicationTarget<'_>,
         event: PreparedEvent<'_>,
         mut read_case: impl FnMut() -> Result<C, TerminalFailure>,

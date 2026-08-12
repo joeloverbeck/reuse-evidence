@@ -114,6 +114,11 @@ define_event_types! {
         slug: "reuse-decision-accepted",
         position: Later
     },
+    VerificationRecorded => {
+        body: "verification_recorded",
+        slug: "verification-recorded",
+        position: Later
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

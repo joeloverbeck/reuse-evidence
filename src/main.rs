@@ -119,6 +119,23 @@ enum CaseCommand {
         #[arg(long)]
         preview: bool,
     },
+    /// Record verification and dispose of a case against its accepted decision.
+    Verify {
+        /// Opaque identity of the stewarded case whose consequence was verified.
+        case_id: String,
+        /// Revision the verification was prepared against.
+        #[arg(long)]
+        expected_revision: Option<i64>,
+        /// TOML proposal containing every verification result and the disposition.
+        #[arg(long)]
+        proposal: Option<PathBuf>,
+        /// Portfolio root for participant resolution; overrides configuration.
+        #[arg(long)]
+        root: Vec<PathBuf>,
+        /// Render the exact event and privacy consequence without writing.
+        #[arg(long)]
+        preview: bool,
+    },
     /// Project the implementation handoff from an accepted reuse decision.
     Brief {
         /// Opaque identity of the stewarded case whose brief should be projected.
@@ -133,7 +150,7 @@ enum CaseCommand {
         #[arg(long)]
         root: Vec<PathBuf>,
     },
-    /// Show one stewarded case and its complete recorded occurrences.
+    /// Show one stewarded case and its complete recorded evidence history.
     Show {
         /// Opaque case identity to show.
         case_id: String,
@@ -234,6 +251,19 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
             root,
             preview,
         } => run_decide(
+            &case_id,
+            expected_revision,
+            proposal.as_deref(),
+            &portfolio::PortfolioLocation::from_environment(root),
+            preview,
+        ),
+        CaseCommand::Verify {
+            case_id,
+            expected_revision,
+            proposal,
+            root,
+            preview,
+        } => run_verify(
             &case_id,
             expected_revision,
             proposal.as_deref(),
@@ -365,6 +395,39 @@ fn run_decide(
         )
     })?;
     let outcome = case::decide(
+        Path::new("."),
+        case_id,
+        expected_revision,
+        proposal,
+        location,
+        RecordedInstant::now()?,
+        preview,
+    )?;
+    write_stdout(&outcome.to_string())
+}
+
+fn run_verify(
+    case_id: &str,
+    expected_revision: Option<i64>,
+    proposal: Option<&Path>,
+    location: &portfolio::PortfolioLocation,
+    preview: bool,
+) -> Result<(), TerminalFailure> {
+    let expected_revision = expected_revision.ok_or_else(|| {
+        TerminalFailure::refusal(
+            "missing required `--expected-revision`",
+            format!(
+                "run `case show {case_id}` to recover the current revision, then rerun `case verify {case_id} --expected-revision <REVISION>`"
+            ),
+        )
+    })?;
+    let proposal = proposal.ok_or_else(|| {
+        TerminalFailure::refusal(
+            "missing required `--proposal`",
+            "rerun with `case verify <CASE_ID> --proposal <PATH>`",
+        )
+    })?;
+    let outcome = case::verify(
         Path::new("."),
         case_id,
         expected_revision,

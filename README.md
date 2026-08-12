@@ -8,11 +8,11 @@ The project is deliberately not a clone detector and not an automatic refactorin
 
 ## Status
 
-**Repository enrollment, marker-only portfolio reporting with derived change state, durable case opening, growth, early-review authorization, accepted reuse decisions, implementation-brief projection, reading, and skill governance implemented.**
+**Repository enrollment, marker-only portfolio reporting with derived change state, and the durable case lifecycle from opening through verification disposition are implemented, together with implementation-brief projection, reading, and skill governance.**
 
 The public Rust crate and standalone `reuse-evidence` binary can enroll a Git repository, including an npm workspace with no Cargo project. Enrollment writes a human-readable version 1 TOML marker at the nearest repository root, safely revalidates an existing marker without minting another identity, and uses the binary's shared success, unsafe-failure, and refusal exit meanings.
 
-Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, unsupported or unreadable markers, and new, moved, unavailable, visibility-changed, or identity-substituted repositories. The case command can preview and atomically open a steward-local case from two or more evidenced occurrences, append a later occurrence against an expected revision, record a human early-review override on a watching case, record the exact accepted decision on a review-ready case, project that decision's implementation brief, list every case stewarded by the current repository, and show one case's complete evidence record with freshly derived lifecycle, privacy-conflict, and staleness conditions. The binary also mounts the published `skill-evidence` lifecycle under `reuse-evidence skills` and this repository commits the four operator packages it installs. Capture, reuse-review proposal authoring, verification, and this project's own `reuse-evidence-*` skill packages are not implemented yet.
+Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, unsupported or unreadable markers, and new, moved, unavailable, visibility-changed, or identity-substituted repositories. The case command can preview and atomically open a steward-local case from two or more evidenced occurrences, append a later occurrence against an expected revision, record a human early-review override on a watching case, record the exact accepted decision on a review-ready case, project that decision's implementation brief, record verification with a closed, parked, or reopened disposition, list every case stewarded by the current repository, and show one case's complete evidence record with freshly derived lifecycle, privacy-conflict, and staleness conditions. The binary also mounts the published `skill-evidence` lifecycle under `reuse-evidence skills` and this repository commits the four operator packages it installs. Capture, reuse-review proposal authoring, and this project's own `reuse-evidence-*` skill packages are not implemented yet.
 
 The selected delivery constraints are:
 
@@ -186,7 +186,7 @@ reuse-evidence case append 00000000-0000-4000-8000-000000000011 \
 
 Save the exact `event:` bytes after approval and repeat without `--preview`. A successful revision-1 append exclusively creates `0002-occurrence-appended.toml`, modifies no existing event, and reports the case identity, file, resulting revision, derived state, readiness basis, and privacy consequence. A third occurrence derives `review-ready` with `readiness_basis: occurrence-count`; the receipt explicitly states that this authorizes semantic review and does not authorize extraction.
 
-An expected revision that does not match refuses without writing. Retrying the exact prepared event at its occupied sequence reports the occurrence as already recorded with success; a different event identity at that sequence is a revision conflict. Unknown cases, a repeated participant-and-consumer pair, and a private participant under a currently public steward also refuse without writing. Participant resolution uses the same `--root` overrides or user-local portfolio configuration as case opening. Because an exact retry writes nothing, it succeeds even when participants cannot be resolved: every later event type then reports `privacy: unknown` and a footer naming whether no root selection is configured or a recorded participant no longer resolves to exactly one enrolled repository. Every later-event writer serializes its fresh revision check through a transient operating-system lock on the immutable opening event, then holds that lock through exclusive creation of the typed next event; concurrent append and override operations against one revision cannot both publish.
+An expected revision that does not match refuses without writing. Retrying the exact prepared event at its occupied sequence reports the occurrence as already recorded with success; a different event identity at that sequence is a revision conflict. Unknown cases, a repeated participant-and-consumer pair, and a private participant under a currently public steward also refuse without writing. Participant resolution uses the same `--root` overrides or user-local portfolio configuration as case opening. Because an exact retry writes nothing, it succeeds even when participants cannot be resolved: every later event type then reports `privacy: unknown` and a footer naming whether no root selection is configured or a recorded participant no longer resolves to exactly one enrolled repository. Every later-event writer serializes its fresh revision check through a transient operating-system lock on the immutable opening event, then holds that lock through exclusive creation of the typed next event; concurrent writers against one revision cannot both publish.
 
 ## Authorize early review
 
@@ -277,6 +277,56 @@ For an implementation-authorizing action, the output carries the accepted respon
 
 With resolvable portfolio roots, the brief reports the same current private-dominance consequence as event receipts. Without portfolio configuration it still succeeds, reports `privacy: unknown` with the conservative conditions-unavailable footer, and renders the handoff from durable case state. The text is command output under the version 0.x policy, not a separately authored or compatibility-promised document.
 
+## Record verification and dispose of a case
+
+Verification applies to a case with one accepted reuse decision. Prepare one result for every verification condition in the decision's recorded order and one result for every affected repository-and-consumer pair, then choose the human disposition:
+
+```toml
+disposition = "closed" # closed | parked | reopened
+
+[[condition_results]]
+condition = "all named consumers pass their public contract tests"
+outcome = "met" # met | not_met | accepted_exception
+
+[[condition_results.evidence]]
+kind = "commit"
+reference = "abc1234"
+path = "tests/contract.rs"
+
+[[consumer_results]]
+repository_id = "00000000-0000-4000-8000-000000000013"
+consumer = "rust-release-tool"
+outcome = "met"
+
+[[consumer_results.evidence]]
+kind = "commit"
+reference = "def5678"
+
+[[consumer_results]]
+repository_id = "00000000-0000-4000-8000-000000000014"
+consumer = "web-deployment-tool"
+outcome = "accepted_exception"
+exception = "the accepted decision retained this language-specific adapter"
+```
+
+`met` and `not_met` require at least one recoverable evidence reference. `accepted_exception` instead requires a non-empty explicit reason and may omit evidence; `exception` is refused for every other outcome. Evidence uses the same version 1 `commit` kind and optional repository-relative path as occurrence evidence. The command records references only: it does not run tests, builds, scripts, or any other repository command.
+
+Recover the current revision with `case show`, then preview the exact event and privacy consequence without writing:
+
+```console
+reuse-evidence case verify 00000000-0000-4000-8000-000000000011 \
+  --expected-revision 4 --proposal verification.toml \
+  --root /home/alice/src --preview
+```
+
+Save the exact `event:` bytes after human approval and repeat without `--preview`. The command exclusively creates the next `NNNN-verification-recorded.toml`, modifies no earlier event, and reports the case, event file, resulting revision, derived state, current privacy, and disposition. A prepared exact retry succeeds without writing. If no portfolio roots are then available, that retry reports `privacy: unknown` with the conditions-unavailable footer rather than making a public claim.
+
+Completeness is checked against the standing decision, not against a new question set. A missing, extra, duplicated, reordered, or textually changed condition refuses; each condition is repeated exactly in its recorded position. A missing, extra, or duplicated affected repository-and-consumer pair also refuses. The compiled command checks coverage and consistency only; the human remains responsible for judging whether a result is met and whether an exception is acceptable.
+
+`closed` requires every condition and consumer result to be `met` or `accepted_exception`. Any `not_met` result admits only `parked` or `reopened`. A parked or reopened case may record another verification against the same accepted decision; the latest disposition derives its state while every earlier verification remains visible in `case show`. A closed case is terminal in version 0.1 and refuses every new later event. It cannot be reopened without a separately accepted capability.
+
+Every refusal exits with status `3` and writes nothing. This includes an unreadable or malformed proposal; a missing expected revision or proposal; an unrecognized disposition or outcome; empty required text; missing required evidence; an invalid or absolute evidence path; an exception missing its reason or attached to another outcome; incomplete or inconsistent condition or consumer coverage; closure over `not_met`; verification before a decision; a new event on a closed case; a stale revision; an unknown or unstewarded case; a marker fault; unresolved participants on a fresh verification; a private case under a currently public steward; and a different event identity or different bytes at the occupied sequence. Publication uses the same opening-event lock and exclusive atomic create as every later case event, so concurrent writers against one revision cannot both publish and interruption cannot expose a partial authoritative event.
+
 ## Read cases
 
 From anywhere inside an enrolled steward repository, list every case it owns without requiring portfolio configuration:
@@ -285,15 +335,15 @@ From anywhere inside an enrolled steward repository, list every case it owns wit
 reuse-evidence case list
 ```
 
-The listing reports each case identity, current revision, occurrence count, and state. Two occurrences derive `watching`; three or more derive `review-ready` with `readiness_basis: occurrence-count`; a recorded early-review override derives `review-ready` with `readiness_basis: early-review-override`; and a recorded decision dominates either route and derives `awaiting-verification` with no readiness basis. Every review-ready result states that it authorizes semantic review and does not authorize extraction.
+The listing reports each case identity, current revision, occurrence count, and state. Two occurrences derive `watching`; three or more derive `review-ready` with `readiness_basis: occurrence-count`; a recorded early-review override derives `review-ready` with `readiness_basis: early-review-override`; and a recorded decision dominates either route and derives `awaiting-verification`. The latest verification disposition then derives `closed`, `parked`, or `reopened`. Awaiting-verification and all three disposed states carry no readiness basis and authorize no review. Every review-ready result states that it authorizes semantic review and does not authorize extraction.
 
-Show the responsibility and complete occurrence evidence for one case with:
+Show the responsibility and complete recorded evidence history for one case with:
 
 ```console
 reuse-evidence case show 00000000-0000-4000-8000-000000000011
 ```
 
-Both commands rebuild their output directly from the steward's event files on every invocation and write nothing. `case show` renders a recorded override's reason, review appetite, and evidence references. With configured portfolio roots, or one or more explicit `--root` values, both reads freshly resolve participant markers and report whether the current case is `privacy_conflicted` or `stale`. Without roots, the steward-local read still succeeds and reports those two current conditions as unknown.
+Both commands rebuild their output directly from the steward's event files on every invocation and write nothing. `case show` renders a recorded override's reason, review appetite, and evidence references, followed by every verification in event order with its condition results, consumer results, evidence, accepted exceptions, and disposition. A later closure never hides an earlier failed verification. With configured portfolio roots, or one or more explicit `--root` values, both reads freshly resolve participant markers and report whether the current case is `privacy_conflicted` or `stale`, including for closed, parked, and reopened cases. Without roots, the steward-local read still succeeds and reports those two current conditions as unknown.
 
 A current public steward with recorded-private case evidence or any currently private recorded participant is privacy-conflicted. If no definite conflict is established and any participant identity does not resolve to exactly one discoverable enrollment, `privacy_conflicted` is unknown and the case is stale; a definite conflict remains true even when another participant is unresolved. Historical occurrences remain fully visible. A duplicate or missing event sequence makes the read refuse with the condition and recovery action instead of deriving a plausible result from damaged history. No cache, index, projection file, score, percentage, ranking, duplication measure, or health metric is produced.
 

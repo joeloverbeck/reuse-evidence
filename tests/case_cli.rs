@@ -399,6 +399,12 @@ fn no_change_decision_proposal() -> String {
     )
 }
 
+fn closed_verification_proposal() -> String {
+    format!(
+        "disposition = \"closed\"\n\n[[condition_results]]\ncondition = \"all named consumers pass their public contract tests\"\noutcome = \"met\"\n\n[[condition_results.evidence]]\nkind = \"commit\"\nreference = \"6666666\"\npath = \"tests/contract.rs\"\n\n[[consumer_results]]\nrepository_id = \"{FIRST_PARTICIPANT_ID}\"\nconsumer = \"rust-release-tool\"\noutcome = \"met\"\n\n[[consumer_results.evidence]]\nkind = \"commit\"\nreference = \"7777777\"\n\n[[consumer_results]]\nrepository_id = \"{SECOND_PARTICIPANT_ID}\"\nconsumer = \"web-deployment-tool\"\noutcome = \"accepted_exception\"\nexception = \"the accepted decision retained this language-specific adapter\"\n"
+    )
+}
+
 fn record_overridden_decision_then_append(fixture: &Fixture, steward: &Path) {
     fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
     fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "private");
@@ -490,6 +496,58 @@ fn record_three_occurrence_decision(fixture: &Fixture, steward: &Path, decision:
         ],
     );
     assert_eq!(decided.status.code(), Some(0), "{decided:?}");
+}
+
+#[test]
+fn case_verify_success_uses_stdout_and_exit_zero() {
+    let fixture = Fixture::new("verify-terminal-contract");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    record_three_occurrence_decision(&fixture, &steward, &change_decision_proposal());
+    let proposal = fixture.proposal(&closed_verification_proposal());
+    let proposal_path = proposal.to_str().expect("fixture path should be UTF-8");
+    let root = fixture.root.to_str().expect("fixture path should be UTF-8");
+
+    let recorded = run_in(
+        &steward,
+        &[
+            "case",
+            "verify",
+            SECOND_CASE_ID,
+            "--expected-revision",
+            "2",
+            "--proposal",
+            proposal_path,
+            "--root",
+            root,
+        ],
+    );
+
+    assert_eq!(recorded.status.code(), Some(0), "{recorded:?}");
+    assert!(recorded.stderr.is_empty(), "{recorded:?}");
+    assert!(
+        String::from_utf8(recorded.stdout)
+            .expect("stdout should be UTF-8")
+            .starts_with(&format!(
+                "recorded verification: closed\ncase_id: {SECOND_CASE_ID}\n"
+            )),
+        "a successful verification must be routed to stdout"
+    );
+}
+
+#[test]
+fn case_verify_missing_proposal_uses_the_refusal_terminal_contract() {
+    let fixture = Fixture::new("verify-missing-proposal");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    let refused = run_in(
+        &steward,
+        &["case", "verify", SECOND_CASE_ID, "--expected-revision", "3"],
+    );
+    assert_eq!(refused.status.code(), Some(3), "{refused:?}");
+    assert!(refused.stdout.is_empty(), "{refused:?}");
+    assert_eq!(
+        String::from_utf8(refused.stderr).expect("stderr should be UTF-8"),
+        "refusal: missing required `--proposal`\nresolution: rerun with `case verify <CASE_ID> --proposal <PATH>`\n"
+    );
 }
 
 #[test]

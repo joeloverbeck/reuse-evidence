@@ -26,6 +26,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const CASE_OPENED_AT_1: &str = "0001-case-opened.toml";
 pub const OCCURRENCE_APPENDED_AT_2: &str = "0002-occurrence-appended.toml";
 pub const EARLY_REVIEW_AUTHORIZED_AT_2: &str = "0002-early-review-authorized.toml";
+pub const VERIFICATION_RECORDED_AT_3: &str = "0003-verification-recorded.toml";
 
 /// A uniquely named temporary directory that is removed when the fixture drops.
 ///

@@ -89,7 +89,7 @@ impl Display for EventReceipt<'_> {
         }
         write_privacy_line(self.privacy, formatter)?;
         if let Some(notice) = self.notice {
-            writeln!(formatter, "decision: {notice}")?;
+            writeln!(formatter, "{notice}")?;
         }
         if let Some(event) = self.preview_event {
             formatter.write_str("event:\n")?;
@@ -360,11 +360,76 @@ impl Display for ShowOutcome {
                 }
             }
         }
+        write_verifications(formatter, case)?;
         if !self.portfolio_available {
             formatter.write_str(PORTFOLIO_UNAVAILABLE_FOOTER)?;
         }
         Ok(())
     }
+}
+
+fn write_verifications(formatter: &mut Formatter<'_>, case: &CaseRecord) -> fmt::Result {
+    if case.verifications.is_empty() {
+        return Ok(());
+    }
+    formatter.write_str("verifications:\n")?;
+    for verification in &case.verifications {
+        writeln!(
+            formatter,
+            "- disposition: {}\n  condition_results:",
+            verification.content.disposition.label()
+        )?;
+        for result in &verification.content.condition_results {
+            writeln!(
+                formatter,
+                "  - condition: {}\n    outcome: {}",
+                result.condition,
+                result.outcome.label()
+            )?;
+            if let Some(exception) = &result.exception {
+                writeln!(formatter, "    exception: {exception}")?;
+            }
+            write_verification_evidence(formatter, &result.evidence)?;
+        }
+        formatter.write_str("  consumer_results:\n")?;
+        for result in &verification.content.consumer_results {
+            writeln!(
+                formatter,
+                "  - repository_id: {}\n    consumer: {}\n    outcome: {}",
+                result.repository_id,
+                result.consumer,
+                result.outcome.label()
+            )?;
+            if let Some(exception) = &result.exception {
+                writeln!(formatter, "    exception: {exception}")?;
+            }
+            write_verification_evidence(formatter, &result.evidence)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_verification_evidence(
+    formatter: &mut Formatter<'_>,
+    evidence: &[super::EvidenceReference],
+) -> fmt::Result {
+    if evidence.is_empty() {
+        formatter.write_str("    evidence: []\n")?;
+        return Ok(());
+    }
+    formatter.write_str("    evidence:\n")?;
+    for reference in evidence {
+        writeln!(
+            formatter,
+            "    - kind: {}\n      reference: {}",
+            reference.kind.label(),
+            reference.reference
+        )?;
+        if let Some(path) = &reference.path {
+            writeln!(formatter, "      path: {path}")?;
+        }
+    }
+    Ok(())
 }
 
 /// Renders a deterministic steward-local case listing.

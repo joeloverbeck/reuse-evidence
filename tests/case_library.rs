@@ -24,7 +24,7 @@ use std::sync::Barrier;
 
 use reuse_evidence::case::{self, RecordedInstant};
 use reuse_evidence::portfolio::PortfolioLocation;
-use reuse_evidence::{ExitMeaning, Visibility, enroll};
+use reuse_evidence::{ExitMeaning, TerminalFailure, Visibility, enroll};
 use support::TempRoot;
 
 const CASE_ID: &str = "00000000-0000-4000-8000-000000000011";
@@ -32,6 +32,7 @@ const STEWARD_ID: &str = "00000000-0000-4000-8000-000000000012";
 const FIRST_PARTICIPANT_ID: &str = "00000000-0000-4000-8000-000000000013";
 const SECOND_PARTICIPANT_ID: &str = "00000000-0000-4000-8000-000000000014";
 const THIRD_PARTICIPANT_ID: &str = "00000000-0000-4000-8000-000000000015";
+const FOURTH_PARTICIPANT_ID: &str = "00000000-0000-4000-8000-000000000016";
 
 /// A fixed instant inside the four-digit-year range `recorded_at` accepts.
 const PINNED_UNIX_SECONDS: i64 = 1_760_000_000;
@@ -87,6 +88,47 @@ fn early_review_override_proposal() -> String {
         .to_owned()
 }
 
+fn three_occurrence_proposal() -> String {
+    format!(
+        "case_id = \"{CASE_ID}\"\nresponsibility = \"normalize durable event identities\"\n\n[[occurrences]]\nrepository_id = \"{FIRST_PARTICIPANT_ID}\"\nconsumer = \"rust-release-tool\"\nindependence = \"separate release lifecycle\"\n\n[[occurrences.evidence]]\nkind = \"commit\"\nreference = \"1111111\"\npath = \"src/event.rs\"\n\n[[occurrences]]\nrepository_id = \"{SECOND_PARTICIPANT_ID}\"\nconsumer = \"web-deployment-tool\"\nindependence = \"independent npm workspace and owner\"\n\n[[occurrences.evidence]]\nkind = \"commit\"\nreference = \"2222222\"\npath = \"packages/events/src/id.ts\"\n\n[[occurrences]]\nrepository_id = \"{THIRD_PARTICIPANT_ID}\"\nconsumer = \"desktop-packager\"\nindependence = \"separate distribution contract\"\n\n[[occurrences.evidence]]\nkind = \"commit\"\nreference = \"3333333\"\npath = \"src/package.rs\"\n"
+    )
+}
+
+fn change_decision_proposal() -> String {
+    format!(
+        "identity_verdict = \"same_responsibility\"\naction = \"publish_public_package\"\naccepted_scope = \"the durable event identity contract\"\nnon_responsibilities = [\"case lifecycle storage\"]\ncompatibility_consequences = \"preserve the existing event identity spelling\"\nverification_conditions = [\"all named consumers pass their public contract tests\"]\ninvariant_contract = \"one opaque UUID identifies one immutable event\"\nrequired_consumer_level_tests = [\"each consumer round-trips an event identity\"]\nrollback_or_resplitting_path = \"restore consumer-local implementations without rewriting recorded evidence\"\n\n[[affected_consumers]]\nrepository_id = \"{FIRST_PARTICIPANT_ID}\"\nconsumer = \"rust-release-tool\"\nexpectation = \"migrate after the package publishes\"\n\n[[affected_consumers]]\nrepository_id = \"{SECOND_PARTICIPANT_ID}\"\nconsumer = \"web-deployment-tool\"\nexpectation = \"retain its language-specific adapter\"\n\n[[alternatives_rejected]]\nalternative = \"retain intentional duplication\"\nreason = \"coordinated fixes already cross the consumer boundary\"\n\n[[existing_packages_considered]]\npackage = \"uuid\"\nfit = \"supplies identifiers but not the event contract\"\nreason = \"the invariant remains portfolio-owned\"\n\n[[migration_expectations]]\norder = 1\nexpectation = \"publish the invariant contract and its tests\"\n"
+    )
+}
+
+fn closed_verification_proposal() -> String {
+    format!(
+        "disposition = \"closed\"\n\n[[condition_results]]\ncondition = \"all named consumers pass their public contract tests\"\noutcome = \"met\"\n\n[[condition_results.evidence]]\nkind = \"commit\"\nreference = \"4444444\"\npath = \"tests/contract.rs\"\n\n[[consumer_results]]\nrepository_id = \"{FIRST_PARTICIPANT_ID}\"\nconsumer = \"rust-release-tool\"\noutcome = \"met\"\n\n[[consumer_results.evidence]]\nkind = \"commit\"\nreference = \"5555555\"\n\n[[consumer_results]]\nrepository_id = \"{SECOND_PARTICIPANT_ID}\"\nconsumer = \"web-deployment-tool\"\noutcome = \"accepted_exception\"\nexception = \"the accepted decision retained this language-specific adapter\"\n"
+    )
+}
+
+fn unsuccessful_verification_proposal(disposition: &str) -> String {
+    format!(
+        "disposition = \"{disposition}\"\n\n[[condition_results]]\ncondition = \"all named consumers pass their public contract tests\"\noutcome = \"not_met\"\n\n[[condition_results.evidence]]\nkind = \"commit\"\nreference = \"8888888\"\npath = \"tests/failing-contract.rs\"\n\n[[consumer_results]]\nrepository_id = \"{FIRST_PARTICIPANT_ID}\"\nconsumer = \"rust-release-tool\"\noutcome = \"not_met\"\n\n[[consumer_results.evidence]]\nkind = \"commit\"\nreference = \"9999999\"\n\n[[consumer_results]]\nrepository_id = \"{SECOND_PARTICIPANT_ID}\"\nconsumer = \"web-deployment-tool\"\noutcome = \"accepted_exception\"\nexception = \"the accepted decision retained this language-specific adapter\"\n"
+    )
+}
+
+fn fourth_occurrence_proposal() -> String {
+    format!(
+        "[occurrence]\nrepository_id = \"{FOURTH_PARTICIPANT_ID}\"\nconsumer = \"mobile-packager\"\nindependence = \"separate mobile release contract\"\n\n[[occurrence.evidence]]\nkind = \"commit\"\nreference = \"6666666\"\npath = \"src/mobile.rs\"\n"
+    )
+}
+
+fn verification_without_condition_result() -> String {
+    format!(
+        "disposition = \"closed\"\ncondition_results = []\n\n[[consumer_results]]\nrepository_id = \"{FIRST_PARTICIPANT_ID}\"\nconsumer = \"rust-release-tool\"\noutcome = \"met\"\n\n[[consumer_results.evidence]]\nkind = \"commit\"\nreference = \"5555555\"\n\n[[consumer_results]]\nrepository_id = \"{SECOND_PARTICIPANT_ID}\"\nconsumer = \"web-deployment-tool\"\noutcome = \"accepted_exception\"\nexception = \"the accepted decision retained this language-specific adapter\"\n"
+    )
+}
+
+fn verification_without_consumer_result() -> String {
+    "disposition = \"closed\"\nconsumer_results = []\n\n[[condition_results]]\ncondition = \"all named consumers pass their public contract tests\"\noutcome = \"met\"\n\n[[condition_results.evidence]]\nkind = \"commit\"\nreference = \"4444444\"\npath = \"tests/contract.rs\"\n"
+        .to_owned()
+}
+
 /// Enrolls a private steward and two public participants, then opens one case at the pinned
 /// instant. Returns the steward repository.
 fn steward_with_one_open_case(fixture: &Fixture) -> PathBuf {
@@ -101,6 +143,31 @@ fn steward_with_one_open_case(fixture: &Fixture) -> PathBuf {
     steward
 }
 
+/// Enrolls a private steward and three public participants, opens a review-ready case, and records
+/// its accepted decision. Returns the steward repository at revision 2.
+fn steward_with_decided_case(fixture: &Fixture) -> PathBuf {
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "public");
+    fixture.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+
+    let opening = fixture.write("open-case.toml", &three_occurrence_proposal());
+    case::open(&steward, &opening, &fixture.location(), pinned(), false)
+        .expect("opening a three-occurrence case should succeed");
+    let decision = fixture.write("decision.toml", &change_decision_proposal());
+    case::decide(
+        &steward,
+        CASE_ID,
+        1,
+        &decision,
+        &fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect("recording the accepted decision should succeed");
+    steward
+}
+
 fn case_directory(steward: &Path) -> PathBuf {
     steward.join("reuse-evidence/cases").join(CASE_ID)
 }
@@ -111,6 +178,952 @@ fn make_marker_unreadable(repository: &Path) {
     let marker = repository.join("reuse-evidence.toml");
     fs::remove_file(&marker).expect("marker fixture should be removable");
     fs::create_dir(&marker).expect("marker path should become an unreadable directory");
+}
+
+fn event_files(steward: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut files = fs::read_dir(case_directory(steward))
+        .expect("case directory should be readable")
+        .map(|entry| {
+            let path = entry.expect("case event should be readable").path();
+            let bytes = fs::read(&path).expect("case event bytes should be readable");
+            (path, bytes)
+        })
+        .collect::<Vec<_>>();
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    files
+}
+
+fn refused_verification(
+    steward: &Path,
+    expected_revision: i64,
+    proposal: &Path,
+    location: &PortfolioLocation,
+) -> TerminalFailure {
+    let before = event_files(steward);
+    let failure = case::verify(
+        steward,
+        CASE_ID,
+        expected_revision,
+        proposal,
+        location,
+        pinned(),
+        false,
+    )
+    .expect_err("the proposed verification should refuse");
+    assert_eq!(failure.meaning(), ExitMeaning::Refusal, "{failure}");
+    assert_eq!(
+        event_files(steward),
+        before,
+        "a verification refusal must preserve every recorded event byte"
+    );
+    failure
+}
+
+#[test]
+fn a_closed_verification_preview_applies_the_exact_approved_event_bytes() {
+    preview_and_record_closed_verification();
+}
+
+struct RecordedClosedVerification {
+    fixture: Fixture,
+    steward: PathBuf,
+    proposal: PathBuf,
+    previewed_event: String,
+    brief_before: String,
+}
+
+fn preview_and_record_closed_verification() -> RecordedClosedVerification {
+    let fixture = Fixture::new("closed-verification");
+    let steward = steward_with_decided_case(&fixture);
+    let proposal = fixture.write("verification.toml", &closed_verification_proposal());
+    let event_path = case_directory(&steward).join(support::VERIFICATION_RECORDED_AT_3);
+    let brief_before = case::brief(&steward, CASE_ID, &fixture.location())
+        .expect("a decided case should project its brief")
+        .to_string();
+
+    let preview = case::verify(
+        &steward,
+        CASE_ID,
+        2,
+        &proposal,
+        &fixture.location(),
+        pinned(),
+        true,
+    )
+    .expect("a complete closing verification should preview");
+    let rendered_preview = preview.to_string();
+    assert!(
+        rendered_preview.starts_with(&format!(
+            "verification preview: closed\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/{}\nrevision: 3\nstate: closed\nprivacy: private\ndisposition: closed\nevent:\n",
+            support::VERIFICATION_RECORDED_AT_3
+        )),
+        "{rendered_preview}"
+    );
+    assert!(!event_path.exists(), "a preview must not publish an event");
+    let previewed_event = rendered_preview
+        .split_once("event:\n")
+        .expect("a preview should delimit its exact event")
+        .1
+        .to_owned();
+    assert!(
+        previewed_event.starts_with(concat!(
+            "schema_version = 1\n",
+            "sequence = 3\n",
+            "event_id = \""
+        )),
+        "{previewed_event}"
+    );
+    assert!(
+        previewed_event.contains(
+            "event_type = \"verification_recorded\"\nrecorded_at = \"2025-10-09T08:53:20Z\"\ndisposition = \"closed\"\n"
+        ),
+        "{previewed_event}"
+    );
+
+    fs::write(&proposal, &previewed_event).expect("the approved event should be reusable");
+    let recorded = case::verify(
+        &steward,
+        CASE_ID,
+        2,
+        &proposal,
+        &fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect("the approved verification should publish");
+    assert_eq!(
+        recorded.to_string(),
+        format!(
+            "recorded verification: closed\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/{}\nrevision: 3\nstate: closed\nprivacy: private\ndisposition: closed\n",
+            support::VERIFICATION_RECORDED_AT_3
+        )
+    );
+    assert_eq!(
+        fs::read_to_string(&event_path).expect("the verification event should be readable"),
+        previewed_event,
+        "the approved preview bytes must be the recorded bytes"
+    );
+
+    RecordedClosedVerification {
+        fixture,
+        steward,
+        proposal,
+        previewed_event,
+        brief_before,
+    }
+}
+
+fn record_closed_verification(name: &str) -> RecordedClosedVerification {
+    let fixture = Fixture::new(name);
+    let steward = steward_with_decided_case(&fixture);
+    let proposal = fixture.write("verification.toml", &closed_verification_proposal());
+    let brief_before = case::brief(&steward, CASE_ID, &fixture.location())
+        .expect("a decided case should project its brief")
+        .to_string();
+    case::verify(
+        &steward,
+        CASE_ID,
+        2,
+        &proposal,
+        &fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect("the complete closing verification should publish");
+    let previewed_event =
+        fs::read_to_string(case_directory(&steward).join(support::VERIFICATION_RECORDED_AT_3))
+            .expect("the recorded verification should be readable");
+    fs::write(&proposal, &previewed_event)
+        .expect("the exact recorded verification should be reusable as a prepared retry");
+    RecordedClosedVerification {
+        fixture,
+        steward,
+        proposal,
+        previewed_event,
+        brief_before,
+    }
+}
+
+#[test]
+fn an_exact_prepared_verification_retry_is_write_free_before_portfolio_resolution() {
+    let recorded = record_closed_verification("exact-verification-retry");
+    let steward = recorded.steward.as_path();
+    let proposal = recorded.proposal.as_path();
+    let recorded_files = event_files(steward);
+    let unavailable_portfolio = PortfolioLocation::from_user_directories(Vec::new(), None, None);
+    let retried = case::verify(
+        steward,
+        CASE_ID,
+        2,
+        proposal,
+        &unavailable_portfolio,
+        pinned(),
+        false,
+    )
+    .expect("an exact verification retry should not need portfolio resolution");
+    assert_eq!(
+        retried.to_string(),
+        format!(
+            "verification already recorded: closed\ncase_id: {CASE_ID}\nfile: reuse-evidence/cases/{CASE_ID}/{}\nrevision: 3\nstate: closed\nprivacy: unknown\nportfolio conditions unavailable: configure portfolio roots or supply `--root <PATH>` to derive privacy conflicts and staleness\ndisposition: closed\n",
+            support::VERIFICATION_RECORDED_AT_3
+        )
+    );
+    assert_eq!(
+        event_files(steward),
+        recorded_files,
+        "an exact retry must preserve every event byte"
+    );
+}
+
+#[test]
+fn an_occupied_verification_sequence_refuses_a_different_prepared_identity_without_writing() {
+    let recorded = record_closed_verification("verification-identity-conflict");
+    let fixture = &recorded.fixture;
+    let steward = recorded.steward.as_path();
+    let proposal = recorded.proposal.as_path();
+    let previewed_event = recorded.previewed_event.as_str();
+    let recorded_event_id_line = previewed_event
+        .lines()
+        .find(|line| line.starts_with("event_id = "))
+        .expect("the prepared event should record its identity");
+    let conflicting_identity = previewed_event.replacen(
+        recorded_event_id_line,
+        "event_id = \"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\"",
+        1,
+    );
+    fs::write(proposal, conflicting_identity)
+        .expect("the conflicting prepared identity should be writable");
+    let failure = refused_verification(steward, 2, proposal, &fixture.location());
+    assert!(
+        failure
+            .to_string()
+            .contains("has a revision conflict at sequence 3"),
+        "{failure}"
+    );
+}
+
+#[test]
+fn an_occupied_verification_sequence_refuses_prepared_content_drift_without_writing() {
+    let recorded = record_closed_verification("verification-content-drift");
+    let fixture = &recorded.fixture;
+    let steward = recorded.steward.as_path();
+    let proposal = recorded.proposal.as_path();
+    let previewed_event = recorded.previewed_event.as_str();
+    let drifting_content =
+        previewed_event.replacen("reference = \"4444444\"", "reference = \"4444445\"", 1);
+    fs::write(proposal, drifting_content)
+        .expect("the content-drifting prepared event should be writable");
+    let failure = refused_verification(steward, 2, proposal, &fixture.location());
+    assert!(
+        failure.to_string().contains(
+            "is already recorded with different content\nresolution: restore the exact previewed verification event before retrying"
+        ),
+        "{failure}"
+    );
+}
+
+#[test]
+fn closed_case_projections_have_no_readiness_and_retain_current_portfolio_conditions() {
+    let recorded = record_closed_verification("closed-case-projections");
+    let fixture = &recorded.fixture;
+    let steward = recorded.steward.as_path();
+    let shown = case::show(steward, CASE_ID, &fixture.location())
+        .expect("the closed case should remain readable")
+        .to_string();
+    assert!(
+        shown.contains("revision: 3\noccurrence_count: 3\nstate: closed\n"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("privacy_conflicted: false\nstale: false\n"),
+        "a closed case must retain current portfolio conditions: {shown}"
+    );
+    let listed = case::list(steward, &fixture.location())
+        .expect("the closed case should remain listable")
+        .to_string();
+    assert!(listed.contains("  state: closed\n"), "{listed}");
+    assert!(
+        !listed.contains("readiness_basis:"),
+        "a closed case has no readiness basis: {listed}"
+    );
+    assert!(
+        listed.contains("  privacy_conflicted: false\n  stale: false\n"),
+        "a closed case must retain current portfolio conditions: {listed}"
+    );
+}
+
+#[test]
+fn case_show_renders_every_verification_result_evidence_and_exception() {
+    let recorded = record_closed_verification("closed-verification-show");
+    let shown = case::show(&recorded.steward, CASE_ID, &recorded.fixture.location())
+        .expect("the closed case should remain readable")
+        .to_string();
+    assert!(
+        shown.contains(&format!(
+            "verifications:\n- disposition: closed\n  condition_results:\n  - condition: all named consumers pass their public contract tests\n    outcome: met\n    evidence:\n    - kind: commit\n      reference: 4444444\n      path: tests/contract.rs\n  consumer_results:\n  - repository_id: {FIRST_PARTICIPANT_ID}\n    consumer: rust-release-tool\n    outcome: met\n    evidence:\n    - kind: commit\n      reference: 5555555\n  - repository_id: {SECOND_PARTICIPANT_ID}\n    consumer: web-deployment-tool\n    outcome: accepted_exception\n    exception: the accepted decision retained this language-specific adapter\n    evidence: []\n"
+        )),
+        "{shown}"
+    );
+}
+
+#[test]
+fn verification_does_not_change_the_accepted_decision_brief() {
+    let recorded = record_closed_verification("verification-brief-stability");
+    assert_eq!(
+        case::brief(&recorded.steward, CASE_ID, &recorded.fixture.location(),)
+            .expect("verification must not change the projected decision")
+            .to_string(),
+        recorded.brief_before,
+        "case brief must remain the accepted-decision projection"
+    );
+}
+
+#[test]
+fn parked_and_reopened_cases_accept_later_verification_and_latest_disposition_drives_state() {
+    let (recovery, recovery_steward, recovery_proposal) = prepare_appended_decided_case();
+    let parked = record_disposition(
+        &recovery,
+        &recovery_steward,
+        &recovery_proposal,
+        3,
+        &unsuccessful_verification_proposal("parked"),
+        "parked",
+    );
+    assert!(parked.contains("revision: 4\n"), "{parked}");
+    let parked_show = case::show(&recovery_steward, CASE_ID, &recovery.location())
+        .expect("the parked state should rebuild from its event stream")
+        .to_string();
+    assert!(
+        parked_show.contains("revision: 4\noccurrence_count: 3\nstate: parked\n")
+            && !parked_show.contains("readiness_basis:"),
+        "{parked_show}"
+    );
+
+    let reopened = record_disposition(
+        &recovery,
+        &recovery_steward,
+        &recovery_proposal,
+        4,
+        &unsuccessful_verification_proposal("reopened"),
+        "reopened",
+    );
+    assert!(reopened.contains("revision: 5\n"), "{reopened}");
+    let reopened_show = case::show(&recovery_steward, CASE_ID, &recovery.location())
+        .expect("the reopened state should rebuild from its event stream")
+        .to_string();
+    assert!(
+        reopened_show.contains("revision: 5\noccurrence_count: 3\nstate: reopened\n")
+            && !reopened_show.contains("readiness_basis:"),
+        "{reopened_show}"
+    );
+
+    let recovered = record_disposition(
+        &recovery,
+        &recovery_steward,
+        &recovery_proposal,
+        5,
+        &closed_verification_proposal(),
+        "closed",
+    );
+    assert!(recovered.contains("revision: 6\n"), "{recovered}");
+    assert_recovered_history(&recovery, &recovery_steward);
+}
+
+fn prepare_appended_decided_case() -> (Fixture, PathBuf, PathBuf) {
+    let recovery = Fixture::new("verification-recovery-loop");
+    let recovery_steward = steward_with_one_open_case(&recovery);
+    let appended_occurrence = recovery.write("append.toml", &append_occurrence_proposal());
+    let appended = case::append(
+        &recovery_steward,
+        CASE_ID,
+        1,
+        &appended_occurrence,
+        &recovery.location(),
+        pinned(),
+        false,
+    )
+    .expect("the third independent occurrence should publish")
+    .to_string();
+    assert!(
+        appended.contains("revision: 2\nstate: review-ready\n"),
+        "{appended}"
+    );
+    let recovery_decision = recovery.write("decision.toml", &change_decision_proposal());
+    case::decide(
+        &recovery_steward,
+        CASE_ID,
+        2,
+        &recovery_decision,
+        &recovery.location(),
+        pinned(),
+        false,
+    )
+    .expect("the review-ready case should record its accepted decision");
+    let recovery_proposal = recovery.write("verification.toml", "");
+    (recovery, recovery_steward, recovery_proposal)
+}
+
+fn record_disposition(
+    fixture: &Fixture,
+    steward: &Path,
+    proposal: &Path,
+    expected_revision: i64,
+    contents: &str,
+    disposition: &str,
+) -> String {
+    fs::write(proposal, contents).expect("the next verification proposal should be writable");
+    let receipt = case::verify(
+        steward,
+        CASE_ID,
+        expected_revision,
+        proposal,
+        &fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect("a parked or reopened case should accept the next verification")
+    .to_string();
+    assert!(
+        receipt.starts_with(&format!("recorded verification: {disposition}\n"))
+            && receipt.contains(&format!("state: {disposition}\n"))
+            && receipt.contains(&format!("disposition: {disposition}\n")),
+        "{receipt}"
+    );
+    receipt
+}
+
+fn assert_recovered_history(recovery: &Fixture, recovery_steward: &Path) {
+    let recovered_show = case::show(recovery_steward, CASE_ID, &recovery.location())
+        .expect("the recovered case should rebuild from its full event stream")
+        .to_string();
+    let parked_at = recovered_show
+        .find("- disposition: parked\n")
+        .expect("the failed parked verification must remain visible");
+    let reopened_at = recovered_show
+        .find("- disposition: reopened\n")
+        .expect("the failed reopened verification must remain visible");
+    let closed_at = recovered_show
+        .find("- disposition: closed\n")
+        .expect("the final closed verification must be visible");
+    assert!(
+        parked_at < reopened_at && reopened_at < closed_at,
+        "verification history must stay in event order: {recovered_show}"
+    );
+    assert!(
+        recovered_show.contains("revision: 6\noccurrence_count: 3\nstate: closed\n"),
+        "the latest verification disposition must determine state: {recovered_show}"
+    );
+}
+
+#[test]
+fn verification_refuses_a_stale_revision_without_writing() {
+    let race = Fixture::new("verification-revision-race");
+    let race_steward = steward_with_decided_case(&race);
+    let race_proposal = race.write("verification.toml", &closed_verification_proposal());
+    let stale = refused_verification(&race_steward, 1, &race_proposal, &race.location());
+    assert!(
+        stale.to_string().contains(&format!(
+            "expected revision 1 does not match case `{CASE_ID}` current revision 2"
+        )),
+        "{stale}"
+    );
+}
+
+#[test]
+fn concurrent_verification_writers_publish_exactly_one_event() {
+    let race = Fixture::new("verification-writer-race");
+    let race_steward = steward_with_decided_case(&race);
+    let race_proposal = race.write("verification.toml", &closed_verification_proposal());
+    let race_location = race.location();
+    let start = Barrier::new(2);
+    let (left, right) = std::thread::scope(|scope| {
+        let left = scope.spawn(|| {
+            start.wait();
+            case::verify(
+                &race_steward,
+                CASE_ID,
+                2,
+                &race_proposal,
+                &race_location,
+                pinned(),
+                false,
+            )
+        });
+        let right = scope.spawn(|| {
+            start.wait();
+            case::verify(
+                &race_steward,
+                CASE_ID,
+                2,
+                &race_proposal,
+                &race_location,
+                pinned(),
+                false,
+            )
+        });
+        (
+            left.join().expect("the left writer should not panic"),
+            right.join().expect("the right writer should not panic"),
+        )
+    });
+    assert_eq!(
+        [left.is_ok(), right.is_ok()]
+            .into_iter()
+            .filter(|published| *published)
+            .count(),
+        1,
+        "exactly one verification writer may publish: left={left:?}, right={right:?}"
+    );
+    let ((Err(loser), _) | (_, Err(loser))) = (&left, &right) else {
+        unreachable!("one verification writer must refuse")
+    };
+    assert_eq!(loser.meaning(), ExitMeaning::Refusal, "{loser}");
+    assert_eq!(
+        event_files(&race_steward)
+            .iter()
+            .filter(|(path, _)| {
+                path.file_name()
+                    .is_some_and(|name| name == support::VERIFICATION_RECORDED_AT_3)
+            })
+            .count(),
+        1,
+        "the losing writer must not expose a second sequence-3 event"
+    );
+}
+
+#[test]
+fn a_closed_case_refuses_a_new_later_event_without_writing() {
+    assert_closed_refuses_append();
+}
+
+fn assert_closed_refuses_append() {
+    let fixture = Fixture::new("closed-is-terminal");
+    let steward = steward_with_decided_case(&fixture);
+    let verification = fixture.write("verification.toml", &closed_verification_proposal());
+    case::verify(
+        &steward,
+        CASE_ID,
+        2,
+        &verification,
+        &fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect("the case should close");
+    fixture.repository("fourth-consumer", FOURTH_PARTICIPANT_ID, "public");
+    let append = fixture.write("append-fourth.toml", &fourth_occurrence_proposal());
+    let before = event_files(&steward);
+
+    let Err(failure) = case::append(
+        &steward,
+        CASE_ID,
+        3,
+        &append,
+        &fixture.location(),
+        pinned(),
+        false,
+    ) else {
+        panic!("a closed case must refuse every new later event");
+    };
+
+    assert_eq!(failure.meaning(), ExitMeaning::Refusal, "{failure}");
+    assert_eq!(
+        failure.to_string(),
+        format!(
+            "refusal: case `{CASE_ID}` is closed and terminal in version 0.1\nresolution: leave the closed case unchanged; later pressure requires a separately accepted capability"
+        )
+    );
+    assert_eq!(
+        event_files(&steward),
+        before,
+        "a terminal-state refusal must preserve every recorded event byte"
+    );
+}
+
+#[test]
+fn a_closed_case_refuses_a_new_verification_without_writing() {
+    let fixture = Fixture::new("closed-refuses-verification");
+    let steward = steward_with_decided_case(&fixture);
+    let verification = fixture.write("verification.toml", &closed_verification_proposal());
+    case::verify(
+        &steward,
+        CASE_ID,
+        2,
+        &verification,
+        &fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect("the case should close");
+    let failure = refused_verification(&steward, 3, &verification, &fixture.location());
+    assert_eq!(
+        failure.to_string(),
+        format!(
+            "refusal: case `{CASE_ID}` is closed and terminal in version 0.1\nresolution: leave the closed case unchanged; later pressure requires a separately accepted capability"
+        )
+    );
+}
+
+#[test]
+fn an_undecided_case_refuses_verification_without_writing() {
+    let undecided = Fixture::new("undecided-verification");
+    let undecided_steward = steward_with_one_open_case(&undecided);
+    let undecided_proposal = undecided.write("verification.toml", &closed_verification_proposal());
+    let failure = refused_verification(
+        &undecided_steward,
+        1,
+        &undecided_proposal,
+        &undecided.location(),
+    );
+    assert_eq!(
+        failure.to_string(),
+        format!(
+            "refusal: case `{CASE_ID}` has no accepted reuse decision; current state is `watching`\nresolution: record an accepted reuse decision before retrying verification"
+        )
+    );
+}
+
+#[test]
+fn an_unknown_case_refuses_verification_without_writing() {
+    let undecided = Fixture::new("unknown-case-verification");
+    let undecided_steward = steward_with_one_open_case(&undecided);
+    let undecided_proposal = undecided.write("verification.toml", &closed_verification_proposal());
+    let unknown_case_id = "00000000-0000-4000-8000-000000000099";
+    let undecided_before = event_files(&undecided_steward);
+    let unknown = case::verify(
+        &undecided_steward,
+        unknown_case_id,
+        1,
+        &undecided_proposal,
+        &undecided.location(),
+        pinned(),
+        false,
+    )
+    .expect_err("an unknown case must refuse");
+    assert_eq!(unknown.meaning(), ExitMeaning::Refusal, "{unknown}");
+    assert!(
+        unknown.to_string().contains(&format!(
+            "case identity `{unknown_case_id}` is not stewarded"
+        )),
+        "{unknown}"
+    );
+    assert_eq!(event_files(&undecided_steward), undecided_before);
+}
+
+#[test]
+fn an_unstewarded_case_refuses_verification_without_writing() {
+    let undecided = Fixture::new("unstewarded-case-verification");
+    let undecided_steward = steward_with_one_open_case(&undecided);
+    let undecided_proposal = undecided.write("verification.toml", &closed_verification_proposal());
+    let undecided_before = event_files(&undecided_steward);
+    let other_steward = undecided.repository("other-steward", FOURTH_PARTICIPANT_ID, "private");
+    let unstewarded = case::verify(
+        &other_steward,
+        CASE_ID,
+        1,
+        &undecided_proposal,
+        &undecided.location(),
+        pinned(),
+        false,
+    )
+    .expect_err("a repository that does not steward the case must refuse");
+    assert_eq!(unstewarded.meaning(), ExitMeaning::Refusal, "{unstewarded}");
+    assert!(
+        unstewarded
+            .to_string()
+            .contains(&format!("case identity `{CASE_ID}` is not stewarded")),
+        "{unstewarded}"
+    );
+    assert_eq!(event_files(&undecided_steward), undecided_before);
+}
+
+#[test]
+fn a_private_case_under_a_public_steward_refuses_verification_without_writing() {
+    let conflicted = Fixture::new("private-case-public-steward-verification");
+    let conflicted_steward = steward_with_decided_case(&conflicted);
+    support::enrollment_marker(&conflicted_steward, STEWARD_ID, "public");
+    let conflicted_proposal =
+        conflicted.write("verification.toml", &closed_verification_proposal());
+    let failure = refused_verification(
+        &conflicted_steward,
+        2,
+        &conflicted_proposal,
+        &conflicted.location(),
+    );
+    assert_eq!(
+        failure.to_string(),
+        format!(
+            "refusal: public steward `{STEWARD_ID}` cannot record verification for private case `{CASE_ID}`\nresolution: run `set-visibility --visibility private` in the steward repository, then preview verification again"
+        )
+    );
+}
+
+#[test]
+fn a_missing_condition_result_names_the_unanswered_decision_condition() {
+    let fixture = Fixture::new("missing-condition-result");
+    let steward = steward_with_decided_case(&fixture);
+    let proposal = fixture.write(
+        "verification.toml",
+        &verification_without_condition_result(),
+    );
+    let failure = refused_verification(&steward, 2, &proposal, &fixture.location());
+    assert_eq!(
+        failure.to_string(),
+        format!(
+            "refusal: verification for case `{CASE_ID}` is missing condition result 1 for `all named consumers pass their public contract tests`\nresolution: answer every accepted verification condition exactly once in its recorded order"
+        )
+    );
+}
+
+#[test]
+fn a_changed_condition_result_refuses_without_writing() {
+    let fixture = Fixture::new("changed-condition-result");
+    let steward = steward_with_decided_case(&fixture);
+    let proposal = fixture.write("verification.toml", &closed_verification_proposal());
+    let changed_condition = closed_verification_proposal().replace(
+        "all named consumers pass their public contract tests",
+        "all named consumers pass changed contract tests",
+    );
+    fs::write(&proposal, changed_condition).expect("the changed condition should be writable");
+    let failure = refused_verification(&steward, 2, &proposal, &fixture.location());
+    assert!(
+        failure.to_string().contains(
+            "condition result 1 repeats `all named consumers pass changed contract tests`, but the accepted decision records `all named consumers pass their public contract tests`"
+        ),
+        "{failure}"
+    );
+}
+
+#[test]
+fn an_extra_condition_result_refuses_without_writing() {
+    let fixture = Fixture::new("extra-condition-result");
+    let steward = steward_with_decided_case(&fixture);
+    let proposal = fixture.write("verification.toml", &closed_verification_proposal());
+    let extra_condition = format!(
+        "{}\n[[condition_results]]\ncondition = \"an unaccepted extra condition\"\noutcome = \"accepted_exception\"\nexception = \"the decision did not ask this question\"\n",
+        closed_verification_proposal()
+    );
+    fs::write(&proposal, extra_condition).expect("the extra condition should be writable");
+    let failure = refused_verification(&steward, 2, &proposal, &fixture.location());
+    assert!(
+        failure
+            .to_string()
+            .contains("records extra condition `an unaccepted extra condition`"),
+        "{failure}"
+    );
+}
+
+#[test]
+fn a_duplicate_condition_result_refuses_without_writing() {
+    let fixture = Fixture::new("duplicate-condition-result");
+    let steward = steward_with_decided_case(&fixture);
+    let proposal = fixture.write("verification.toml", &closed_verification_proposal());
+    let duplicate_condition = format!(
+        "{}\n[[condition_results]]\ncondition = \"all named consumers pass their public contract tests\"\noutcome = \"accepted_exception\"\nexception = \"duplicate answer\"\n",
+        closed_verification_proposal()
+    );
+    fs::write(&proposal, duplicate_condition).expect("the duplicate condition should be writable");
+    let failure = refused_verification(&steward, 2, &proposal, &fixture.location());
+    assert!(
+        failure.to_string().contains(
+            "records extra condition `all named consumers pass their public contract tests`"
+        ),
+        "{failure}"
+    );
+}
+
+#[test]
+fn an_accepted_exception_without_a_reason_refuses_without_writing() {
+    let fixture = Fixture::new("verification-result-rules");
+    let steward = steward_with_decided_case(&fixture);
+    let proposal = fixture.write("verification.toml", &closed_verification_proposal());
+    let exception_without_reason = closed_verification_proposal().replace(
+        "exception = \"the accepted decision retained this language-specific adapter\"\n",
+        "",
+    );
+    fs::write(&proposal, exception_without_reason)
+        .expect("the reasonless exception should be writable");
+    let failure = refused_verification(&steward, 2, &proposal, &fixture.location());
+    assert!(
+        failure
+            .to_string()
+            .contains("consumer result 2 is an accepted exception without a reason"),
+        "{failure}"
+    );
+}
+
+#[test]
+fn a_met_result_with_an_exception_reason_refuses_without_writing() {
+    let fixture = Fixture::new("met-result-with-exception");
+    let steward = steward_with_decided_case(&fixture);
+    let proposal = fixture.write("verification.toml", &closed_verification_proposal());
+    let reason_on_met = closed_verification_proposal().replace(
+        "outcome = \"met\"\n\n[[condition_results.evidence]]",
+        "outcome = \"met\"\nexception = \"not permitted for met\"\n\n[[condition_results.evidence]]",
+    );
+    fs::write(&proposal, reason_on_met).expect("the invalid met result should be writable");
+    let failure = refused_verification(&steward, 2, &proposal, &fixture.location());
+    assert!(
+        failure
+            .to_string()
+            .contains("condition result 1 outcome `met` carries an exception reason"),
+        "{failure}"
+    );
+}
+
+#[test]
+fn a_met_result_without_evidence_refuses_without_writing() {
+    let fixture = Fixture::new("met-result-without-evidence");
+    let steward = steward_with_decided_case(&fixture);
+    let proposal = fixture.write("verification.toml", &closed_verification_proposal());
+    let met_without_evidence = closed_verification_proposal().replace(
+        "\n[[condition_results.evidence]]\nkind = \"commit\"\nreference = \"4444444\"\npath = \"tests/contract.rs\"\n",
+        "",
+    );
+    fs::write(&proposal, met_without_evidence)
+        .expect("the evidence-free met result should be writable");
+    let failure = refused_verification(&steward, 2, &proposal, &fixture.location());
+    assert!(
+        failure
+            .to_string()
+            .contains("condition result 1 outcome `met` carries no evidence reference"),
+        "{failure}"
+    );
+}
+
+#[test]
+fn a_closed_disposition_with_a_not_met_result_refuses_without_writing() {
+    let fixture = Fixture::new("closed-with-not-met-result");
+    let steward = steward_with_decided_case(&fixture);
+    let proposal = fixture.write("verification.toml", &closed_verification_proposal());
+    fs::write(&proposal, unsuccessful_verification_proposal("closed"))
+        .expect("the invalid closing result should be writable");
+    let failure = refused_verification(&steward, 2, &proposal, &fixture.location());
+    assert!(
+        failure
+            .to_string()
+            .contains("disposition `closed` carries a `not_met` result"),
+        "{failure}"
+    );
+}
+
+#[test]
+fn reordered_condition_results_refuse_without_writing() {
+    let ordered = Fixture::new("condition-result-order");
+    let ordered_steward = ordered.repository("steward", STEWARD_ID, "private");
+    ordered.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    ordered.repository("second-consumer", SECOND_PARTICIPANT_ID, "public");
+    ordered.repository("third-consumer", THIRD_PARTICIPANT_ID, "public");
+    let opening = ordered.write("open-case.toml", &three_occurrence_proposal());
+    case::open(
+        &ordered_steward,
+        &opening,
+        &ordered.location(),
+        pinned(),
+        false,
+    )
+    .expect("the ordered-condition case should open");
+    let decision = change_decision_proposal().replace(
+        "verification_conditions = [\"all named consumers pass their public contract tests\"]",
+        "verification_conditions = [\"all named consumers pass their public contract tests\", \"recorded event identities remain immutable\"]",
+    );
+    let decision = ordered.write("decision.toml", &decision);
+    case::decide(
+        &ordered_steward,
+        CASE_ID,
+        1,
+        &decision,
+        &ordered.location(),
+        pinned(),
+        false,
+    )
+    .expect("the two-condition decision should record");
+    let reordered = format!(
+        "{}\n[[condition_results]]\ncondition = \"all named consumers pass their public contract tests\"\noutcome = \"accepted_exception\"\nexception = \"duplicate answer\"\n",
+        closed_verification_proposal().replace(
+            "all named consumers pass their public contract tests",
+            "recorded event identities remain immutable",
+        )
+    );
+    let reordered = ordered.write("verification.toml", &reordered);
+    let failure = refused_verification(&ordered_steward, 2, &reordered, &ordered.location());
+    assert!(
+        failure.to_string().contains(
+            "condition result 1 repeats `recorded event identities remain immutable`, but the accepted decision records `all named consumers pass their public contract tests`"
+        ),
+        "{failure}"
+    );
+}
+
+#[test]
+fn a_missing_consumer_result_names_the_unanswered_affected_consumer() {
+    let fixture = Fixture::new("missing-consumer-result");
+    let steward = steward_with_decided_case(&fixture);
+    let proposal = fixture.write("verification.toml", &verification_without_consumer_result());
+    let failure = refused_verification(&steward, 2, &proposal, &fixture.location());
+    assert_eq!(
+        failure.to_string(),
+        format!(
+            "refusal: verification for case `{CASE_ID}` is missing consumer `rust-release-tool` in participant `{FIRST_PARTICIPANT_ID}`\nresolution: answer every affected participant repository and consumer pair exactly once"
+        )
+    );
+}
+
+#[test]
+fn an_extra_consumer_result_refuses_without_writing() {
+    let fixture = Fixture::new("extra-consumer-result");
+    let steward = steward_with_decided_case(&fixture);
+    let proposal = fixture.write("verification.toml", &closed_verification_proposal());
+    let extra_consumer = format!(
+        "{}\n[[consumer_results]]\nrepository_id = \"{THIRD_PARTICIPANT_ID}\"\nconsumer = \"desktop-packager\"\noutcome = \"met\"\n\n[[consumer_results.evidence]]\nkind = \"commit\"\nreference = \"aaaaaaa\"\n",
+        closed_verification_proposal()
+    );
+    fs::write(&proposal, extra_consumer).expect("the extra consumer should be writable");
+    let failure = refused_verification(&steward, 2, &proposal, &fixture.location());
+    assert!(
+        failure.to_string().contains(&format!(
+            "records extra consumer `desktop-packager` in participant `{THIRD_PARTICIPANT_ID}`"
+        )),
+        "{failure}"
+    );
+}
+
+#[test]
+fn a_duplicate_consumer_result_refuses_without_writing() {
+    let fixture = Fixture::new("duplicate-consumer-result");
+    let steward = steward_with_decided_case(&fixture);
+    let proposal = fixture.write("verification.toml", &closed_verification_proposal());
+    let duplicate_consumer = format!(
+        "{}\n[[consumer_results]]\nrepository_id = \"{FIRST_PARTICIPANT_ID}\"\nconsumer = \"rust-release-tool\"\noutcome = \"accepted_exception\"\nexception = \"duplicate answer\"\n",
+        closed_verification_proposal()
+    );
+    fs::write(&proposal, duplicate_consumer).expect("the duplicate consumer should be writable");
+    let failure = refused_verification(&steward, 2, &proposal, &fixture.location());
+    assert!(
+        failure.to_string().contains(&format!(
+            "records consumer `rust-release-tool` in participant `{FIRST_PARTICIPANT_ID}` more than once"
+        )),
+        "{failure}"
+    );
+}
+
+#[test]
+fn a_renamed_consumer_result_refuses_without_writing() {
+    let fixture = Fixture::new("renamed-consumer-result");
+    let steward = steward_with_decided_case(&fixture);
+    let proposal = fixture.write("verification.toml", &closed_verification_proposal());
+    let changed_consumer = closed_verification_proposal().replace(
+        "consumer = \"rust-release-tool\"",
+        "consumer = \"renamed-release-tool\"",
+    );
+    fs::write(&proposal, changed_consumer).expect("the changed consumer should be writable");
+    let failure = refused_verification(&steward, 2, &proposal, &fixture.location());
+    assert!(
+        failure.to_string().contains(&format!(
+            "is missing consumer `rust-release-tool` in participant `{FIRST_PARTICIPANT_ID}`"
+        )),
+        "{failure}"
+    );
 }
 
 #[test]

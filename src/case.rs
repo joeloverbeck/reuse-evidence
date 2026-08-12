@@ -27,12 +27,13 @@ use crate::{TerminalFailure, Visibility, create_file_atomically};
 
 const CASE_SCHEMA_VERSION: i64 = 1;
 const IMPLEMENTATION_NOTICE: &str =
-    "authorizes implementation outside the reuse lifecycle; does not perform it";
-const NO_IMPLEMENTATION_NOTICE: &str = "authorizes no implementation";
+    "decision: authorizes implementation outside the reuse lifecycle; does not perform it";
+const NO_IMPLEMENTATION_NOTICE: &str = "decision: authorizes no implementation";
 const APPEND_UNSTEWARDED_RESOLUTION: &str =
     "run `case list` in this steward repository and retry with a recorded case identity";
 const EARLY_REVIEW_UNSTEWARDED_RESOLUTION: &str = "run `case list` in this steward repository and retry `case override` with a recorded watching case identity";
 const DECISION_UNSTEWARDED_RESOLUTION: &str = "run `case list` in this steward repository and retry `case decide` with a recorded review-ready case identity";
+const VERIFICATION_UNSTEWARDED_RESOLUTION: &str = "run `case list` in this steward repository and retry `case verify` with a recorded awaiting-verification, parked, or reopened case identity";
 /// What each command tells a reader to do about a steward marker it cannot use.
 ///
 /// ADR 0018 makes the marker fault's own wording shared and this sentence the
@@ -46,6 +47,8 @@ const EARLY_REVIEW_MARKER_RESOLUTION: &str =
     "restore a supported `reuse-evidence.toml` marker before authorizing early review";
 const DECISION_MARKER_RESOLUTION: &str =
     "restore a supported `reuse-evidence.toml` marker before recording a reuse decision";
+const VERIFICATION_MARKER_RESOLUTION: &str =
+    "restore a supported `reuse-evidence.toml` marker before recording verification";
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -73,6 +76,13 @@ enum EarlyReviewProposalDocument {
 enum DecisionProposalDocument {
     Prepared(ReuseDecisionAcceptedEvent),
     Human(DecisionContent),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum VerificationProposalDocument {
+    Prepared(VerificationRecordedEvent),
+    Human(VerificationContent),
 }
 
 #[derive(Debug, Deserialize)]
@@ -235,6 +245,19 @@ struct PreparedDecision {
     bytes: String,
 }
 
+#[derive(Debug)]
+struct VerificationProposal {
+    content: VerificationContent,
+    prepared: Option<PreparedVerification>,
+}
+
+#[derive(Debug)]
+struct PreparedVerification {
+    sequence: i64,
+    event_id: Uuid,
+    bytes: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Occurrence {
@@ -251,6 +274,109 @@ struct EvidenceReference {
     reference: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct VerificationContent {
+    disposition: VerificationDisposition,
+    condition_results: Vec<ConditionResult>,
+    consumer_results: Vec<ConsumerResult>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ConditionResult {
+    condition: String,
+    outcome: VerificationResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exception: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    evidence: Vec<EvidenceReference>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ConsumerResult {
+    repository_id: Uuid,
+    consumer: String,
+    outcome: VerificationResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exception: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    evidence: Vec<EvidenceReference>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum VerificationResult {
+    Met,
+    NotMet,
+    AcceptedException,
+}
+
+impl VerificationResult {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Met => "met",
+            Self::NotMet => "not_met",
+            Self::AcceptedException => "accepted_exception",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum VerificationDisposition {
+    Closed,
+    Parked,
+    Reopened,
+}
+
+impl VerificationDisposition {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Closed => "closed",
+            Self::Parked => "parked",
+            Self::Reopened => "reopened",
+        }
+    }
+
+    const fn state(self) -> read::CaseState {
+        match self {
+            Self::Closed => read::CaseState::Closed,
+            Self::Parked => read::CaseState::Parked,
+            Self::Reopened => read::CaseState::Reopened,
+        }
+    }
+
+    const fn notice(self) -> &'static str {
+        match self {
+            Self::Closed => "disposition: closed",
+            Self::Parked => "disposition: parked",
+            Self::Reopened => "disposition: reopened",
+        }
+    }
+
+    const fn headings(self) -> LaterEventHeadings {
+        match self {
+            Self::Closed => LaterEventHeadings {
+                preview: "verification preview: closed",
+                created: "recorded verification: closed",
+                existing: "verification already recorded: closed",
+            },
+            Self::Parked => LaterEventHeadings {
+                preview: "verification preview: parked",
+                created: "recorded verification: parked",
+                existing: "verification already recorded: parked",
+            },
+            Self::Reopened => LaterEventHeadings {
+                preview: "verification preview: reopened",
+                created: "recorded verification: reopened",
+                existing: "verification already recorded: reopened",
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -422,6 +548,15 @@ struct ReuseDecisionAcceptedEvent {
     content: DecisionContent,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct VerificationRecordedEvent {
+    #[serde(flatten)]
+    envelope: event::Envelope,
+    #[serde(flatten)]
+    content: VerificationContent,
+}
+
 impl publication::RevisionedCase for read::CaseRecord {
     fn revision(&self) -> i64 {
         self.revision
@@ -447,7 +582,7 @@ enum OpenEffect {
 
 /// The complete observable result of recording or previewing one later case event.
 ///
-/// The three later event types share this carrier under ADR 0013. Which heading it renders and
+/// The later event types share this carrier under ADR 0013. Which heading it renders and
 /// which optional fields it populates stay each event type's decision, as ADR 0010 requires.
 /// Opening is not a publication and keeps its own [`OpenOutcome`].
 #[derive(Debug)]
@@ -648,6 +783,13 @@ const DECISION_REFUSALS: LaterEventRefusals = LaterEventRefusals {
     retry_command: Some("case decide"),
 };
 
+const VERIFICATION_REFUSALS: LaterEventRefusals = LaterEventRefusals {
+    event: "verification",
+    operation: "verification",
+    conflict_resolution: "prepare a new operation",
+    retry_command: Some("case verify"),
+};
+
 /// The complete case privacy a receipt reports, or why it could not be derived.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReportedPrivacy {
@@ -774,87 +916,43 @@ pub fn append(
     let (relative_event_path, absolute_event_path) =
         later_event_paths(&located, EventType::OccurrenceAppended)?;
     let event = append_event_bytes(&proposal, located.sequence, recorded_at)?;
-    let prepared_event = publication::PreparedEvent {
-        event_id: proposal.prepared.as_ref().map(|prepared| prepared.event_id),
-        bytes: &event,
-    };
     let eligibility = |case: &read::CaseRecord, ()| {
         validate_new_append(case, &proposal, &located.steward, location)
     };
-
-    if preview {
-        let checked = located
-            .publication
-            .check(
-                &located.case,
-                &absolute_event_path,
-                prepared_event,
-                |_| Ok(()),
-                eligibility,
-            )
-            .map_err(|failure| APPEND_REFUSALS.publication_failure(case_id, failure))?;
-        return Ok(match checked {
-            publication::Checked::Existing(existing) => append_retry_outcome(
+    LaterEventExecution {
+        located: &located,
+        relative_event_path,
+        absolute_event_path,
+        event_id: proposal.prepared.as_ref().map(|prepared| prepared.event_id),
+        event,
+        preview,
+        refusals: APPEND_REFUSALS,
+    }
+    .execute(
+        |_| Ok(()),
+        eligibility,
+        |effect, case, privacy, event_path, event| {
+            append_outcome(
+                effect,
                 case_id,
-                relative_event_path,
-                &located.case,
+                event_path,
+                located.sequence,
+                case.state_after_appending_occurrence(),
+                ReportedPrivacy::Derived(privacy),
+                event,
+            )
+        },
+        |case, existing, event_path| {
+            append_retry_outcome(
+                case_id,
+                event_path,
+                case,
                 existing,
                 &located.steward,
                 location,
-            ),
-            publication::Checked::Fresh(privacy) => append_outcome(
-                LaterEventEffect::Preview,
-                case_id,
-                relative_event_path,
-                located.sequence,
-                located.case.state_after_appending_occurrence(),
-                ReportedPrivacy::Derived(privacy),
-                event,
-            ),
-        });
-    }
-
-    match located
-        .publication
-        .publish(
-            publication::PublicationTarget {
-                repository_root: &located.repository_root,
-                relative_case_directory: &located.relative_case_directory,
-                relative_event_path: &relative_event_path,
-            },
-            prepared_event,
-            || {
-                read::read_case_for(
-                    &located.repository_root,
-                    &located.relative_case_directory,
-                    case_id,
-                    located.steward.repository_id(),
-                    located.unstewarded_resolution,
-                )
-            },
-            |_| Ok(()),
-            eligibility,
-        )
-        .map_err(|failure| APPEND_REFUSALS.publication_failure(case_id, failure))?
-    {
-        publication::PublicationOutcome::Created { case, validation } => Ok(append_outcome(
-            LaterEventEffect::Created,
-            case_id,
-            relative_event_path,
-            located.sequence,
-            case.state_after_appending_occurrence(),
-            ReportedPrivacy::Derived(validation),
-            event,
-        )),
-        publication::PublicationOutcome::Existing { case, event } => Ok(append_retry_outcome(
-            case_id,
-            relative_event_path,
-            &case,
-            event,
-            &located.steward,
-            location,
-        )),
-    }
+            )
+        },
+    )
 }
 
 /// Builds one occurrence-append receipt; the append event reports readiness and no notice.
@@ -946,10 +1044,6 @@ pub fn authorize_early_review(
     let (relative_event_path, absolute_event_path) =
         later_event_paths(&located, EventType::EarlyReviewAuthorized)?;
     let event = early_review_event_bytes(&proposal, located.sequence, recorded_at)?;
-    let prepared_event = publication::PreparedEvent {
-        event_id: proposal.prepared.as_ref().map(|prepared| prepared.event_id),
-        bytes: &event,
-    };
     let case_privacy = |case: &read::CaseRecord| -> Result<Visibility, TerminalFailure> {
         let roots = portfolio::selected_roots(location)?;
         let privacy = derive_complete_case_privacy(case, &located.steward, &roots)?;
@@ -960,81 +1054,39 @@ pub fn authorize_early_review(
         validate_new_early_review(case)?;
         Ok(privacy)
     };
-
-    if preview {
-        let checked = located
-            .publication
-            .check(
-                &located.case,
-                &absolute_event_path,
-                prepared_event,
-                case_privacy,
-                eligibility,
-            )
-            .map_err(|failure| EARLY_REVIEW_REFUSALS.publication_failure(case_id, failure))?;
-        return Ok(match checked {
-            publication::Checked::Existing(existing) => early_review_retry_outcome(
+    LaterEventExecution {
+        located: &located,
+        relative_event_path,
+        absolute_event_path,
+        event_id: proposal.prepared.as_ref().map(|prepared| prepared.event_id),
+        event,
+        preview,
+        refusals: EARLY_REVIEW_REFUSALS,
+    }
+    .execute(
+        case_privacy,
+        eligibility,
+        |effect, _, privacy, event_path, event| {
+            early_review_outcome(
+                effect,
                 case_id,
-                relative_event_path,
-                &located.case,
-                existing,
-                &located.steward,
-                location,
-            ),
-            publication::Checked::Fresh(privacy) => early_review_outcome(
-                LaterEventEffect::Preview,
-                case_id,
-                relative_event_path,
+                event_path,
                 located.sequence,
                 ReportedPrivacy::Derived(privacy),
                 event,
-            ),
-        });
-    }
-
-    match located
-        .publication
-        .publish(
-            publication::PublicationTarget {
-                repository_root: &located.repository_root,
-                relative_case_directory: &located.relative_case_directory,
-                relative_event_path: &relative_event_path,
-            },
-            prepared_event,
-            || {
-                read::read_case_for(
-                    &located.repository_root,
-                    &located.relative_case_directory,
-                    case_id,
-                    located.steward.repository_id(),
-                    located.unstewarded_resolution,
-                )
-            },
-            case_privacy,
-            eligibility,
-        )
-        .map_err(|failure| EARLY_REVIEW_REFUSALS.publication_failure(case_id, failure))?
-    {
-        publication::PublicationOutcome::Created { validation, .. } => {
-            Ok(early_review_created_outcome(
+            )
+        },
+        |case, existing, event_path| {
+            early_review_retry_outcome(
                 case_id,
-                relative_event_path,
-                located.sequence,
-                validation,
-                event,
-            ))
-        }
-        publication::PublicationOutcome::Existing { case, event } => {
-            Ok(early_review_retry_outcome(
-                case_id,
-                relative_event_path,
-                &case,
-                event,
+                event_path,
+                case,
+                existing,
                 &located.steward,
                 location,
-            ))
-        }
-    }
+            )
+        },
+    )
 }
 
 /// Records or previews the exact reuse decision accepted for a review-ready case.
@@ -1065,10 +1117,6 @@ pub fn decide(
     let (relative_event_path, absolute_event_path) =
         later_event_paths(&located, EventType::ReuseDecisionAccepted)?;
     let event = decision_event_bytes(&proposal, located.sequence, recorded_at)?;
-    let prepared_event = publication::PreparedEvent {
-        event_id: proposal.prepared.as_ref().map(|prepared| prepared.event_id),
-        bytes: &event,
-    };
     let eligibility = |case: &read::CaseRecord, ()| -> Result<Visibility, TerminalFailure> {
         validate_new_decision(case, &proposal)?;
         let roots = portfolio::selected_roots(location)?;
@@ -1076,82 +1124,235 @@ pub fn decide(
         validate_decision_privacy(case, &located.steward, privacy)?;
         Ok(privacy)
     };
-
-    if preview {
-        let checked = located
-            .publication
-            .check(
-                &located.case,
-                &absolute_event_path,
-                prepared_event,
-                |_| Ok(()),
-                eligibility,
-            )
-            .map_err(|failure| DECISION_REFUSALS.publication_failure(case_id, failure))?;
-        return Ok(match checked {
-            publication::Checked::Existing(existing) => decision_retry_outcome(
+    LaterEventExecution {
+        located: &located,
+        relative_event_path,
+        absolute_event_path,
+        event_id: proposal.prepared.as_ref().map(|prepared| prepared.event_id),
+        event,
+        preview,
+        refusals: DECISION_REFUSALS,
+    }
+    .execute(
+        |_| Ok(()),
+        eligibility,
+        |effect, _, privacy, event_path, event| {
+            decision_outcome(
+                effect,
                 case_id,
-                relative_event_path,
-                &located.case,
-                existing,
-                &located.steward,
-                location,
-                proposal.content.action,
-            ),
-            publication::Checked::Fresh(privacy) => decision_outcome(
-                LaterEventEffect::Preview,
-                case_id,
-                relative_event_path,
+                event_path,
                 located.sequence,
                 ReportedPrivacy::Derived(privacy),
                 proposal.content.action,
                 event,
-            ),
-        });
-    }
+            )
+        },
+        |case, existing, event_path| {
+            decision_retry_outcome(
+                case_id,
+                event_path,
+                case,
+                existing,
+                &located.steward,
+                location,
+                proposal.content.action,
+            )
+        },
+    )
+}
 
-    match located
-        .publication
-        .publish(
-            publication::PublicationTarget {
-                repository_root: &located.repository_root,
-                relative_case_directory: &located.relative_case_directory,
-                relative_event_path: &relative_event_path,
-            },
-            prepared_event,
-            || {
-                read::read_case_for(
-                    &located.repository_root,
-                    &located.relative_case_directory,
-                    case_id,
-                    located.steward.repository_id(),
-                    located.unstewarded_resolution,
-                )
-            },
-            |_| Ok(()),
-            eligibility,
-        )
-        .map_err(|failure| DECISION_REFUSALS.publication_failure(case_id, failure))?
-    {
-        publication::PublicationOutcome::Created { validation, .. } => Ok(decision_outcome(
-            LaterEventEffect::Created,
-            case_id,
-            relative_event_path,
-            located.sequence,
-            ReportedPrivacy::Derived(validation),
-            proposal.content.action,
-            event,
-        )),
-        publication::PublicationOutcome::Existing { case, event } => Ok(decision_retry_outcome(
-            case_id,
-            relative_event_path,
-            &case,
-            event,
-            &located.steward,
-            location,
-            proposal.content.action,
-        )),
+/// Records or previews verification of the standing accepted reuse decision.
+///
+/// # Errors
+///
+/// Returns a classified failure when the steward, case, proposal, revision,
+/// privacy, or decision-supplied verification question set cannot be read or
+/// validated safely.
+pub fn verify(
+    working_directory: &Path,
+    case_id: &str,
+    expected_revision: i64,
+    proposal_path: &Path,
+    location: &portfolio::PortfolioLocation,
+    recorded_at: RecordedInstant,
+    preview: bool,
+) -> Result<LaterEventOutcome, TerminalFailure> {
+    let located = locate_later_event_case(
+        working_directory,
+        case_id,
+        expected_revision,
+        VERIFICATION_MARKER_RESOLUTION,
+        VERIFICATION_UNSTEWARDED_RESOLUTION,
+    )?;
+    let case_id = located.case_id;
+    let proposal = read_verification_proposal(proposal_path)?;
+    validate_prepared_verification_sequence(&proposal, expected_revision, located.sequence)?;
+    let (relative_event_path, absolute_event_path) =
+        later_event_paths(&located, EventType::VerificationRecorded)?;
+    let event = verification_event_bytes(&proposal, located.sequence, recorded_at)?;
+    let eligibility = |case: &read::CaseRecord, ()| {
+        validate_verification_eligibility(case, &proposal, &located.steward, location)
+    };
+    LaterEventExecution {
+        located: &located,
+        relative_event_path,
+        absolute_event_path,
+        event_id: proposal.prepared.as_ref().map(|prepared| prepared.event_id),
+        event,
+        preview,
+        refusals: VERIFICATION_REFUSALS,
     }
+    .execute(
+        |_| Ok(()),
+        eligibility,
+        |effect, _, privacy, event_path, event| {
+            fresh_verification_outcome(
+                effect,
+                case_id,
+                event_path,
+                located.sequence,
+                ReportedPrivacy::Derived(privacy),
+                proposal.content.disposition,
+                event,
+            )
+        },
+        |case, existing, event_path| {
+            verification_retry_outcome(
+                case_id,
+                event_path,
+                case,
+                existing,
+                &located.steward,
+                location,
+                proposal.content.disposition,
+            )
+        },
+    )
+}
+
+fn fresh_verification_outcome(
+    effect: LaterEventEffect,
+    case_id: Uuid,
+    event_path: PathBuf,
+    revision: i64,
+    privacy: ReportedPrivacy,
+    disposition: VerificationDisposition,
+    event: String,
+) -> LaterEventOutcome {
+    LaterEventOutcome {
+        effect,
+        headings: disposition.headings(),
+        case_id,
+        event_path,
+        revision,
+        state: Some(disposition.state()),
+        privacy,
+        notice: Some(disposition.notice()),
+        event,
+    }
+}
+
+fn verification_retry_outcome(
+    case_id: Uuid,
+    event_path: PathBuf,
+    case: &read::CaseRecord,
+    event: publication::ExistingEvent,
+    steward: &marker::Marker,
+    location: &portfolio::PortfolioLocation,
+    disposition: VerificationDisposition,
+) -> LaterEventOutcome {
+    LaterEventOutcome {
+        effect: LaterEventEffect::Existing,
+        headings: disposition.headings(),
+        case_id,
+        event_path,
+        revision: event.sequence,
+        state: Some(case.state()),
+        privacy: reported_privacy(case, steward, location),
+        notice: Some(disposition.notice()),
+        event: event.bytes,
+    }
+}
+
+fn validate_verification_eligibility(
+    case: &read::CaseRecord,
+    proposal: &VerificationProposal,
+    steward: &marker::Marker,
+    location: &portfolio::PortfolioLocation,
+) -> Result<Visibility, TerminalFailure> {
+    validate_new_verification(case, proposal)?;
+    let roots = portfolio::selected_roots(location)?;
+    let privacy = derive_complete_case_privacy(case, steward, &roots)?;
+    validate_verification_privacy(case, steward, privacy)?;
+    Ok(privacy)
+}
+
+fn validate_new_verification(
+    case: &read::CaseRecord,
+    proposal: &VerificationProposal,
+) -> Result<(), TerminalFailure> {
+    validate_case_accepts_later_event(case)?;
+    let Some(decision) = case.decision.as_ref() else {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case `{}` has no accepted reuse decision; current state is `{}`",
+                case.case_id,
+                case.state().label()
+            ),
+            "record an accepted reuse decision before retrying verification",
+        ));
+    };
+    validate_verification_against_decision(case.case_id, &proposal.content, &decision.content)
+}
+
+fn validate_case_accepts_later_event(case: &read::CaseRecord) -> Result<(), TerminalFailure> {
+    if case.state() == read::CaseState::Closed {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case `{}` is closed and terminal in version 0.1",
+                case.case_id
+            ),
+            "leave the closed case unchanged; later pressure requires a separately accepted capability",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_verification_privacy(
+    case: &read::CaseRecord,
+    steward: &marker::Marker,
+    privacy: Visibility,
+) -> Result<(), TerminalFailure> {
+    if steward.visibility() == Visibility::Public && privacy == Visibility::Private {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "public steward `{}` cannot record verification for private case `{}`",
+                steward.repository_id(),
+                case.case_id
+            ),
+            "run `set-visibility --visibility private` in the steward repository, then preview verification again",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_prepared_verification_sequence(
+    proposal: &VerificationProposal,
+    expected_revision: i64,
+    sequence: i64,
+) -> Result<(), TerminalFailure> {
+    if let Some(prepared) = &proposal.prepared
+        && prepared.sequence != sequence
+    {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "prepared verification event records sequence {}, but expected revision {expected_revision} requires sequence {sequence}",
+                prepared.sequence
+            ),
+            "preview verification again against the current expected revision",
+        ));
+    }
+    Ok(())
 }
 
 /// The steward, case, and expected sequence a later-event command works against.
@@ -1221,10 +1422,123 @@ fn later_event_paths(
     Ok((relative_event_path, absolute_event_path))
 }
 
+/// Executes the one preview-or-publish protocol shared by every later case event.
+///
+/// Event-specific proposal parsing, eligibility, privacy, and receipt construction remain at the
+/// command boundary. This executor owns only the publication branch shape accepted by ADR 0013:
+/// exact prepared-event retries are recognized before eligibility, previews stay write-free, and
+/// publication re-reads the case while holding the opening-event lock.
+struct LaterEventExecution<'a> {
+    located: &'a LocatedCase,
+    relative_event_path: PathBuf,
+    absolute_event_path: PathBuf,
+    event_id: Option<Uuid>,
+    event: String,
+    preview: bool,
+    refusals: LaterEventRefusals,
+}
+
+impl LaterEventExecution<'_> {
+    fn execute<B, V>(
+        self,
+        before_revision: impl FnOnce(&read::CaseRecord) -> Result<B, TerminalFailure>,
+        after_revision: impl FnOnce(&read::CaseRecord, B) -> Result<V, TerminalFailure>,
+        fresh_outcome: impl FnOnce(
+            LaterEventEffect,
+            &read::CaseRecord,
+            V,
+            PathBuf,
+            String,
+        ) -> LaterEventOutcome,
+        retry_outcome: impl FnOnce(
+            &read::CaseRecord,
+            publication::ExistingEvent,
+            PathBuf,
+        ) -> LaterEventOutcome,
+    ) -> Result<LaterEventOutcome, TerminalFailure> {
+        let Self {
+            located,
+            relative_event_path,
+            absolute_event_path,
+            event_id,
+            event,
+            preview,
+            refusals,
+        } = self;
+        let case_id = located.case_id;
+
+        if preview {
+            let checked = located
+                .publication
+                .check(
+                    &located.case,
+                    &absolute_event_path,
+                    publication::PreparedEvent {
+                        event_id,
+                        bytes: &event,
+                    },
+                    before_revision,
+                    after_revision,
+                )
+                .map_err(|failure| refusals.publication_failure(case_id, failure))?;
+            return Ok(match checked {
+                publication::Checked::Existing(existing) => {
+                    retry_outcome(&located.case, existing, relative_event_path)
+                }
+                publication::Checked::Fresh(validation) => fresh_outcome(
+                    LaterEventEffect::Preview,
+                    &located.case,
+                    validation,
+                    relative_event_path,
+                    event,
+                ),
+            });
+        }
+
+        let published = located
+            .publication
+            .publish(
+                publication::PublicationTarget {
+                    repository_root: &located.repository_root,
+                    relative_case_directory: &located.relative_case_directory,
+                    relative_event_path: &relative_event_path,
+                },
+                publication::PreparedEvent {
+                    event_id,
+                    bytes: &event,
+                },
+                || {
+                    read::read_case_for(
+                        &located.repository_root,
+                        &located.relative_case_directory,
+                        case_id,
+                        located.steward.repository_id(),
+                        located.unstewarded_resolution,
+                    )
+                },
+                before_revision,
+                after_revision,
+            )
+            .map_err(|failure| refusals.publication_failure(case_id, failure))?;
+        Ok(match published {
+            publication::PublicationOutcome::Created { case, validation } => fresh_outcome(
+                LaterEventEffect::Created,
+                &case,
+                validation,
+                relative_event_path,
+                event,
+            ),
+            publication::PublicationOutcome::Existing { case, event } => {
+                retry_outcome(&case, event, relative_event_path)
+            }
+        })
+    }
+}
+
 /// Builds one reuse-decision receipt.
 ///
-/// The decision event is the only later event that reports a notice; whether it authorizes
-/// implementation is the accepted action's decision, not the receipt's.
+/// Whether the notice authorizes implementation is the accepted action's decision, not the
+/// receipt's.
 fn decision_outcome(
     effect: LaterEventEffect,
     case_id: Uuid,
@@ -1275,6 +1589,7 @@ fn validate_new_decision(
     case: &read::CaseRecord,
     proposal: &DecisionProposal,
 ) -> Result<(), TerminalFailure> {
+    validate_case_accepts_later_event(case)?;
     if case.has_decision() {
         return Err(TerminalFailure::refusal(
             format!(
@@ -1404,23 +1719,6 @@ fn early_review_outcome(
     }
 }
 
-fn early_review_created_outcome(
-    case_id: Uuid,
-    event_path: PathBuf,
-    revision: i64,
-    privacy: Visibility,
-    event: String,
-) -> LaterEventOutcome {
-    early_review_outcome(
-        LaterEventEffect::Created,
-        case_id,
-        event_path,
-        revision,
-        ReportedPrivacy::Derived(privacy),
-        event,
-    )
-}
-
 fn early_review_retry_outcome(
     case_id: Uuid,
     event_path: PathBuf,
@@ -1477,6 +1775,7 @@ fn validate_early_review_privacy(
 }
 
 fn validate_new_early_review(case: &read::CaseRecord) -> Result<(), TerminalFailure> {
+    validate_case_accepts_later_event(case)?;
     if case.has_decision() {
         return Err(TerminalFailure::refusal(
             format!(
@@ -1514,6 +1813,7 @@ fn validate_new_append(
     steward: &marker::Marker,
     location: &portfolio::PortfolioLocation,
 ) -> Result<Visibility, TerminalFailure> {
+    validate_case_accepts_later_event(case)?;
     if case.occurrences.iter().any(|recorded| {
         recorded.repository_id == proposal.occurrence.repository_id
             && recorded.consumer.trim() == proposal.occurrence.consumer.trim()
@@ -1662,6 +1962,23 @@ fn decision_event_bytes(
         TerminalFailure::unsafe_failure(format!(
             "accepted reuse decision event could not be encoded: {error}"
         ))
+    })
+}
+
+fn verification_event_bytes(
+    proposal: &VerificationProposal,
+    sequence: i64,
+    recorded_at: RecordedInstant,
+) -> Result<String, TerminalFailure> {
+    if let Some(prepared) = &proposal.prepared {
+        return Ok(prepared.bytes.clone());
+    }
+    let event = VerificationRecordedEvent {
+        envelope: event::Envelope::new(sequence, EventType::VerificationRecorded, recorded_at),
+        content: proposal.content.clone(),
+    };
+    toml::to_string(&event).map_err(|error| {
+        TerminalFailure::unsafe_failure(format!("verification event could not be encoded: {error}"))
     })
 }
 
@@ -2351,6 +2668,228 @@ fn read_decision_proposal(path: &Path) -> Result<DecisionProposal, TerminalFailu
     Ok(proposal)
 }
 
+fn read_verification_proposal(path: &Path) -> Result<VerificationProposal, TerminalFailure> {
+    let text = fs::read_to_string(path).map_err(|error| {
+        TerminalFailure::refusal(
+            format!(
+                "verification proposal `{}` cannot be read: {error}",
+                path.display()
+            ),
+            "supply a readable UTF-8 TOML proposal with `--proposal <PATH>`",
+        )
+    })?;
+    let document = toml::from_str::<VerificationProposalDocument>(&text).map_err(|error| {
+        TerminalFailure::refusal(
+            format!(
+                "verification proposal `{}` is invalid: {error}",
+                path.display()
+            ),
+            "provide a complete TOML verification proposal using one permitted disposition and result outcome",
+        )
+    })?;
+    let proposal = match document {
+        VerificationProposalDocument::Human(content) => VerificationProposal {
+            content,
+            prepared: None,
+        },
+        VerificationProposalDocument::Prepared(event) => {
+            validate_recorded_verification(&event)?;
+            let prepared = PreparedVerification {
+                sequence: event.envelope.sequence,
+                event_id: event.envelope.event_id,
+                bytes: text,
+            };
+            VerificationProposal {
+                content: event.content,
+                prepared: Some(prepared),
+            }
+        }
+    };
+    validate_verification_content(&proposal.content)?;
+    Ok(proposal)
+}
+
+fn validate_verification_content(content: &VerificationContent) -> Result<(), TerminalFailure> {
+    for (index, result) in content.condition_results.iter().enumerate() {
+        require_nonempty(
+            &format!("condition_results[{}].condition", index + 1),
+            &result.condition,
+        )?;
+        validate_verification_result(
+            &format!("condition result {}", index + 1),
+            result.outcome,
+            result.exception.as_deref(),
+            &result.evidence,
+        )?;
+    }
+    let mut consumers = BTreeSet::new();
+    for (index, result) in content.consumer_results.iter().enumerate() {
+        require_nonempty(
+            &format!("consumer_results[{}].consumer", index + 1),
+            &result.consumer,
+        )?;
+        if !consumers.insert((result.repository_id, result.consumer.trim())) {
+            return Err(TerminalFailure::refusal(
+                format!(
+                    "verification records consumer `{}` in participant `{}` more than once",
+                    result.consumer.trim(),
+                    result.repository_id
+                ),
+                "record each affected participant repository and consumer pair exactly once",
+            ));
+        }
+        validate_verification_result(
+            &format!("consumer result {}", index + 1),
+            result.outcome,
+            result.exception.as_deref(),
+            &result.evidence,
+        )?;
+    }
+    let has_not_met = content
+        .condition_results
+        .iter()
+        .map(|result| result.outcome)
+        .chain(content.consumer_results.iter().map(|result| result.outcome))
+        .any(|outcome| outcome == VerificationResult::NotMet);
+    if content.disposition == VerificationDisposition::Closed && has_not_met {
+        return Err(TerminalFailure::refusal(
+            "verification disposition `closed` carries a `not_met` result",
+            "use disposition `parked` or `reopened`, or record only met results and explicit accepted exceptions before closing",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_verification_result(
+    subject: &str,
+    outcome: VerificationResult,
+    exception: Option<&str>,
+    evidence: &[EvidenceReference],
+) -> Result<(), TerminalFailure> {
+    match outcome {
+        VerificationResult::AcceptedException => {
+            let exception = exception.ok_or_else(|| {
+                TerminalFailure::refusal(
+                    format!("{subject} is an accepted exception without a reason"),
+                    "state the explicit human-accepted exception in `exception`",
+                )
+            })?;
+            require_nonempty(&format!("{subject} exception"), exception)?;
+        }
+        VerificationResult::Met | VerificationResult::NotMet => {
+            if exception.is_some() {
+                return Err(TerminalFailure::refusal(
+                    format!(
+                        "{subject} outcome `{}` carries an exception reason",
+                        outcome.label()
+                    ),
+                    "remove `exception`, or use outcome `accepted_exception`",
+                ));
+            }
+            if evidence.is_empty() {
+                return Err(TerminalFailure::refusal(
+                    format!(
+                        "{subject} outcome `{}` carries no evidence reference",
+                        outcome.label()
+                    ),
+                    "add one or more recoverable evidence references bearing the verification result",
+                ));
+            }
+        }
+    }
+    validate_verification_evidence(subject, evidence)
+}
+
+fn validate_verification_evidence(
+    subject: &str,
+    evidence: &[EvidenceReference],
+) -> Result<(), TerminalFailure> {
+    for (index, reference) in evidence.iter().enumerate() {
+        if reference.reference.trim().is_empty() {
+            return Err(TerminalFailure::refusal(
+                format!("{subject} evidence reference {} is empty", index + 1),
+                "provide a recoverable commit reference bearing the verification result",
+            ));
+        }
+        if let Some(path) = &reference.path {
+            validate_relative_evidence_path(path)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_verification_against_decision(
+    case_id: Uuid,
+    verification: &VerificationContent,
+    decision: &DecisionContent,
+) -> Result<(), TerminalFailure> {
+    for (index, expected) in decision.verification_conditions.iter().enumerate() {
+        let Some(recorded) = verification.condition_results.get(index) else {
+            return Err(TerminalFailure::refusal(
+                format!(
+                    "verification for case `{case_id}` is missing condition result {} for `{expected}`",
+                    index + 1
+                ),
+                "answer every accepted verification condition exactly once in its recorded order",
+            ));
+        };
+        if recorded.condition != *expected {
+            return Err(TerminalFailure::refusal(
+                format!(
+                    "verification condition result {} repeats `{}`, but the accepted decision records `{expected}`",
+                    index + 1,
+                    recorded.condition
+                ),
+                "repeat every accepted verification condition exactly in its recorded order",
+            ));
+        }
+    }
+    if let Some(extra) = verification
+        .condition_results
+        .get(decision.verification_conditions.len())
+    {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "verification for case `{case_id}` records extra condition `{}`",
+                extra.condition
+            ),
+            "answer only the verification conditions recorded by the accepted decision",
+        ));
+    }
+
+    for affected in &decision.affected_consumers {
+        if !verification.consumer_results.iter().any(|result| {
+            result.repository_id == affected.repository_id
+                && result.consumer.trim() == affected.consumer.trim()
+        }) {
+            return Err(TerminalFailure::refusal(
+                format!(
+                    "verification for case `{case_id}` is missing consumer `{}` in participant `{}`",
+                    affected.consumer.trim(),
+                    affected.repository_id
+                ),
+                "answer every affected participant repository and consumer pair exactly once",
+            ));
+        }
+    }
+    if let Some(extra) = verification.consumer_results.iter().find(|result| {
+        !decision.affected_consumers.iter().any(|affected| {
+            result.repository_id == affected.repository_id
+                && result.consumer.trim() == affected.consumer.trim()
+        })
+    }) {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "verification for case `{case_id}` records extra consumer `{}` in participant `{}`",
+                extra.consumer.trim(),
+                extra.repository_id
+            ),
+            "answer only the affected participant repository and consumer pairs recorded by the accepted decision",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_decision_vocabulary(text: &str) -> Result<(), TerminalFailure> {
     let Ok(table) = text.parse::<toml::Table>() else {
         return Ok(());
@@ -2414,6 +2953,13 @@ const DECISION_REFUSAL: event::EnvelopeRefusal<'static> = event::EnvelopeRefusal
     noun: "reuse decision",
     instant_name: "reuse decision",
     preview_command: "case decide --preview",
+};
+
+const VERIFICATION_REFUSAL: event::EnvelopeRefusal<'static> = event::EnvelopeRefusal {
+    unsupported: "prepared verification event is not a supported later event",
+    noun: "verification",
+    instant_name: "verification",
+    preview_command: "case verify --preview",
 };
 
 fn validate_recorded_opening(event: &CaseOpenedEvent) -> Result<(), TerminalFailure> {
@@ -2528,6 +3074,15 @@ fn validate_recorded_decision(event: &ReuseDecisionAcceptedEvent) -> Result<(), 
         .envelope
         .validate(EventType::ReuseDecisionAccepted, &DECISION_REFUSAL)?;
     validate_decision_content(&event.content)
+}
+
+fn validate_recorded_verification(
+    event: &VerificationRecordedEvent,
+) -> Result<(), TerminalFailure> {
+    event
+        .envelope
+        .validate(EventType::VerificationRecorded, &VERIFICATION_REFUSAL)?;
+    validate_verification_content(&event.content)
 }
 
 fn validate_early_review_content(

@@ -9,13 +9,14 @@ use super::naming::{self, EventFileName, EventPosition, EventType, OPENING_SEQUE
 use super::{
     CASE_SCHEMA_VERSION, CaseOpenedEvent, DecisionAuthorization, DecisionContent,
     EarlyReviewAuthorizedEvent, Occurrence, OccurrenceAppendedEvent, ReportedPrivacy,
-    ReuseDecisionAcceptedEvent, find_repository_root, read_steward, validate_case_storage_path,
+    ReuseDecisionAcceptedEvent, VerificationDisposition, VerificationRecordedEvent,
+    find_repository_root, read_steward, validate_case_storage_path,
 };
 use crate::{TerminalFailure, Visibility, portfolio};
 
 /// What each query command tells a reader to do about a steward marker it
 /// cannot use. ADR 0018 makes the fault's wording shared and this sentence the
-/// command's; `case` holds the four for the recording commands.
+/// command's; `case` holds the five for the recording commands.
 const LIST_MARKER_RESOLUTION: &str =
     "restore a supported `reuse-evidence.toml` marker before listing cases";
 const SHOW_MARKER_RESOLUTION: &str =
@@ -29,6 +30,9 @@ pub(super) enum CaseState {
     ReviewReadyByOccurrenceCount,
     ReviewReadyByEarlyReviewOverride,
     AwaitingVerification,
+    Closed,
+    Parked,
+    Reopened,
 }
 
 impl CaseState {
@@ -47,6 +51,9 @@ impl CaseState {
                 "review-ready"
             }
             Self::AwaitingVerification => "awaiting-verification",
+            Self::Closed => "closed",
+            Self::Parked => "parked",
+            Self::Reopened => "reopened",
         }
     }
 
@@ -59,7 +66,11 @@ impl CaseState {
 
     pub(super) const fn basis(self) -> Option<&'static str> {
         match self {
-            Self::Watching | Self::AwaitingVerification => None,
+            Self::Watching
+            | Self::AwaitingVerification
+            | Self::Closed
+            | Self::Parked
+            | Self::Reopened => None,
             Self::ReviewReadyByOccurrenceCount => Some("occurrence-count"),
             Self::ReviewReadyByEarlyReviewOverride => Some("early-review-override"),
         }
@@ -79,6 +90,7 @@ pub(super) struct CaseRecord {
     pub(super) occurrences: Vec<Occurrence>,
     pub(super) early_review: Option<EarlyReviewAuthorizedEvent>,
     pub(super) decision: Option<ReuseDecisionAcceptedEvent>,
+    pub(super) verifications: Vec<VerificationRecordedEvent>,
     pub(super) conditions: Conditions,
 }
 
@@ -87,6 +99,7 @@ enum CaseEvent {
     OccurrenceAppended(OccurrenceAppendedEvent),
     EarlyReviewAuthorized(EarlyReviewAuthorizedEvent),
     ReuseDecisionAccepted(ReuseDecisionAcceptedEvent),
+    VerificationRecorded(VerificationRecordedEvent),
 }
 
 #[derive(Deserialize)]
@@ -122,7 +135,9 @@ impl CaseRecord {
     /// The two callers differ only by whether the occurrence about to be
     /// appended is counted, so the rule they share is stated once here.
     fn state_with_occurrence_count(&self, occurrence_count: usize) -> CaseState {
-        if self.decision.is_some() {
+        if let Some(verification) = self.verifications.last() {
+            verification.content.disposition.state()
+        } else if self.decision.is_some() {
             CaseState::AwaitingVerification
         } else if self.early_review.is_some() {
             CaseState::ReviewReadyByEarlyReviewOverride
@@ -450,9 +465,11 @@ fn read_case(
     let mut occurrences = Vec::new();
     let mut early_review = None;
     let mut decision = None;
+    let mut verifications = Vec::new();
     for event_path in event_paths {
         let (file_sequence, event) =
             read_case_event(repository_root, &event_path, case_id, steward_repository_id)?;
+        validate_not_extended_after_closure(case_id, &verifications)?;
         revision = revision.max(file_sequence);
         match event {
             CaseEvent::Opened(event) => {
@@ -477,6 +494,10 @@ fn read_case(
                     ));
                 }
             }
+            CaseEvent::VerificationRecorded(event) => {
+                validate_verification_prefix(case_id, decision.as_ref(), &verifications, &event)?;
+                verifications.push(event);
+            }
         }
     }
 
@@ -491,8 +512,60 @@ fn read_case(
         occurrences,
         early_review,
         decision,
+        verifications,
         conditions: Conditions::UNKNOWN,
     })
+}
+
+fn validate_not_extended_after_closure(
+    case_id: Uuid,
+    verifications: &[VerificationRecordedEvent],
+) -> Result<(), TerminalFailure> {
+    let Some(closed) = verifications
+        .last()
+        .filter(|verification| verification.content.disposition == VerificationDisposition::Closed)
+    else {
+        return Ok(());
+    };
+    Err(TerminalFailure::refusal(
+        format!(
+            "case `{case_id}` records an event after its closed verification at sequence {}",
+            closed.envelope.sequence
+        ),
+        "remove every event after the closed verification; closed is terminal in version 0.1",
+    ))
+}
+
+fn validate_verification_prefix(
+    case_id: Uuid,
+    decision: Option<&ReuseDecisionAcceptedEvent>,
+    prior_verifications: &[VerificationRecordedEvent],
+    verification: &VerificationRecordedEvent,
+) -> Result<(), TerminalFailure> {
+    let Some(decision) = decision else {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case `{case_id}` records verification at sequence {} before an accepted reuse decision",
+                verification.envelope.sequence
+            ),
+            "restore an earlier accepted reuse decision before the verification event",
+        ));
+    };
+    if prior_verifications.last().is_some_and(|prior| {
+        !matches!(
+            prior.content.disposition,
+            VerificationDisposition::Parked | VerificationDisposition::Reopened
+        )
+    }) {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case `{case_id}` records verification at sequence {} after a terminal disposition",
+                verification.envelope.sequence
+            ),
+            "restore the event stream so only parked or reopened cases are verified again",
+        ));
+    }
+    super::validate_verification_against_decision(case_id, &verification.content, &decision.content)
 }
 
 fn validate_decision_prefix(
@@ -652,6 +725,9 @@ fn read_case_event(
         EventType::ReuseDecisionAccepted => {
             read_reuse_decision_event(event_path, &event_text, case_id, file_sequence, file_name)
         }
+        EventType::VerificationRecorded => {
+            read_verification_event(event_path, &event_text, case_id, file_sequence, file_name)
+        }
     }
 }
 
@@ -726,6 +802,31 @@ fn read_reuse_decision_event(
     validate_file_event_type(case_id, file_name, file_sequence, event.envelope.event_type)?;
     super::validate_recorded_decision(&event)?;
     Ok((file_sequence, CaseEvent::ReuseDecisionAccepted(event)))
+}
+
+fn read_verification_event(
+    event_path: &Path,
+    event_text: &str,
+    case_id: Uuid,
+    file_sequence: i64,
+    file_name: &str,
+) -> Result<(i64, CaseEvent), TerminalFailure> {
+    let event = toml::from_str::<VerificationRecordedEvent>(event_text)
+        .map_err(|error| invalid_event(event_path, &error))?;
+    validate_body_sequence(event_path, event.envelope.sequence, file_sequence)?;
+    if event.envelope.sequence == OPENING_SEQUENCE {
+        return Err(TerminalFailure::refusal(
+            format!(
+                "case event `{}` records `{}` at opening sequence 1",
+                event_path.display(),
+                event.envelope.event_type.body_name()
+            ),
+            "restore `case_opened` as sequence 1 and record verification only after an accepted reuse decision",
+        ));
+    }
+    validate_file_event_type(case_id, file_name, file_sequence, event.envelope.event_type)?;
+    super::validate_recorded_verification(&event)?;
+    Ok((file_sequence, CaseEvent::VerificationRecorded(event)))
 }
 
 fn invalid_event(event_path: &Path, error: &toml::de::Error) -> TerminalFailure {

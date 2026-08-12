@@ -26,7 +26,12 @@ This glossary is the shared language for `reuse-evidence`. Use these terms consi
 | **Reuse decision** | The exact human-accepted disposition of a case, including its scope, non-responsibilities, migration expectations, and verification conditions. |
 | **Implementation brief** | The bounded handoff produced by an accepted decision for the normal engineering workflow. It is projected from the recorded decision rather than authored, is not implementation, and does not schedule downstream work by itself. |
 | **Awaiting verification** | The derived state of a case whose accepted reuse decision is recorded. It reports that the case is waiting for independent evidence of the accepted consequence. It does not claim that implementation started, and it supersedes watching and review-ready. |
-| **Verification** | Independent evidence that an accepted decision was implemented as authorized and that the named consumers still satisfy their behavioral contracts. |
+| **Verification** | Independent evidence that answers every verification condition and affected consumer recorded by the accepted reuse decision. Recording verification also records one human disposition; it references recoverable evidence and does not execute repository commands. |
+| **Disposition** | The human conclusion recorded with verification: `closed`, `parked`, or `reopened`. Evidence results state what was observed; disposition states what happens to the case. |
+| **Accepted exception** | An explicit human-accepted reason that one verification condition or affected consumer need not report `met`. It is distinct from `not_met` and may permit closure without pretending migration or behavior occurred. |
+| **Closed** | The derived state when the latest verification disposition is `closed`. Every result is `met` or an accepted exception, the case has no readiness basis, and no later event is permitted in version 0.1. |
+| **Parked** | The derived state when the latest verification disposition is `parked`. The accepted consequence is not being pursued now; the case has no readiness basis and may be verified again against the standing decision. |
+| **Reopened** | The derived state when the latest verification disposition is `reopened`. The accepted consequence still needs active work; the case has no readiness basis and may be verified again against the standing decision. |
 | **Wrong abstraction** | An existing shared surface that couples consumers which no longer share one responsibility or reason to change. A valid decision may split it and deliberately restore duplication. |
 | **Sensor** | An optional external tool or analysis that proposes similarity candidates. A sensor does not establish semantic identity or decision authority. |
 | **Evidence reference** | A recoverable pointer to a commit, diff, specification, test, source location, report, package, or other inspectable artifact. Conversation memory alone is not an evidence reference. |
@@ -54,5 +59,7 @@ This glossary is the shared language for `reuse-evidence`. Use these terms consi
 - Only the human accepts the decision.
 - A recorded **reuse decision** derives **awaiting verification**.
 - An accepted change decision projects an **implementation brief** from what the decision recorded.
-- **Verification** determines whether the case may close, park, or reopen.
+- One `verification_recorded` event answers the accepted decision's conditions and consumers and records the human **disposition**.
+- The latest verification disposition derives **closed**, **parked**, or **reopened**; earlier verification remains historical evidence.
+- A parked or reopened case may be verified again against its standing decision. A closed case is terminal in version 0.1.
 - **Sensors** can help find candidates but never change these authority relationships.
