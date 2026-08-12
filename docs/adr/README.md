@@ -33,6 +33,7 @@ Only the human decision owner can accept, supersede, or reject an ADR. Merge, im
 | [0016](0016-terminal-contract-at-the-process-boundary.md) | The process boundary tests the terminal contract; behaviour is tested across the module interface. New behaviour goes in process; existing CLI tests are not converted. |
 | [0017](0017-one-owner-for-case-terminal-text.md) | Every case renderer moves to `case::render`, reached one way; the receipt spine and shared readiness vocabulary take the owner ADR 0010 permitted, and the brief's panic-on-drift becomes a type. |
 | [0018](0018-one-owner-for-marker-fault-meaning.md) | Classifying a non-supported marker read has one owner: every marker fault is a refusal naming which fault it is, with the resolution supplied by the command that ran. Resolves the divergence ADR 0016 §43 deferred. |
+| [0019](0019-one-event-records-verification-and-its-disposition.md) | One `verification_recorded` event records the verification evidence and its disposition in orthogonal fields; no separate close, park, or reopen event type exists. A parked or reopened case re-verifies against the standing decision. |
 
 ## Adding or changing an ADR
 
