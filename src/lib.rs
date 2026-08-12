@@ -64,11 +64,11 @@ impl Visibility {
     /// # Errors
     ///
     /// Returns a refusal when `value` is neither `public` nor `private`.
-    pub fn parse(value: &str) -> Result<Self, EnrollmentError> {
+    pub fn parse(value: &str) -> Result<Self, TerminalFailure> {
         match value {
             "public" => Ok(Self::Public),
             "private" => Ok(Self::Private),
-            _ => Err(EnrollmentError::refusal(
+            _ => Err(TerminalFailure::refusal(
                 format!("visibility `{value}` is not supported"),
                 "use `public` or `private`",
             )),
@@ -174,9 +174,6 @@ impl fmt::Display for TerminalFailure {
 
 impl std::error::Error for TerminalFailure {}
 
-/// The terminal failure returned by repository enrollment operations.
-pub type EnrollmentError = TerminalFailure;
-
 /// Enrolls the repository containing `working_directory`.
 ///
 /// The repository root is the nearest ancestor recognized by
@@ -190,7 +187,7 @@ pub fn enroll(
     working_directory: &Path,
     ecosystem_id: &str,
     visibility: Visibility,
-) -> Result<Enrollment, EnrollmentError> {
+) -> Result<Enrollment, TerminalFailure> {
     enroll_with_expected_repository_id(working_directory, ecosystem_id, visibility, None)
 }
 
@@ -210,7 +207,7 @@ pub fn enroll_with_expected_repository_id(
     ecosystem_id: &str,
     visibility: Visibility,
     expected_repository_id: Option<Uuid>,
-) -> Result<Enrollment, EnrollmentError> {
+) -> Result<Enrollment, TerminalFailure> {
     let repository_root = find_repository_root(working_directory)?;
     let marker_path = repository_root.join(MARKER_FILE);
     let malformed_resolution = format!(
@@ -219,7 +216,7 @@ pub fn enroll_with_expected_repository_id(
     );
     if let Some(marker) = marker_for_enrollment(&repository_root, &malformed_resolution)? {
         if marker.visibility() != visibility {
-            return Err(EnrollmentError::refusal(
+            return Err(TerminalFailure::refusal(
                 format!(
                     "existing marker declares visibility `{}`, but enrollment requested `{visibility}`",
                     marker.visibility()
@@ -230,7 +227,7 @@ pub fn enroll_with_expected_repository_id(
             ));
         }
         if marker.ecosystem_id() != ecosystem_id {
-            return Err(EnrollmentError::refusal(
+            return Err(TerminalFailure::refusal(
                 format!(
                     "existing marker declares ecosystem identity `{}`, but enrollment requested `{ecosystem_id}`",
                     marker.ecosystem_id()
@@ -244,7 +241,7 @@ pub fn enroll_with_expected_repository_id(
         if let Some(expected_repository_id) = expected_repository_id
             && marker.repository_id() != expected_repository_id
         {
-            return Err(EnrollmentError::refusal(
+            return Err(TerminalFailure::refusal(
                 format!(
                     "existing marker declares repository identity `{}`, but enrollment expected `{expected_repository_id}`",
                     marker.repository_id()
@@ -265,7 +262,7 @@ pub fn enroll_with_expected_repository_id(
     }
 
     if expected_repository_id.is_some() {
-        return Err(EnrollmentError::refusal(
+        return Err(TerminalFailure::refusal(
             "a repository identity cannot be assigned during fresh enrollment",
             "omit `--expected-repository-id`; fresh enrollment generates the opaque identity",
         ));
@@ -275,7 +272,7 @@ pub fn enroll_with_expected_repository_id(
     let repository_id = Uuid::new_v4();
     let marker = marker::Marker::new(repository_id, ecosystem_id.to_owned(), visibility);
     let marker_bytes = toml::to_string(&marker).map_err(|error| {
-        EnrollmentError::unsafe_failure(format!("could not encode the repository marker: {error}"))
+        TerminalFailure::unsafe_failure(format!("could not encode the repository marker: {error}"))
     })?;
     create_file_atomically(&marker_path, marker_bytes.as_bytes())?;
 
@@ -298,7 +295,7 @@ pub fn enroll_with_expected_repository_id(
 pub fn set_visibility(
     working_directory: &Path,
     visibility: Visibility,
-) -> Result<Enrollment, EnrollmentError> {
+) -> Result<Enrollment, TerminalFailure> {
     let repository_root = find_repository_root(working_directory)?;
     let marker_path = repository_root.join(MARKER_FILE);
     let malformed_resolution = format!(
@@ -306,7 +303,7 @@ pub fn set_visibility(
         marker::SUPPORTED_SCHEMA_VERSION
     );
     let Some(mut marker) = marker_for_enrollment(&repository_root, &malformed_resolution)? else {
-        return Err(EnrollmentError::refusal(
+        return Err(TerminalFailure::refusal(
             format!(
                 "repository is not enrolled because `{}` does not exist",
                 marker_path.display()
@@ -327,7 +324,7 @@ pub fn set_visibility(
         let marker_lock = lock_repository_marker(&repository_root)?;
         let Some(current_marker) = marker_for_enrollment(&repository_root, &malformed_resolution)?
         else {
-            return Err(EnrollmentError::refusal(
+            return Err(TerminalFailure::refusal(
                 format!(
                     "repository is not enrolled because `{}` does not exist",
                     marker_path.display()
@@ -353,7 +350,7 @@ pub fn set_visibility(
         && let Some(case_id) =
             case::private_case_stewarded_by(&repository_root, marker.repository_id())?
     {
-        return Err(EnrollmentError::refusal(
+        return Err(TerminalFailure::refusal(
             format!(
                 "repository `{}` cannot become public while it stewards private case `{case_id}`",
                 marker.repository_id()
@@ -363,7 +360,7 @@ pub fn set_visibility(
     }
     marker.set_visibility(visibility);
     let replacement = toml::to_string(&marker).map_err(|error| {
-        EnrollmentError::unsafe_failure(format!("could not encode the repository marker: {error}"))
+        TerminalFailure::unsafe_failure(format!("could not encode the repository marker: {error}"))
     })?;
     replace_file_atomically(&marker_path, replacement.as_bytes())?;
 
@@ -379,12 +376,12 @@ pub fn set_visibility(
 fn marker_for_enrollment(
     repository_root: &Path,
     malformed_resolution: &str,
-) -> Result<Option<marker::Marker>, EnrollmentError> {
+) -> Result<Option<marker::Marker>, TerminalFailure> {
     match marker::read(repository_root) {
         Some(marker::MarkerRead::Supported(marker)) => Ok(Some(marker)),
         Some(marker::MarkerRead::UnsupportedSchemaVersion(marker)) => {
             let schema_version = marker.schema_version();
-            Err(EnrollmentError::refusal(
+            Err(TerminalFailure::refusal(
                 format!("marker schema version `{schema_version}` is not supported"),
                 format!(
                     "use a reuse-evidence version that supports marker schema version `{schema_version}`"
@@ -392,7 +389,7 @@ fn marker_for_enrollment(
             ))
         }
         Some(marker::MarkerRead::Unreadable(marker)) if marker.is_read_failure() => {
-            Err(EnrollmentError::unsafe_failure(format!(
+            Err(TerminalFailure::unsafe_failure(format!(
                 "could not read `{}`: {marker}",
                 marker.path().display()
             )))
@@ -410,8 +407,8 @@ fn malformed_marker_error(
     marker_path: &Path,
     error: &dyn fmt::Display,
     resolution: &str,
-) -> EnrollmentError {
-    EnrollmentError::refusal(
+) -> TerminalFailure {
+    TerminalFailure::refusal(
         format!(
             "existing marker `{}` is malformed: {error}",
             marker_path.display()
@@ -422,7 +419,7 @@ fn malformed_marker_error(
 
 fn refuse_fresh_enrollment_over_steward_case_storage(
     repository_root: &Path,
-) -> Result<(), EnrollmentError> {
+) -> Result<(), TerminalFailure> {
     let case_directory = repository_root.join(case::cases_root());
     let metadata = match fs::symlink_metadata(&case_directory) {
         Ok(metadata) => metadata,
@@ -437,8 +434,8 @@ fn refuse_fresh_enrollment_over_steward_case_storage(
     Err(nonempty_case_storage_enrollment_refusal(&case_directory))
 }
 
-fn nonempty_case_storage_enrollment_refusal(case_directory: &Path) -> EnrollmentError {
-    EnrollmentError::refusal(
+fn nonempty_case_storage_enrollment_refusal(case_directory: &Path) -> TerminalFailure {
+    TerminalFailure::refusal(
         format!(
             "steward-local case directory `{}` is not empty in an unenrolled repository; fresh enrollment would mint a new repository identity and orphan every case recorded under the previous identity",
             case_directory.display()
@@ -478,7 +475,7 @@ pub(crate) enum CreateFileOutcome {
 pub(crate) fn create_file_atomically_if_absent(
     path: &Path,
     bytes: &[u8],
-) -> Result<CreateFileOutcome, EnrollmentError> {
+) -> Result<CreateFileOutcome, TerminalFailure> {
     let temporary_path = temporary_path_for(path);
     let result = (|| {
         write_temporary_file(&temporary_path, bytes)?;
@@ -498,7 +495,7 @@ pub(crate) fn create_file_atomically_if_absent(
         Ok(outcome) => Ok(outcome),
         Err(error) => {
             let _ = fs::remove_file(&temporary_path);
-            Err(EnrollmentError::unsafe_failure(format!(
+            Err(TerminalFailure::unsafe_failure(format!(
                 "could not atomically create `{}`: {error}",
                 path.display()
             )))
@@ -506,17 +503,17 @@ pub(crate) fn create_file_atomically_if_absent(
     }
 }
 
-pub(crate) fn create_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), EnrollmentError> {
+pub(crate) fn create_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), TerminalFailure> {
     match create_file_atomically_if_absent(path, bytes)? {
         CreateFileOutcome::Created => Ok(()),
-        CreateFileOutcome::Occupied => Err(EnrollmentError::unsafe_failure(format!(
+        CreateFileOutcome::Occupied => Err(TerminalFailure::unsafe_failure(format!(
             "could not atomically create `{}`: target already exists",
             path.display()
         ))),
     }
 }
 
-fn replace_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), EnrollmentError> {
+fn replace_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), TerminalFailure> {
     let temporary_path = temporary_path_for(path);
     let result = (|| {
         write_temporary_file(&temporary_path, bytes)?;
@@ -526,7 +523,7 @@ fn replace_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), EnrollmentEr
     })();
     if let Err(error) = result {
         let _ = fs::remove_file(&temporary_path);
-        return Err(EnrollmentError::unsafe_failure(format!(
+        return Err(TerminalFailure::unsafe_failure(format!(
             "could not atomically replace `{}`: {error}",
             path.display()
         )));
@@ -555,10 +552,10 @@ fn sync_parent(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn find_repository_root(working_directory: &Path) -> Result<PathBuf, EnrollmentError> {
+fn find_repository_root(working_directory: &Path) -> Result<PathBuf, TerminalFailure> {
     let (working_directory, repository_root) =
         locate_repository_root(working_directory).map_err(|error| {
-            EnrollmentError::refusal(
+            TerminalFailure::refusal(
                 format!(
                     "working directory `{}` cannot be inspected: {error}",
                     working_directory.display()
@@ -567,7 +564,7 @@ fn find_repository_root(working_directory: &Path) -> Result<PathBuf, EnrollmentE
             )
         })?;
     repository_root.ok_or_else(|| {
-        EnrollmentError::refusal(
+        TerminalFailure::refusal(
             format!(
                 "`{}` is not inside a repository root",
                 working_directory.display()
