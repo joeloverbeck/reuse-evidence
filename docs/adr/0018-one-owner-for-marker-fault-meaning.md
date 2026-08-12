@@ -1,6 +1,6 @@
 # ADR 0018: One owner for what a marker fault means
 
-**Status:** Proposed  
+**Status:** Accepted  
 **Date:** 2026-08-12  
 **Decision owner:** Repository maintainer  
 **Governing principles:** [`FOUNDATIONS.md`](../principles/FOUNDATIONS.md), [`CONSUMER-CONTRACT.md`](../principles/CONSUMER-CONTRACT.md)

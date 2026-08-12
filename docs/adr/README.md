@@ -32,6 +32,7 @@ Only the human decision owner can accept, supersede, or reject an ADR. Merge, im
 | [0015](0015-portfolio-location-resolved-at-the-edge.md) | The portfolio location is resolved once at the edge as a value that carries its own absence; each consumer keeps its own interpretation, so the `portfolio` refusal and the `case list` degraded projection both stand. |
 | [0016](0016-terminal-contract-at-the-process-boundary.md) | The process boundary tests the terminal contract; behaviour is tested across the module interface. New behaviour goes in process; existing CLI tests are not converted. |
 | [0017](0017-one-owner-for-case-terminal-text.md) | Every case renderer moves to `case::render`, reached one way; the receipt spine and shared readiness vocabulary take the owner ADR 0010 permitted, and the brief's panic-on-drift becomes a type. |
+| [0018](0018-one-owner-for-marker-fault-meaning.md) | Classifying a non-supported marker read has one owner: every marker fault is a refusal naming which fault it is, with the resolution supplied by the command that ran. Resolves the divergence ADR 0016 §43 deferred. |
 
 ## Adding or changing an ADR
 
