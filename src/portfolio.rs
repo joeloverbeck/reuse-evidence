@@ -54,13 +54,6 @@ enum MarkerInspection {
     Ignore,
 }
 
-pub enum PortfolioReport {
-    /// A complete unambiguous portfolio observation.
-    Complete(String),
-    /// A report that found at least one duplicate stable repository identity.
-    IdentityConflict(String),
-}
-
 struct PortfolioChanges {
     new_repositories: Vec<Enrollment>,
     moved_repositories: Vec<(Enrollment, PathBuf)>,
@@ -145,16 +138,16 @@ impl PortfolioLocation {
 /// # Errors
 ///
 /// Returns a classified terminal failure when roots, markers, or derived state
-/// cannot be inspected safely.
+/// cannot be inspected safely, and a refusal when duplicate stable repository
+/// identities make the observation ambiguous.
 #[cfg(feature = "cli")]
-pub fn report(location: &PortfolioLocation) -> Result<PortfolioReport, TerminalFailure> {
+pub fn report(location: &PortfolioLocation) -> Result<String, TerminalFailure> {
     let roots = selected_roots(location)?;
     let scan = scan(&roots)?;
     let identity_paths = duplicate_identity_paths(&scan.enrollments);
-    let has_identity_conflicts = !identity_paths.is_empty();
 
-    if has_identity_conflicts {
-        return Ok(PortfolioReport::IdentityConflict(render_report(
+    if !identity_paths.is_empty() {
+        return Err(identity_conflict_refusal(&render_report(
             &scan,
             &identity_paths,
             None,
@@ -181,7 +174,23 @@ pub fn report(location: &PortfolioLocation) -> Result<PortfolioReport, TerminalF
         &state_path,
         &next_state(&observation, previous_repositories),
     )?;
-    Ok(PortfolioReport::Complete(output))
+    Ok(output)
+}
+
+/// Refuses an observation in which one stable identity claims several paths.
+///
+/// The report body is the evidence for the refusal, so it travels inside the
+/// condition rather than being printed as a success the caller must then
+/// reclassify.
+#[cfg(feature = "cli")]
+fn identity_conflict_refusal(report: &str) -> TerminalFailure {
+    TerminalFailure::refusal(
+        format!(
+            "duplicate repository identities make the portfolio ambiguous\n{}",
+            report.trim_end()
+        ),
+        "restore a unique stable repository identity for every enrolled repository before rerunning the report",
+    )
 }
 
 fn duplicate_identity_paths(enrollments: &[Enrollment]) -> BTreeMap<Uuid, Vec<PathBuf>> {

@@ -421,20 +421,8 @@ const fn skill_exit_meaning(exit: skill_evidence::cli::Exit) -> ExitMeaning {
 }
 
 fn run_portfolio(location: &portfolio::PortfolioLocation) -> Result<(), TerminalFailure> {
-    let report = portfolio::report(location)?;
-    match report {
-        portfolio::PortfolioReport::Complete(report) => {
-            print!("{report}");
-            Ok(())
-        }
-        portfolio::PortfolioReport::IdentityConflict(report) => Err(TerminalFailure::refusal(
-            format!(
-                "duplicate repository identities make the portfolio ambiguous\n{}",
-                report.trim_end()
-            ),
-            "restore a unique stable repository identity for every enrolled repository before rerunning the report",
-        )),
-    }
+    print!("{}", portfolio::report(location)?);
+    Ok(())
 }
 
 fn run_enroll(
