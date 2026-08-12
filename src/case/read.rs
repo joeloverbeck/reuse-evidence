@@ -189,7 +189,7 @@ pub fn show(
     let case_id = parse_recorded_case_id(case_id)?;
     let repository_root = find_repository_root(working_directory)?;
     let steward = read_steward(&repository_root)?;
-    let relative_case_directory = Path::new("reuse-evidence/cases").join(case_id.to_string());
+    let relative_case_directory = naming::case_directory(case_id);
     validate_case_storage_path(&repository_root, &relative_case_directory)?;
     let mut case = read_case(
         &repository_root,
@@ -222,7 +222,7 @@ pub fn brief(
     let case_id = parse_recorded_case_id(case_id)?;
     let repository_root = find_repository_root(working_directory)?;
     let steward = read_steward(&repository_root)?;
-    let relative_case_directory = Path::new("reuse-evidence/cases").join(case_id.to_string());
+    let relative_case_directory = naming::case_directory(case_id);
     validate_case_storage_path(&repository_root, &relative_case_directory)?;
     let case = read_case_for(
         &repository_root,
@@ -316,7 +316,7 @@ fn read_cases(
     repository_root: &Path,
     steward_repository_id: Uuid,
 ) -> Result<Vec<CaseRecord>, TerminalFailure> {
-    let relative_cases_root = Path::new("reuse-evidence/cases");
+    let relative_cases_root = naming::cases_root();
     validate_case_storage_path(repository_root, relative_cases_root)?;
     let cases_root = repository_root.join(relative_cases_root);
     let entries = match fs::read_dir(&cases_root) {

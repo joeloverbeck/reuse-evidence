@@ -1,10 +1,26 @@
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub(super) const OPENING_SEQUENCE: i64 = 1;
 pub(super) const MAX_CASE_SEQUENCE: i64 = 9_999;
+
+/// The steward-relative root beneath which every case's event stream sits.
+///
+/// ADR 0009 fixes the layout as `reuse-evidence/cases/<case-id>/`, beside the
+/// root marker. Like the event file-name grammar, it cannot vary by event type
+/// or by command without changing recorded evidence, so it is stated once here
+/// rather than at each site that resolves a case.
+pub(crate) fn cases_root() -> &'static Path {
+    Path::new("reuse-evidence/cases")
+}
+
+/// The steward-relative directory holding one case's event stream.
+pub(crate) fn case_directory(case_id: Uuid) -> PathBuf {
+    cases_root().join(case_id.to_string())
+}
 
 /// Where in a case's event stream one event type may appear.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

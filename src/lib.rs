@@ -423,7 +423,7 @@ fn malformed_marker_error(
 fn refuse_fresh_enrollment_over_steward_case_storage(
     repository_root: &Path,
 ) -> Result<(), EnrollmentError> {
-    let case_directory = repository_root.join("reuse-evidence/cases");
+    let case_directory = repository_root.join(case::cases_root());
     let metadata = match fs::symlink_metadata(&case_directory) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),

@@ -8,6 +8,7 @@ mod read;
 mod render;
 
 pub use instant::RecordedInstant;
+pub(crate) use naming::cases_root;
 pub(crate) use read::private_case_stewarded_by;
 pub use read::{BriefOutcome, ListOutcome, ShowOutcome, brief, list, show};
 
@@ -668,8 +669,7 @@ pub fn open(
         Some(marker_lock)
     };
     let proposal = read_proposal(proposal_path)?;
-    let relative_case_directory =
-        PathBuf::from("reuse-evidence/cases").join(proposal.case_id.to_string());
+    let relative_case_directory = naming::case_directory(proposal.case_id);
     let event_path = case_event_path(
         &relative_case_directory,
         OPENING_SEQUENCE,
@@ -1168,7 +1168,7 @@ fn locate_later_event_case(
     let sequence = publication.sequence();
     let repository_root = find_repository_root(working_directory)?;
     let steward = read_steward(&repository_root)?;
-    let relative_case_directory = Path::new("reuse-evidence/cases").join(case_id.to_string());
+    let relative_case_directory = naming::case_directory(case_id);
     validate_case_storage_path(&repository_root, &relative_case_directory)?;
     let case = read::read_case_for(
         &repository_root,
