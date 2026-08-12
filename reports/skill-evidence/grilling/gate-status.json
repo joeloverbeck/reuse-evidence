@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-12T09:33:19.84768253Z",
+  "generated_at": "2026-08-12T15:23:17.499353707Z",
   "target_content_hash": "b9f458b0917db5368c6826732f0daf19b63f157b11d22034c023c8d465794ee6",
-  "qualifying_uses_on_current_hash": 25,
+  "qualifying_uses_on_current_hash": 27,
   "open_incident_ids": [
     "evt_fd786d97-7718-4253-9749-5a5f8b2de8f4",
     "evt_738194db-1039-42b1-93fe-c88f23541cd2",
@@ -28,7 +28,9 @@
     "evt_14fcbcd4-fc5a-4502-b341-3273e597e101",
     "evt_d1c009fa-6a88-477e-b71d-c745616e0c1c",
     "evt_135f457f-3904-4e27-921f-85a6f2ac58ab",
-    "evt_53a1b1e0-f7a8-4659-bf53-4d66d93147e7"
+    "evt_53a1b1e0-f7a8-4659-bf53-4d66d93147e7",
+    "evt_f791f3e5-52bd-433a-8233-38c7f384a266",
+    "evt_5f588a60-0b49-4fca-abc6-6f5a2ee5159f"
   ],
   "candidate_clusters": [
     {
@@ -51,9 +53,10 @@
         "evt_36255769-327b-4e1f-b334-d8fbf1bbb455",
         "evt_7b4bb5c0-cf00-4c53-8025-25ee26851e6f",
         "evt_135f457f-3904-4e27-921f-85a6f2ac58ab",
-        "evt_53a1b1e0-f7a8-4659-bf53-4d66d93147e7"
+        "evt_53a1b1e0-f7a8-4659-bf53-4d66d93147e7",
+        "evt_5f588a60-0b49-4fca-abc6-6f5a2ee5159f"
       ],
-      "independent_incidents": 6,
+      "independent_incidents": 7,
       "max_severity": "material_failure"
     },
     {
@@ -62,9 +65,10 @@
         "evt_0a582b78-6b3b-4ace-ae94-80aa48e7ae8d",
         "evt_53775056-9332-4a10-8abf-eec5c5319eb2",
         "evt_bc21c35b-b099-439d-b274-141ee3fc00aa",
-        "evt_d1c009fa-6a88-477e-b71d-c745616e0c1c"
+        "evt_d1c009fa-6a88-477e-b71d-c745616e0c1c",
+        "evt_f791f3e5-52bd-433a-8233-38c7f384a266"
       ],
-      "independent_incidents": 4,
+      "independent_incidents": 5,
       "max_severity": "material_failure"
     }
   ],
@@ -82,7 +86,7 @@
   "review_reentry_basis": "post_review_incident",
   "target_name": "grilling",
   "target_repo_relative_path": ".claude/skills/grilling",
-  "derivation_session_id": "42d45d6f-33b6-4d82-93e8-26123d699c9b",
+  "derivation_session_id": "98c45e1e-cfda-48aa-ac9f-013df8a8d360",
   "instrument_limited_incident_ids": [
     "evt_fd786d97-7718-4253-9749-5a5f8b2de8f4",
     "evt_738194db-1039-42b1-93fe-c88f23541cd2",
