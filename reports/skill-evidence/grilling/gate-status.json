@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-12T17:16:38.952357893Z",
+  "generated_at": "2026-08-12T19:42:30.108614629Z",
   "target_content_hash": "b9f458b0917db5368c6826732f0daf19b63f157b11d22034c023c8d465794ee6",
-  "qualifying_uses_on_current_hash": 31,
+  "qualifying_uses_on_current_hash": 32,
   "open_incident_ids": [
     "evt_fd786d97-7718-4253-9749-5a5f8b2de8f4",
     "evt_738194db-1039-42b1-93fe-c88f23541cd2",
@@ -33,7 +33,8 @@
     "evt_5f588a60-0b49-4fca-abc6-6f5a2ee5159f",
     "evt_1dd75cd5-5263-496f-89a3-4ba4b2086643",
     "evt_740d55c9-b4af-4c0a-a38f-44891b94adb8",
-    "evt_1c63f06b-9b2c-4747-9296-ffeb7a71a0e8"
+    "evt_1c63f06b-9b2c-4747-9296-ffeb7a71a0e8",
+    "evt_921abcc5-4c26-48c3-aff7-a8d8d541e068"
   ],
   "candidate_clusters": [
     {
@@ -60,9 +61,10 @@
         "evt_53a1b1e0-f7a8-4659-bf53-4d66d93147e7",
         "evt_5f588a60-0b49-4fca-abc6-6f5a2ee5159f",
         "evt_740d55c9-b4af-4c0a-a38f-44891b94adb8",
-        "evt_1c63f06b-9b2c-4747-9296-ffeb7a71a0e8"
+        "evt_1c63f06b-9b2c-4747-9296-ffeb7a71a0e8",
+        "evt_921abcc5-4c26-48c3-aff7-a8d8d541e068"
       ],
-      "independent_incidents": 8,
+      "independent_incidents": 9,
       "max_severity": "material_failure"
     },
     {
@@ -92,7 +94,7 @@
   "review_reentry_basis": "post_review_incident",
   "target_name": "grilling",
   "target_repo_relative_path": ".claude/skills/grilling",
-  "derivation_session_id": "01e4a52c-1aed-4b74-b504-1896a6b0ed28",
+  "derivation_session_id": "8c7dea51-658e-4edf-a25f-13140b5d4961",
   "instrument_limited_incident_ids": [
     "evt_fd786d97-7718-4253-9749-5a5f8b2de8f4",
     "evt_738194db-1039-42b1-93fe-c88f23541cd2",

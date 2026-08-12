@@ -1,12 +1,13 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-12T06:18:18.897145806Z",
+  "generated_at": "2026-08-12T19:49:07.411411463Z",
   "target_content_hash": "f6086b3322c82fb21d5da0c6cbd04f093ec20d7ca1e6094a9c2324cbeff6dd1d",
-  "qualifying_uses_on_current_hash": 3,
+  "qualifying_uses_on_current_hash": 4,
   "open_incident_ids": [
     "evt_74c863ac-a621-4e58-9244-b7f1d562bfb6",
     "evt_108c15ca-af07-4575-8159-f43c0a4147c6",
-    "evt_694cca63-22fb-449d-94e0-ebc16817d919"
+    "evt_694cca63-22fb-449d-94e0-ebc16817d919",
+    "evt_ffba23f3-16db-4344-a951-4698934275b0"
   ],
   "candidate_clusters": [
     {
@@ -14,13 +15,14 @@
       "open_event_ids": [
         "evt_74c863ac-a621-4e58-9244-b7f1d562bfb6",
         "evt_108c15ca-af07-4575-8159-f43c0a4147c6",
-        "evt_694cca63-22fb-449d-94e0-ebc16817d919"
+        "evt_694cca63-22fb-449d-94e0-ebc16817d919",
+        "evt_ffba23f3-16db-4344-a951-4698934275b0"
       ],
-      "independent_incidents": 3,
+      "independent_incidents": 4,
       "max_severity": "material_failure"
     }
   ],
-  "state": "eligible_pending_cooldown",
+  "state": "eligible",
   "authorized_workflow": "skill-evolution",
   "authorization_reason": "material_recurrence:execution",
   "trigger_event_ids": [
@@ -34,5 +36,5 @@
   "review_reentry_basis": "first_eligibility",
   "target_name": "to-issues",
   "target_repo_relative_path": ".claude/skills/to-issues",
-  "derivation_session_id": "6f1fc02b-4ed5-4f18-9b11-a74ee074b1af"
+  "derivation_session_id": "8c7dea51-658e-4edf-a25f-13140b5d4961"
 }

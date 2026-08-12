@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-12T17:14:58.723882554Z",
+  "generated_at": "2026-08-12T19:38:45.446627301Z",
   "target_content_hash": "50ae74251f72b370e4b226fa12169ffaa18cac49a814ca5a5725460fe4e3063a",
-  "qualifying_uses_on_current_hash": 20,
+  "qualifying_uses_on_current_hash": 21,
   "open_incident_ids": [
     "evt_166c1b46-6a7a-44e0-aea0-352caca372e3",
-    "evt_1d0bc26c-f7e4-4e17-9515-2113b6921890"
+    "evt_1d0bc26c-f7e4-4e17-9515-2113b6921890",
+    "evt_2e0dc6fb-4a97-483a-b69a-af14a1eab8c4"
   ],
   "candidate_clusters": [
     {
@@ -19,13 +20,14 @@
     {
       "symptom_key": "execution",
       "open_event_ids": [
-        "evt_1d0bc26c-f7e4-4e17-9515-2113b6921890"
+        "evt_1d0bc26c-f7e4-4e17-9515-2113b6921890",
+        "evt_2e0dc6fb-4a97-483a-b69a-af14a1eab8c4"
       ],
-      "independent_incidents": 1,
-      "max_severity": "friction"
+      "independent_incidents": 2,
+      "max_severity": "material_failure"
     }
   ],
-  "state": "eligible_pending_cooldown",
+  "state": "eligible",
   "authorized_workflow": "skill-evolution",
   "authorization_reason": "ten_use_unresolved",
   "trigger_event_ids": [
@@ -38,5 +40,5 @@
   "review_reentry_basis": "post_review_incident",
   "target_name": "grill-with-docs",
   "target_repo_relative_path": ".claude/skills/grill-with-docs",
-  "derivation_session_id": "01e4a52c-1aed-4b74-b504-1896a6b0ed28"
+  "derivation_session_id": "8c7dea51-658e-4edf-a25f-13140b5d4961"
 }

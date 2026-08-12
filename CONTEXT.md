@@ -17,6 +17,7 @@ This glossary is the shared language for `reuse-evidence`. Use these terms consi
 | **Case event envelope** | The type-independent part of every case event: its schema version, sequence, event identity, event type, and recorded instant, together with the file name that encodes its sequence and type. Every event type records the same envelope; only the body differs. |
 | **Case revision** | The highest contiguous event sequence number recorded for a case. Opening a case creates revision 1. |
 | **Later case event** | Any case event after the one that opened the case. Later events extend or correct history; the opening event is never replaced or reordered. |
+| **Prepared proposal** | The exact event content presented to the human for approval before publication. It is an input to a case event, never a case event: it is authored outside every repository working tree in the user-local staging directory, enters authoritative history only when the human approves it and the compiled command applies it, and is removed once its event is published. A draft the human has not yet approved is re-derivable from recoverable evidence; approved content is a recorded decision, which is why it needs a durable home rather than a temporary one. |
 | **Publication** | The act of recording exactly one later case event against an expected case revision. It records one new event or nothing at all, an identical retry changes nothing, and opening a case is not a publication. |
 | **Receipt** | The inspectable terminal record a command prints for what it did. An *event receipt* reports one case event and prints one spine: heading, `case_id`, `file`, `revision`, readiness where present, privacy, then the exact event bytes on a preview. Every spine field has one subject and keeps it: the heading, `file`, `revision`, and the event type's notice report the event this command recorded or matched, while readiness and privacy report the case as it now stands. The two coincide except on an idempotent retry of a superseded event, where one receipt truthfully reports both. Case queries print their own shape for a different question and are not event receipts. |
 | **Watching** | The normal state after a second independent occurrence: remember the pressure, but do not yet require a reuse review. |
@@ -53,6 +54,7 @@ This glossary is the shared language for `reuse-evidence`. Use these terms consi
 - An **occurrence** belongs to one **reuse consumer** and is supported by **evidence references**.
 - A second independent occurrence may open a **case** in a **steward repository**.
 - A **case event** is one **case event envelope** plus a body determined by its event type.
+- A **prepared proposal** becomes a **case event** only when the human approves it and the compiled command applies it.
 - A **publication** records one **later case event** and raises the **case revision** by one.
 - Accumulated occurrences derive **watching** or **review-ready** state.
 - A **reuse review** proposes a **reuse decision**.
