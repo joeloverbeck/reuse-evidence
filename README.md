@@ -355,7 +355,7 @@ The `reuse-evidence` binary mounts the command surface from the published `skill
 reuse-evidence skills evidence install --root .
 ```
 
-The registry dependency resolves to `skill-evidence` 0.9.0 in `Cargo.lock`; it is not a path or Git dependency. The host identity is `reuse-evidence` for the schema namespace, command, and Cargo package. Its operator-skill directory is resolved from this crate's own manifest directory, never from the repository supplied through `--root`.
+The registry dependency resolves to `skill-evidence` 0.10.0 in `Cargo.lock`; it is not a path or Git dependency. The host identity is `reuse-evidence` for the schema namespace, command, and Cargo package. Its operator-skill directory is resolved from this crate's own manifest directory, never from the repository supplied through `--root`.
 
 The install command writes four operator packages under `.claude/skills/`, relative discovery links under `.agents/skills/`, and the two versioned contracts under `schemas/skill-evidence/`. A non-force install refuses with status `3` if any installed file differs, names every differing file, and writes nothing. `--force` is the explicit replacement operation.
 

@@ -47,5 +47,3 @@ Relay the compiled command's refusal verbatim — gate state, failed condition, 
 Read `references/authorized-review.md` and execute it end-to-end, starting by claiming the review.
 
 *Done when exactly one terminal outcome was reached and recorded through the compiled command, the review report exists under `reports/skill-evidence/<skill-key>/reviews/`, and the user-facing completion states whether the live skill changed.*
-
-Maintainers only, never loaded at runtime: the design contract and source workflow live in the repository that authors this skill set, as `archive/workflows/00_shared-skill-evolution-contract.md` and `archive/workflows/02_skill-evolution-workflow.md`. They are absent in a repository that only consumes the skill.

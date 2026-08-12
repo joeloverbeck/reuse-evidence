@@ -211,6 +211,28 @@
                 "items": { "type": "string", "minLength": 1 },
                 "description": "Subset of adjudicated_event_ids this review could not decide: either no trial could express the mechanism those events record, or the acceptance gate grades outcome while their evidence bears no outcome claim. Asserts nothing about whether the mechanism reproduced. Omitted when the review decided everything it covered, which is what every close written before this key existed asserts."
               },
+              "constraint_provenance": {
+                "type": "array",
+                "minItems": 1,
+                "description": "Generated whole-field copies cited as the recorded ground for binding constraints behind instrument-limited coverage. They identify source text and do not assert entailment. Omitted means no checked constraint provenance was recorded; it does not negate an instrument-limited claim and includes every historical close that predates this key.",
+                "items": {
+                  "type": "object",
+                  "required": ["constraint_label", "event_id", "field", "field_value"],
+                  "properties": {
+                    "constraint_label": { "type": "string", "minLength": 1 },
+                    "event_id": { "type": "string", "minLength": 1 },
+                    "field": {
+                      "enum": [
+                        "run_condition",
+                        "observed",
+                        "consequence",
+                        "workaround_taken"
+                      ]
+                    },
+                    "field_value": { "type": "string", "minLength": 1 }
+                  }
+                }
+              },
               "external_owners": {
                 "type": "array",
                 "minItems": 1,

@@ -76,4 +76,4 @@ Each invocation is a whole operation: the compiled Rust command hashes the targe
 
 Never record clean or friction uses of Skill Evidence Capture itself. A self-targeted receipt is allowed only for an actual failed capture attempt — `material_failure` or worse, citing concrete evidence references; the compiled command enforces this. The recording invocation itself earns no receipt, and no diagnosis or self-edit follows.
 
-No report file is produced for ordinary capture; markdown reports belong to evolution runs. Maintainers only, never loaded during capture: the design contract and source workflow live in the repository that authors this skill set, as `archive/workflows/00_shared-skill-evolution-contract.md` and `archive/workflows/01_skill-evidence-capture-workflow.md`. They are absent in a repository that only consumes the skill.
+No report file is produced for ordinary capture; markdown reports belong to evolution runs.
