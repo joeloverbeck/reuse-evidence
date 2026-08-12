@@ -5,13 +5,13 @@ mod instant;
 mod naming;
 mod publication;
 mod read;
+mod render;
 
 pub use instant::RecordedInstant;
 pub(crate) use read::private_case_stewarded_by;
 pub use read::{BriefOutcome, ListOutcome, ShowOutcome, brief, list, show};
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::{self, Display, Formatter};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -25,12 +25,9 @@ use crate::portfolio;
 use crate::{TerminalFailure, Visibility, create_file_atomically};
 
 const CASE_SCHEMA_VERSION: i64 = 1;
-const REVIEW_ONLY_NOTICE: &str = "authorizes semantic review; does not authorize extraction";
 const IMPLEMENTATION_NOTICE: &str =
     "authorizes implementation outside the reuse lifecycle; does not perform it";
 const NO_IMPLEMENTATION_NOTICE: &str = "authorizes no implementation";
-const PORTFOLIO_UNAVAILABLE_FOOTER: &str = "portfolio conditions unavailable: configure portfolio roots or supply `--root <PATH>` to derive privacy conflicts and staleness\n";
-const PARTICIPANTS_UNRESOLVED_FOOTER: &str = "portfolio conditions unavailable: a recorded participant does not resolve to exactly one enrolled repository beneath the selected portfolio roots; restore its enrollment and unique repository identity to derive privacy\n";
 const APPEND_UNSTEWARDED_RESOLUTION: &str =
     "run `case list` in this steward repository and retry with a recorded case identity";
 const EARLY_REVIEW_UNSTEWARDED_RESOLUTION: &str = "run `case list` in this steward repository and retry `case override` with a recorded watching case identity";
@@ -107,6 +104,65 @@ struct DecisionContent {
     migration_expectations: Option<Vec<MigrationExpectation>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     rollback_or_resplitting_path: Option<String>,
+}
+
+/// The five fields an implementation-authorizing decision must record, resolved.
+///
+/// `validate_change_decision_content` refuses an implementation-authorizing decision that omits
+/// any of them, so recorded content always has all five. This value is what carries that proof
+/// past validation.
+#[derive(Debug)]
+struct AuthorizedImplementation {
+    invariant_contract: String,
+    existing_packages_considered: Vec<ExistingPackageConsidered>,
+    required_consumer_level_tests: Vec<String>,
+    migration_expectations: Vec<MigrationExpectation>,
+    rollback_or_resplitting_path: String,
+}
+
+/// What an accepted decision authorizes, holding whatever that authorization requires.
+#[derive(Debug)]
+enum DecisionAuthorization {
+    Implementation(AuthorizedImplementation),
+    NoImplementation,
+}
+
+impl DecisionContent {
+    /// Resolves what this content authorizes.
+    ///
+    /// The action and the five change-action fields correspond by validation, not by type, so
+    /// something has to bridge them. Doing it here — where a refusal is still expressible — is
+    /// what lets `case::render` print a brief without re-asserting that correspondence at six
+    /// sites where `Display` could only panic.
+    fn authorization(&self) -> Result<DecisionAuthorization, TerminalFailure> {
+        if !self.action.authorizes_implementation() {
+            return Ok(DecisionAuthorization::NoImplementation);
+        }
+        Ok(DecisionAuthorization::Implementation(
+            AuthorizedImplementation {
+                invariant_contract: self
+                    .invariant_contract
+                    .clone()
+                    .ok_or_else(|| missing_change_decision_item("invariant_contract"))?,
+                existing_packages_considered: self
+                    .existing_packages_considered
+                    .clone()
+                    .ok_or_else(|| missing_change_decision_item("existing_packages_considered"))?,
+                required_consumer_level_tests: self
+                    .required_consumer_level_tests
+                    .clone()
+                    .ok_or_else(|| missing_change_decision_item("required_consumer_level_tests"))?,
+                migration_expectations: self
+                    .migration_expectations
+                    .clone()
+                    .ok_or_else(|| missing_change_decision_item("migration_expectations"))?,
+                rollback_or_resplitting_path: self
+                    .rollback_or_resplitting_path
+                    .clone()
+                    .ok_or_else(|| missing_change_decision_item("rollback_or_resplitting_path"))?,
+            },
+        ))
+    }
 }
 
 #[derive(Debug)]
@@ -422,9 +478,10 @@ impl LaterEventHeadings {
 ///
 /// Every later event type refuses a failed publication in the same shape; only the words
 /// naming the event and its retry differ. `case::naming` owns the machine spellings under
-/// ADR 0011 — the recorded body string and the file-name slug — and that decision leaves
-/// receipt strings where they are, so the operator-facing vocabulary lives here beside the
-/// headings rather than widening the naming module.
+/// ADR 0011 — the recorded body string and the file-name slug — so the operator-facing
+/// vocabulary lives here beside the headings rather than widening the naming module. ADR 0017
+/// moved receipt text to `case::render`; a refusal is not a receipt, and both stay each event
+/// type's decision under ADR 0010.
 #[derive(Clone, Copy, Debug)]
 struct LaterEventRefusals {
     /// Names the recorded event in a condition: `recorded {event} event ...`.
@@ -586,103 +643,6 @@ enum ReportedPrivacy {
     PortfolioUnconfigured,
     /// Roots are selected, but a recorded participant does not resolve to one enrolled repository.
     ParticipantsUnresolved,
-}
-
-impl ReportedPrivacy {
-    /// Writes the `privacy:` line, followed by the footer explaining an underivable privacy.
-    fn write_receipt_line(self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Derived(privacy) => writeln!(formatter, "privacy: {privacy}"),
-            Self::PortfolioUnconfigured => {
-                formatter.write_str("privacy: unknown\n")?;
-                formatter.write_str(PORTFOLIO_UNAVAILABLE_FOOTER)
-            }
-            Self::ParticipantsUnresolved => {
-                formatter.write_str("privacy: unknown\n")?;
-                formatter.write_str(PARTICIPANTS_UNRESOLVED_FOOTER)
-            }
-        }
-    }
-}
-
-/// The spine every event-type receipt prints, in order.
-///
-/// Which fields an event type supplies stays that event type's decision under
-/// ADR 0010; the spine fixes only their order and spelling. `state` is absent
-/// for an event that reports none, and `preview_event` carries the exact event
-/// bytes a preview appends.
-struct EventReceipt<'a> {
-    heading: &'a str,
-    case_id: Uuid,
-    event_path: &'a Path,
-    revision: i64,
-    state: Option<read::CaseState>,
-    privacy: ReportedPrivacy,
-    notice: Option<&'a str>,
-    preview_event: Option<&'a str>,
-}
-
-impl Display for EventReceipt<'_> {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        writeln!(formatter, "{}", self.heading)?;
-        writeln!(formatter, "case_id: {}", self.case_id)?;
-        writeln!(formatter, "file: {}", self.event_path.display())?;
-        writeln!(formatter, "revision: {}", self.revision)?;
-        if let Some(state) = self.state {
-            state.write_receipt_lines(formatter, "")?;
-        }
-        self.privacy.write_receipt_line(formatter)?;
-        if let Some(notice) = self.notice {
-            writeln!(formatter, "decision: {notice}")?;
-        }
-        if let Some(event) = self.preview_event {
-            formatter.write_str("event:\n")?;
-            formatter.write_str(event)?;
-        }
-        Ok(())
-    }
-}
-
-/// Renders the receipt followed by the exact event bytes for a preview.
-impl Display for OpenOutcome {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        let heading = match self.effect {
-            OpenEffect::Preview => "case open preview",
-            OpenEffect::Created => "opened case",
-            OpenEffect::Existing => "existing case",
-        };
-        EventReceipt {
-            heading,
-            case_id: self.case_id,
-            event_path: &self.event_path,
-            revision: OPENING_SEQUENCE,
-            state: None,
-            // Opening derives privacy once and has no retry path, so its stored
-            // privacy stays a `Visibility` the spine widens only in passing.
-            privacy: ReportedPrivacy::Derived(self.privacy),
-            notice: None,
-            preview_event: (self.effect == OpenEffect::Preview).then_some(self.event.as_str()),
-        }
-        .fmt(formatter)
-    }
-}
-
-/// Renders one later-event receipt, followed by the exact event bytes for a preview.
-impl Display for LaterEventOutcome {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        EventReceipt {
-            heading: self.headings.heading(self.effect),
-            case_id: self.case_id,
-            event_path: &self.event_path,
-            revision: self.revision,
-            state: self.state,
-            privacy: self.privacy,
-            notice: self.notice,
-            preview_event: (self.effect == LaterEventEffect::Preview)
-                .then_some(self.event.as_str()),
-        }
-        .fmt(formatter)
-    }
 }
 
 /// Opens or previews a case in the enrolled steward repository.

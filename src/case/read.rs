@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::{self, Display, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -8,9 +7,9 @@ use uuid::Uuid;
 
 use super::naming::{self, EventFileName, EventPosition, EventType, OPENING_SEQUENCE};
 use super::{
-    CASE_SCHEMA_VERSION, CaseOpenedEvent, EarlyReviewAuthorizedEvent, Occurrence,
-    OccurrenceAppendedEvent, REVIEW_ONLY_NOTICE, ReportedPrivacy, ReuseDecisionAcceptedEvent,
-    find_repository_root, read_steward, validate_case_storage_path,
+    CASE_SCHEMA_VERSION, CaseOpenedEvent, DecisionAuthorization, DecisionContent,
+    EarlyReviewAuthorizedEvent, Occurrence, OccurrenceAppendedEvent, ReportedPrivacy,
+    ReuseDecisionAcceptedEvent, find_repository_root, read_steward, validate_case_storage_path,
 };
 use crate::{TerminalFailure, Visibility, portfolio};
 
@@ -55,36 +54,22 @@ impl CaseState {
             Self::ReviewReadyByEarlyReviewOverride => Some("early-review-override"),
         }
     }
-
-    /// Writes the `state:` line and the readiness lines a review-ready case adds.
-    ///
-    /// `indent` prefixes every line, because a case listing nests what a case
-    /// receipt and `case show` print flush.
-    pub(super) fn write_receipt_lines(
-        self,
-        formatter: &mut Formatter<'_>,
-        indent: &str,
-    ) -> fmt::Result {
-        writeln!(formatter, "{indent}state: {}", self.label())?;
-        if let Some(basis) = self.basis() {
-            writeln!(formatter, "{indent}readiness_basis: {basis}")?;
-        }
-        if self.authorizes_review() {
-            writeln!(formatter, "{indent}readiness: {REVIEW_ONLY_NOTICE}")?;
-        }
-        Ok(())
-    }
 }
 
+/// One case folded from its recorded event stream.
+///
+/// This is derived state, and under ADR 0017 `case::render` is its only consumer besides this
+/// module, so its fields are readable across `case` rather than through an accessor apiece. Its
+/// invariants are established when it is folded, not by field privacy.
 pub(super) struct CaseRecord {
     pub(super) case_id: Uuid,
     pub(super) responsibility: String,
     pub(super) revision: i64,
     pub(super) privacy: Visibility,
     pub(super) occurrences: Vec<Occurrence>,
-    early_review: Option<EarlyReviewAuthorizedEvent>,
-    decision: Option<ReuseDecisionAcceptedEvent>,
-    conditions: Conditions,
+    pub(super) early_review: Option<EarlyReviewAuthorizedEvent>,
+    pub(super) decision: Option<ReuseDecisionAcceptedEvent>,
+    pub(super) conditions: Conditions,
 }
 
 enum CaseEvent {
@@ -100,9 +85,9 @@ struct EventDiscriminator {
 }
 
 #[derive(Clone, Copy)]
-struct Conditions {
-    privacy_conflicted: Option<bool>,
-    stale: Option<bool>,
+pub(super) struct Conditions {
+    pub(super) privacy_conflicted: Option<bool>,
+    pub(super) stale: Option<bool>,
 }
 
 impl Conditions {
@@ -110,14 +95,6 @@ impl Conditions {
         privacy_conflicted: None,
         stale: None,
     };
-}
-
-fn render_condition(value: Option<bool>) -> &'static str {
-    match value {
-        Some(true) => "true",
-        Some(false) => "false",
-        None => "unknown",
-    }
 }
 
 impl CaseRecord {
@@ -150,295 +127,27 @@ impl CaseRecord {
     }
 }
 
-/// The complete rendered result of listing steward-local cases.
+/// The steward-local case listing, as read.
 pub struct ListOutcome {
-    cases: Vec<CaseRecord>,
-    portfolio_available: bool,
+    pub(super) cases: Vec<CaseRecord>,
+    pub(super) portfolio_available: bool,
 }
 
-/// The complete rendered result of showing one steward-local case.
+/// One steward-local case, as read.
 pub struct ShowOutcome {
-    case: CaseRecord,
-    portfolio_available: bool,
+    pub(super) case: CaseRecord,
+    pub(super) portfolio_available: bool,
 }
 
 /// The implementation handoff projected from one accepted reuse decision.
+///
+/// The decision content is held beside the case, and what it authorizes is resolved before this
+/// value exists, so rendering the brief cannot fail on a field the recorded decision omitted.
 pub struct BriefOutcome {
-    case: CaseRecord,
-    privacy: ReportedPrivacy,
-}
-
-/// Renders the accepted implementation handoff without creating a second artifact.
-impl Display for BriefOutcome {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        let case = &self.case;
-        let decision = case
-            .decision
-            .as_ref()
-            .expect("a brief outcome has an accepted reuse decision");
-        let content = &decision.content;
-        writeln!(formatter, "implementation brief\ncase_id: {}", case.case_id)?;
-        self.privacy.write_receipt_line(formatter)?;
-        if content.action.authorizes_implementation() {
-            write_authorized_implementation(formatter, case, content)
-        } else {
-            write_no_implementation_decision(formatter, case, content)
-        }
-    }
-}
-
-fn write_authorized_implementation(
-    formatter: &mut Formatter<'_>,
-    case: &CaseRecord,
-    content: &super::DecisionContent,
-) -> fmt::Result {
-    formatter.write_str("implementation: authorized\n")?;
-    write_responsibility_identity(formatter, case, content)?;
-    formatter.write_str("evidence_bearing_consumers:\n")?;
-    for occurrence in &case.occurrences {
-        writeln!(
-            formatter,
-            "- repository_id: {}\n  consumer: {}\n  independence: {}",
-            occurrence.repository_id, occurrence.consumer, occurrence.independence
-        )?;
-        if let Some(affected) = content.affected_consumers.iter().find(|affected| {
-            occurrence.repository_id == affected.repository_id
-                && occurrence.consumer.trim() == affected.consumer.trim()
-        }) {
-            writeln!(formatter, "  expectation: {}", affected.expectation)?;
-        }
-        formatter.write_str("  evidence:\n")?;
-        for evidence in &occurrence.evidence {
-            writeln!(
-                formatter,
-                "  - kind: {}\n    reference: {}",
-                evidence.kind.label(),
-                evidence.reference
-            )?;
-            if let Some(path) = &evidence.path {
-                writeln!(formatter, "    path: {path}")?;
-            }
-        }
-    }
-    writeln!(
-        formatter,
-        "invariant_contract: {}\nnon_responsibilities:",
-        content
-            .invariant_contract
-            .as_deref()
-            .expect("an implementation-authorizing decision has an invariant contract")
-    )?;
-    write_string_list(formatter, &content.non_responsibilities)?;
-    write_chosen_home_and_scope(formatter, content)?;
-    write_alternatives_rejected(formatter, content)?;
-    formatter.write_str("existing_packages_considered:\n")?;
-    for package in content
-        .existing_packages_considered
-        .as_deref()
-        .expect("an implementation-authorizing decision records considered packages")
-    {
-        writeln!(
-            formatter,
-            "- package: {}\n  fit: {}\n  reason: {}",
-            package.package, package.fit, package.reason
-        )?;
-    }
-    formatter.write_str("required_consumer_level_tests:\n")?;
-    write_string_list(
-        formatter,
-        content
-            .required_consumer_level_tests
-            .as_deref()
-            .expect("an implementation-authorizing decision records consumer-level tests"),
-    )?;
-    writeln!(
-        formatter,
-        "compatibility_and_release_consequences: {}\nmigration_order:",
-        content.compatibility_consequences
-    )?;
-    for migration in content
-        .migration_expectations
-        .as_deref()
-        .expect("an implementation-authorizing decision records migration order")
-    {
-        writeln!(
-            formatter,
-            "- order: {}\n  expectation: {}",
-            migration.order, migration.expectation
-        )?;
-    }
-    writeln!(
-        formatter,
-        "rollback_or_resplitting_strategy: {}\nverification_conditions:",
-        content
-            .rollback_or_resplitting_path
-            .as_deref()
-            .expect("an implementation-authorizing decision records its reversal path")
-    )?;
-    write_string_list(formatter, &content.verification_conditions)
-}
-
-fn write_no_implementation_decision(
-    formatter: &mut Formatter<'_>,
-    case: &CaseRecord,
-    content: &super::DecisionContent,
-) -> fmt::Result {
-    formatter
-        .write_str("implementation: not authorized\ndecision: authorizes no implementation\n")?;
-    write_responsibility_identity(formatter, case, content)?;
-    write_chosen_home_and_scope(formatter, content)?;
-    formatter.write_str("non_responsibilities:\n")?;
-    write_string_list(formatter, &content.non_responsibilities)?;
-    write_alternatives_rejected(formatter, content)?;
-    write_compatibility_and_verification(formatter, content)
-}
-
-fn write_string_list(formatter: &mut Formatter<'_>, values: &[String]) -> fmt::Result {
-    for value in values {
-        writeln!(formatter, "- {value}")?;
-    }
-    Ok(())
-}
-
-fn write_responsibility_identity(
-    formatter: &mut Formatter<'_>,
-    case: &CaseRecord,
-    content: &super::DecisionContent,
-) -> fmt::Result {
-    writeln!(
-        formatter,
-        "accepted_responsibility_identity:\n  responsibility: {}\n  verdict: {}",
-        case.responsibility,
-        content.identity_verdict.label()
-    )
-}
-
-fn write_chosen_home_and_scope(
-    formatter: &mut Formatter<'_>,
-    content: &super::DecisionContent,
-) -> fmt::Result {
-    writeln!(
-        formatter,
-        "chosen_home_and_scope:\n  action: {}\n  scope: {}",
-        content.action.label(),
-        content.accepted_scope
-    )
-}
-
-fn write_alternatives_rejected(
-    formatter: &mut Formatter<'_>,
-    content: &super::DecisionContent,
-) -> fmt::Result {
-    formatter.write_str("alternatives_rejected:\n")?;
-    for alternative in &content.alternatives_rejected {
-        writeln!(
-            formatter,
-            "- alternative: {}\n  reason: {}",
-            alternative.alternative, alternative.reason
-        )?;
-    }
-    Ok(())
-}
-
-fn write_compatibility_and_verification(
-    formatter: &mut Formatter<'_>,
-    content: &super::DecisionContent,
-) -> fmt::Result {
-    writeln!(
-        formatter,
-        "compatibility_and_release_consequences: {}\nverification_conditions:",
-        content.compatibility_consequences
-    )?;
-    write_string_list(formatter, &content.verification_conditions)
-}
-
-/// Renders the case and every recorded occurrence deterministically.
-impl Display for ShowOutcome {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        let case = &self.case;
-        writeln!(
-            formatter,
-            "case\ncase_id: {}\nresponsibility: {}\nrevision: {}\noccurrence_count: {}",
-            case.case_id,
-            case.responsibility,
-            case.revision,
-            case.occurrences.len()
-        )?;
-        case.state().write_receipt_lines(formatter, "")?;
-        writeln!(
-            formatter,
-            "privacy_conflicted: {}\nstale: {}\noccurrences:",
-            render_condition(case.conditions.privacy_conflicted),
-            render_condition(case.conditions.stale)
-        )?;
-        for occurrence in &case.occurrences {
-            writeln!(
-                formatter,
-                "- repository_id: {}\n  consumer: {}\n  independence: {}\n  evidence:",
-                occurrence.repository_id, occurrence.consumer, occurrence.independence
-            )?;
-            for evidence in &occurrence.evidence {
-                let kind = evidence.kind.label();
-                writeln!(
-                    formatter,
-                    "  - kind: {kind}\n    reference: {}",
-                    evidence.reference
-                )?;
-                if let Some(path) = &evidence.path {
-                    writeln!(formatter, "    path: {path}")?;
-                }
-            }
-        }
-        if let Some(early_review) = &case.early_review {
-            writeln!(
-                formatter,
-                "early_review:\n  reason: {}\n  review_appetite: {}\n  evidence:",
-                early_review.reason, early_review.review_appetite
-            )?;
-            for evidence in &early_review.evidence {
-                let kind = evidence.kind.label();
-                writeln!(
-                    formatter,
-                    "  - kind: {kind}\n    reference: {}",
-                    evidence.reference
-                )?;
-                if let Some(path) = &evidence.path {
-                    writeln!(formatter, "    path: {path}")?;
-                }
-            }
-        }
-        if !self.portfolio_available {
-            formatter.write_str(super::PORTFOLIO_UNAVAILABLE_FOOTER)?;
-        }
-        Ok(())
-    }
-}
-
-/// Renders a deterministic steward-local case listing.
-impl Display for ListOutcome {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        formatter.write_str("cases\n")?;
-        for case in &self.cases {
-            writeln!(
-                formatter,
-                "- case_id: {}\n  revision: {}\n  occurrence_count: {}",
-                case.case_id,
-                case.revision,
-                case.occurrences.len()
-            )?;
-            case.state().write_receipt_lines(formatter, "  ")?;
-            writeln!(
-                formatter,
-                "  privacy_conflicted: {}\n  stale: {}",
-                render_condition(case.conditions.privacy_conflicted),
-                render_condition(case.conditions.stale)
-            )?;
-        }
-        if !self.portfolio_available {
-            formatter.write_str(super::PORTFOLIO_UNAVAILABLE_FOOTER)?;
-        }
-        Ok(())
-    }
+    pub(super) case: CaseRecord,
+    pub(super) privacy: ReportedPrivacy,
+    pub(super) decision: DecisionContent,
+    pub(super) authorization: DecisionAuthorization,
 }
 
 /// Lists every case stewarded by the enrolled repository containing
@@ -519,7 +228,7 @@ pub fn brief(
         steward.repository_id(),
         "run `case list` in this steward repository, then retry `case brief <CASE_ID>` with one of its recorded case identities",
     )?;
-    if case.decision.is_none() {
+    let Some(decision) = case.decision.as_ref() else {
         let state = case.state();
         let resolution = if state.authorizes_review() {
             format!("record an accepted reuse decision, then rerun `case brief {case_id}`")
@@ -535,9 +244,16 @@ pub fn brief(
             ),
             resolution,
         ));
-    }
+    };
+    let content = decision.content.clone();
+    let authorization = content.authorization()?;
     let privacy = super::reported_privacy(&case, &steward, location);
-    Ok(BriefOutcome { case, privacy })
+    Ok(BriefOutcome {
+        case,
+        privacy,
+        decision: content,
+        authorization,
+    })
 }
 
 fn parse_recorded_case_id(case_id: &str) -> Result<Uuid, TerminalFailure> {

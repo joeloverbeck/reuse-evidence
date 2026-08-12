@@ -1,8 +1,8 @@
 # ADR 0016: The process boundary tests the terminal contract; behaviour is tested across the module interface
 
-**Status:** Proposed
-**Date:** 2026-08-11
-**Decision owner:** Repository maintainer
+**Status:** Accepted  
+**Date:** 2026-08-11  
+**Decision owner:** Repository maintainer  
 **Governing principles:** [`FOUNDATIONS.md`](../principles/FOUNDATIONS.md), [`CONSUMER-CONTRACT.md`](../principles/CONSUMER-CONTRACT.md)
 
 ## Context

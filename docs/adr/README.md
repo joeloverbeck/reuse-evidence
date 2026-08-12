@@ -30,14 +30,8 @@ Only the human decision owner can accept, supersede, or reject an ADR. Merge, im
 | [0013](0013-one-outcome-carrier-for-later-case-events.md) | The three later case event types share one outcome carrier and effect enum; opening keeps its own shape. |
 | [0014](0014-one-type-for-the-case-event-envelope.md) | The case event envelope has one type and one validator, flattened into each body; recorded bytes and refusal wording are unchanged. |
 | [0015](0015-portfolio-location-resolved-at-the-edge.md) | The portfolio location is resolved once at the edge as a value that carries its own absence; each consumer keeps its own interpretation, so the `portfolio` refusal and the `case list` degraded projection both stand. |
-
-## Proposed decisions
-
-Informative only; not authority until the decision owner accepts them.
-
-| ADR | Decision |
-|---|---|
 | [0016](0016-terminal-contract-at-the-process-boundary.md) | The process boundary tests the terminal contract; behaviour is tested across the module interface. New behaviour goes in process; existing CLI tests are not converted. |
+| [0017](0017-one-owner-for-case-terminal-text.md) | Every case renderer moves to `case::render`, reached one way; the receipt spine and shared readiness vocabulary take the owner ADR 0010 permitted, and the brief's panic-on-drift becomes a type. |
 
 ## Adding or changing an ADR
 
