@@ -99,22 +99,25 @@ impl Conditions {
 
 impl CaseRecord {
     pub(super) fn state(&self) -> CaseState {
-        if self.decision.is_some() {
-            CaseState::AwaitingVerification
-        } else if self.early_review.is_some() {
-            CaseState::ReviewReadyByEarlyReviewOverride
-        } else {
-            CaseState::from_occurrence_count(self.occurrences.len())
-        }
+        self.state_with_occurrence_count(self.occurrences.len())
     }
 
     pub(super) fn state_after_appending_occurrence(&self) -> CaseState {
+        self.state_with_occurrence_count(self.occurrences.len() + 1)
+    }
+
+    /// The precedence an accepted decision, an early-review override and the
+    /// occurrence count take over each other.
+    ///
+    /// The two callers differ only by whether the occurrence about to be
+    /// appended is counted, so the rule they share is stated once here.
+    fn state_with_occurrence_count(&self, occurrence_count: usize) -> CaseState {
         if self.decision.is_some() {
             CaseState::AwaitingVerification
         } else if self.early_review.is_some() {
             CaseState::ReviewReadyByEarlyReviewOverride
         } else {
-            CaseState::from_occurrence_count(self.occurrences.len() + 1)
+            CaseState::from_occurrence_count(occurrence_count)
         }
     }
 
