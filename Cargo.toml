@@ -50,6 +50,11 @@ name = "skills_cli"
 path = "tests/skills_cli.rs"
 required-features = ["cli"]
 
+[[test]]
+name = "terminal_contract_cli"
+path = "tests/terminal_contract_cli.rs"
+required-features = ["cli"]
+
 # In-process coverage that reaches `case` and `portfolio`, which are public
 # modules only under the `cli` feature.
 [[test]]

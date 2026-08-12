@@ -152,8 +152,7 @@ fn main() -> ExitCode {
                 ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
             ) =>
         {
-            print!("{error}");
-            ExitCode::from(ExitMeaning::Success.status())
+            terminal_exit(write_stdout(&error.to_string()))
         }
         Err(error) => terminal_exit(Err(TerminalFailure::refusal(
             format!(
@@ -244,20 +243,17 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
         CaseCommand::Brief { case_id, root } => {
             let location = portfolio::PortfolioLocation::from_environment(root);
             let outcome = case::brief(Path::new("."), &case_id, &location)?;
-            print!("{outcome}");
-            Ok(())
+            write_stdout(&outcome.to_string())
         }
         CaseCommand::List { root } => {
             let location = portfolio::PortfolioLocation::from_environment(root);
             let outcome = case::list(Path::new("."), &location)?;
-            print!("{outcome}");
-            Ok(())
+            write_stdout(&outcome.to_string())
         }
         CaseCommand::Show { case_id, root } => {
             let location = portfolio::PortfolioLocation::from_environment(root);
             let outcome = case::show(Path::new("."), &case_id, &location)?;
-            print!("{outcome}");
-            Ok(())
+            write_stdout(&outcome.to_string())
         }
     }
 }
@@ -280,8 +276,7 @@ fn run_open(
         RecordedInstant::now()?,
         preview,
     )?;
-    print!("{outcome}");
-    Ok(())
+    write_stdout(&outcome.to_string())
 }
 
 fn run_append(
@@ -312,8 +307,7 @@ fn run_append(
         RecordedInstant::now()?,
         preview,
     )?;
-    print!("{outcome}");
-    Ok(())
+    write_stdout(&outcome.to_string())
 }
 
 fn run_override(
@@ -346,8 +340,7 @@ fn run_override(
         RecordedInstant::now()?,
         preview,
     )?;
-    print!("{outcome}");
-    Ok(())
+    write_stdout(&outcome.to_string())
 }
 
 fn run_decide(
@@ -380,15 +373,38 @@ fn run_decide(
         RecordedInstant::now()?,
         preview,
     )?;
-    print!("{outcome}");
-    Ok(())
+    write_stdout(&outcome.to_string())
+}
+
+/// Writes one command's output to stdout, classifying a failure to write it.
+///
+/// `print!` panics when stdout cannot be written, which exits 101 and bypasses
+/// `ExitMeaning` entirely — a status outside the terminal contract ADR 0016
+/// makes the process boundary's whole subject. A full disk or a redirect to an
+/// unwritable file is a real failure with no no-write guarantee, because a
+/// write command may already have published its event before reaching here.
+fn write_stdout(text: &str) -> Result<(), TerminalFailure> {
+    let mut out = io::stdout().lock();
+    match out.write_all(text.as_bytes()).and_then(|()| out.flush()) {
+        Ok(()) => Ok(()),
+        // A consumer that stopped reading, as `… | head` does, has not made the
+        // command fail. Nothing more can be written, so the run simply ends.
+        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        Err(error) => Err(TerminalFailure::unsafe_failure(format!(
+            "command output could not be written to stdout: {error}"
+        ))),
+    }
 }
 
 fn terminal_exit(result: Result<(), TerminalFailure>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::from(ExitMeaning::Success.status()),
         Err(failure) => {
-            eprintln!("{failure}");
+            // Best effort: a failure to report a failure cannot itself be
+            // reported, and must not become a panic that loses the status too.
+            let mut err = io::stderr().lock();
+            let _ = writeln!(err, "{failure}");
+            let _ = err.flush();
             ExitCode::from(failure.meaning().status())
         }
     }
@@ -421,8 +437,7 @@ const fn skill_exit_meaning(exit: skill_evidence::cli::Exit) -> ExitMeaning {
 }
 
 fn run_portfolio(location: &portfolio::PortfolioLocation) -> Result<(), TerminalFailure> {
-    print!("{}", portfolio::report(location)?);
-    Ok(())
+    write_stdout(&portfolio::report(location)?)
 }
 
 fn run_enroll(
@@ -460,8 +475,7 @@ fn run_enroll(
         expected_repository_id,
     )?;
 
-    print!("{enrollment}");
-    Ok(())
+    write_stdout(&enrollment.to_string())
 }
 
 fn run_set_visibility(visibility: Option<String>) -> Result<(), TerminalFailure> {
@@ -473,6 +487,5 @@ fn run_set_visibility(visibility: Option<String>) -> Result<(), TerminalFailure>
     })?;
     let visibility = Visibility::parse(&visibility)?;
     let enrollment = set_visibility(Path::new("."), visibility)?;
-    print!("{enrollment}");
-    Ok(())
+    write_stdout(&enrollment.to_string())
 }
