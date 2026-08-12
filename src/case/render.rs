@@ -2,7 +2,7 @@
 //!
 //! ADR 0017 gives case terminal text one owner. This module formats and does nothing else: it
 //! reads no file, takes no lock, and derives no state. `case::read` produces the projections and
-//! `src/case.rs` produces the outcomes; only their printing lives here.
+//! `src/case.rs` produces the recording outcomes; only their printing lives here.
 //!
 //! Which fields an event type prints stays that event type's decision under ADR 0010, so the
 //! per-type headings and notices stay with their event type. What this module owns is the shape
@@ -13,7 +13,9 @@ use std::path::Path;
 
 use uuid::Uuid;
 
-use super::read::{BriefOutcome, CaseRecord, CaseState, ListOutcome, ShowOutcome};
+use super::read::{
+    BriefOutcome, CaseRecord, CaseState, FindOutcome, ListOutcome, PortfolioCaseState, ShowOutcome,
+};
 use super::{
     AuthorizedImplementation, DecisionAuthorization, DecisionContent, LaterEventEffect,
     LaterEventOutcome, OpenEffect, OpenOutcome, ReportedPrivacy,
@@ -454,6 +456,50 @@ impl Display for ListOutcome {
         }
         if !self.portfolio_available {
             formatter.write_str(PORTFOLIO_UNAVAILABLE_FOOTER)?;
+        }
+        Ok(())
+    }
+}
+
+/// Renders the cross-portfolio case query in its own shape.
+impl Display for FindOutcome {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str("portfolio cases\n")?;
+        for found in &self.cases {
+            writeln!(
+                formatter,
+                "- case_id: {}\n  steward_repository_id: {}\n  steward_path: {}",
+                found.case_id,
+                found.steward_repository_id,
+                found.steward_path.display()
+            )?;
+            match &found.state {
+                PortfolioCaseState::Recorded { case, privacy } => {
+                    writeln!(
+                        formatter,
+                        "  responsibility: {}\n  revision: {}",
+                        case.responsibility, case.revision
+                    )?;
+                    write_state_lines(case.state(), formatter, "  ")?;
+                    match privacy {
+                        ReportedPrivacy::Derived(privacy) => {
+                            writeln!(formatter, "  privacy: {privacy}")?;
+                        }
+                        ReportedPrivacy::PortfolioUnconfigured
+                        | ReportedPrivacy::ParticipantsUnresolved => {
+                            formatter.write_str("  privacy: unknown\n")?;
+                        }
+                    }
+                }
+                PortfolioCaseState::Damaged { detail } => {
+                    formatter.write_str(
+                        "  condition: damaged-recorded-event-history\n  responsibility: unavailable\n  revision: unavailable\n  state: unavailable\n  privacy: unknown\n  detail:\n",
+                    )?;
+                    for line in detail.lines() {
+                        writeln!(formatter, "    {line}")?;
+                    }
+                }
+            }
         }
         Ok(())
     }

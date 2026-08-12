@@ -10,7 +10,7 @@ mod render;
 pub use instant::RecordedInstant;
 pub(crate) use naming::cases_root;
 pub(crate) use read::private_case_stewarded_by;
-pub use read::{BriefOutcome, ListOutcome, ShowOutcome, brief, list, show};
+pub use read::{BriefOutcome, FindOutcome, ListOutcome, ShowOutcome, brief, find, list, show};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -1894,15 +1894,27 @@ fn derive_complete_case_privacy(
     roots: &[PathBuf],
 ) -> Result<Visibility, TerminalFailure> {
     let participant_visibilities = resolve_participants(roots, &case.occurrences)?;
+    Ok(complete_case_privacy(
+        case,
+        steward.visibility(),
+        participant_visibilities.values().copied(),
+    ))
+}
+
+fn complete_case_privacy(
+    case: &read::CaseRecord,
+    steward_visibility: Visibility,
+    participant_visibilities: impl IntoIterator<Item = Visibility>,
+) -> Visibility {
     if case.privacy == Visibility::Private
-        || steward.visibility() == Visibility::Private
+        || steward_visibility == Visibility::Private
         || participant_visibilities
-            .values()
-            .any(|visibility| *visibility == Visibility::Private)
+            .into_iter()
+            .any(|visibility| visibility == Visibility::Private)
     {
-        Ok(Visibility::Private)
+        Visibility::Private
     } else {
-        Ok(Visibility::Public)
+        Visibility::Public
     }
 }
 

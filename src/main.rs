@@ -144,6 +144,12 @@ enum CaseCommand {
         #[arg(long)]
         root: Vec<PathBuf>,
     },
+    /// Find every case stewarded beneath the selected portfolio roots.
+    Find {
+        /// Portfolio root for this query; overrides user-local configuration.
+        #[arg(long)]
+        root: Vec<PathBuf>,
+    },
     /// List every case stewarded by the current repository.
     List {
         /// Portfolio root for current participant conditions; overrides configuration.
@@ -273,6 +279,11 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
         CaseCommand::Brief { case_id, root } => {
             let location = portfolio::PortfolioLocation::from_environment(root);
             let outcome = case::brief(Path::new("."), &case_id, &location)?;
+            write_stdout(&outcome.to_string())
+        }
+        CaseCommand::Find { root } => {
+            let location = portfolio::PortfolioLocation::from_environment(root);
+            let outcome = case::find(&location)?;
             write_stdout(&outcome.to_string())
         }
         CaseCommand::List { root } => {

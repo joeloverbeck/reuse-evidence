@@ -80,8 +80,9 @@ enum RootSelection {
 /// Resolution reads the process environment and nothing else: no filesystem
 /// access, no validation, and no refusal. A user-local directory the platform's
 /// variables do not determine is carried as an absence, so each command decides
-/// whether that absence refuses or degrades. `portfolio` refuses; the case
-/// queries report unknown conditions and succeed.
+/// whether that absence refuses or degrades. `portfolio` and the cross-portfolio
+/// case query refuse; the steward-local case queries report unknown conditions
+/// and succeed.
 #[derive(Clone, Debug)]
 pub struct PortfolioLocation {
     root_overrides: Vec<PathBuf>,
@@ -765,8 +766,9 @@ pub(crate) fn selected_roots(
 /// Selects the roots to scan, reporting absence rather than refusing when no
 /// selection resolves.
 ///
-/// Case queries derive unknown portfolio conditions from `None` and still
-/// succeed, which is why this is a separate answer from [`selected_roots`].
+/// Steward-local case queries derive unknown portfolio conditions from `None`
+/// and still succeed, which is why this is a separate answer from
+/// [`selected_roots`].
 pub(crate) fn selected_roots_if_configured(
     location: &PortfolioLocation,
 ) -> Result<Option<Vec<PathBuf>>, TerminalFailure> {

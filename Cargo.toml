@@ -68,6 +68,11 @@ path = "tests/case_library.rs"
 required-features = ["cli"]
 
 [[test]]
+name = "case_portfolio_library"
+path = "tests/case_portfolio_library.rs"
+required-features = ["cli"]
+
+[[test]]
 name = "portfolio_report_library"
 path = "tests/portfolio_report_library.rs"
 required-features = ["cli"]

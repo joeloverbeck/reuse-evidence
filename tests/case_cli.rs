@@ -7186,3 +7186,40 @@ fn prepared_append_event_with_an_unrecordable_timestamp_is_refused_without_write
         );
     }
 }
+
+#[test]
+fn case_find_dispatches_from_another_enrolled_repository_to_stdout() {
+    let fixture = Fixture::new("find-terminal-contract");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-participant", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-participant", SECOND_PARTICIPANT_ID, "public");
+    let working_repository = fixture.repository(
+        "working-repository",
+        "00000000-0000-4000-8000-000000000025",
+        "public",
+    );
+    let proposal = fixture.proposal(&two_occurrence_proposal());
+    let root = fixture.root.to_str().expect("fixture root should be UTF-8");
+    let opened = run_in(
+        &steward,
+        &[
+            "case",
+            "open",
+            "--proposal",
+            proposal.to_str().expect("proposal path should be UTF-8"),
+            "--root",
+            root,
+        ],
+    );
+    assert_eq!(opened.status.code(), Some(0), "{opened:?}");
+
+    let output = run_in(&working_repository, &["case", "find", "--root", root]);
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+    assert!(
+        stdout.starts_with(&format!("portfolio cases\n- case_id: {CASE_ID}\n")),
+        "the terminal must route the portfolio query result to stdout: {stdout}"
+    );
+}

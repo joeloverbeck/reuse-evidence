@@ -10,9 +10,9 @@ use super::{
     CASE_SCHEMA_VERSION, CaseOpenedEvent, DecisionAuthorization, DecisionContent,
     EarlyReviewAuthorizedEvent, Occurrence, OccurrenceAppendedEvent, ReportedPrivacy,
     ReuseDecisionAcceptedEvent, VerificationDisposition, VerificationRecordedEvent,
-    find_repository_root, read_steward, validate_case_storage_path,
+    complete_case_privacy, find_repository_root, read_steward, validate_case_storage_path,
 };
-use crate::{TerminalFailure, Visibility, portfolio};
+use crate::{ExitMeaning, TerminalFailure, Visibility, portfolio};
 
 /// What each query command tells a reader to do about a steward marker it
 /// cannot use. ADR 0018 makes the fault's wording shared and this sentence the
@@ -178,6 +178,110 @@ pub struct BriefOutcome {
     pub(super) authorization: DecisionAuthorization,
 }
 
+/// Every case or damaged-case condition found across the selected enrolled portfolio.
+pub struct FindOutcome {
+    pub(super) cases: Vec<PortfolioCaseRecord>,
+}
+
+/// One case together with the enrolled steward that owns its event stream.
+pub(super) struct PortfolioCaseRecord {
+    pub(super) steward_repository_id: Uuid,
+    pub(super) steward_path: PathBuf,
+    pub(super) case_id: Uuid,
+    pub(super) state: PortfolioCaseState,
+}
+
+pub(super) enum PortfolioCaseState {
+    Recorded {
+        case: Box<CaseRecord>,
+        privacy: ReportedPrivacy,
+    },
+    Damaged {
+        detail: String,
+    },
+}
+
+/// Finds every case stewarded beneath the selected portfolio roots.
+///
+/// # Errors
+///
+/// Returns a refusal when no root selection resolves or the enrolled steward
+/// directories cannot be enumerated safely. Damage inside an identified case
+/// is returned as that case's condition so healthy neighbours remain visible.
+pub fn find(location: &portfolio::PortfolioLocation) -> Result<FindOutcome, TerminalFailure> {
+    let roots = portfolio::selected_roots(location)?;
+    let scan = portfolio::scan(&roots)?;
+    let mut cases = Vec::new();
+    for enrollment in &scan.enrollments {
+        for directory in case_directories(&enrollment.path)? {
+            let state = match read_case(
+                &enrollment.path,
+                &directory.relative_path,
+                directory.case_id,
+                enrollment.repository_id,
+            ) {
+                Ok(case) => {
+                    let privacy =
+                        portfolio_case_privacy(&case, enrollment.visibility, &scan.enrollments);
+                    PortfolioCaseState::Recorded {
+                        case: Box::new(case),
+                        privacy,
+                    }
+                }
+                Err(failure) if failure.meaning() == ExitMeaning::Refusal => {
+                    PortfolioCaseState::Damaged {
+                        detail: failure.to_string(),
+                    }
+                }
+                Err(failure) => return Err(failure),
+            };
+            cases.push(PortfolioCaseRecord {
+                steward_repository_id: enrollment.repository_id,
+                steward_path: enrollment.path.clone(),
+                case_id: directory.case_id,
+                state,
+            });
+        }
+    }
+    cases.sort_by(|left, right| {
+        left.case_id
+            .cmp(&right.case_id)
+            .then_with(|| left.steward_repository_id.cmp(&right.steward_repository_id))
+            .then_with(|| left.steward_path.cmp(&right.steward_path))
+    });
+    Ok(FindOutcome { cases })
+}
+
+fn portfolio_case_privacy(
+    case: &CaseRecord,
+    steward_visibility: Visibility,
+    enrollments: &[portfolio::Enrollment],
+) -> ReportedPrivacy {
+    let requested = case
+        .occurrences
+        .iter()
+        .map(|occurrence| occurrence.repository_id)
+        .collect::<BTreeSet<_>>();
+    let mut participant_visibilities = Vec::with_capacity(requested.len());
+    for repository_id in requested {
+        let mut matches = enrollments
+            .iter()
+            .filter(|enrollment| enrollment.repository_id == repository_id);
+        let Some(enrollment) = matches.next() else {
+            return ReportedPrivacy::Derived(Visibility::Private);
+        };
+        if matches.next().is_some() {
+            return ReportedPrivacy::Derived(Visibility::Private);
+        }
+        participant_visibilities.push(enrollment.visibility);
+    }
+    ReportedPrivacy::Derived(complete_case_privacy(
+        case,
+        steward_visibility,
+        participant_visibilities,
+    ))
+}
+
 /// Lists every case stewarded by the enrolled repository containing
 /// `working_directory`.
 ///
@@ -341,6 +445,27 @@ fn read_cases(
     repository_root: &Path,
     steward_repository_id: Uuid,
 ) -> Result<Vec<CaseRecord>, TerminalFailure> {
+    let mut cases = case_directories(repository_root)?
+        .into_iter()
+        .map(|directory| {
+            read_case(
+                repository_root,
+                &directory.relative_path,
+                directory.case_id,
+                steward_repository_id,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    cases.sort_by_key(|case| case.case_id);
+    Ok(cases)
+}
+
+struct CaseDirectory {
+    case_id: Uuid,
+    relative_path: PathBuf,
+}
+
+fn case_directories(repository_root: &Path) -> Result<Vec<CaseDirectory>, TerminalFailure> {
     let relative_cases_root = naming::cases_root();
     validate_case_storage_path(repository_root, relative_cases_root)?;
     let cases_root = repository_root.join(relative_cases_root);
@@ -391,14 +516,11 @@ fn read_cases(
         })?;
         let relative_case_directory = relative_cases_root.join(&case_id_text);
         validate_case_storage_path(repository_root, &relative_case_directory)?;
-        cases.push(read_case(
-            repository_root,
-            &relative_case_directory,
+        cases.push(CaseDirectory {
             case_id,
-            steward_repository_id,
-        )?);
+            relative_path: relative_case_directory,
+        });
     }
-    cases.sort_by_key(|case| case.case_id);
     Ok(cases)
 }
 
