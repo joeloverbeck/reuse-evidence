@@ -1,10 +1,11 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-12T16:41:55.171574076Z",
+  "generated_at": "2026-08-12T17:14:58.723882554Z",
   "target_content_hash": "50ae74251f72b370e4b226fa12169ffaa18cac49a814ca5a5725460fe4e3063a",
-  "qualifying_uses_on_current_hash": 19,
+  "qualifying_uses_on_current_hash": 20,
   "open_incident_ids": [
-    "evt_166c1b46-6a7a-44e0-aea0-352caca372e3"
+    "evt_166c1b46-6a7a-44e0-aea0-352caca372e3",
+    "evt_1d0bc26c-f7e4-4e17-9515-2113b6921890"
   ],
   "candidate_clusters": [
     {
@@ -14,18 +15,28 @@
       ],
       "independent_incidents": 1,
       "max_severity": "friction"
+    },
+    {
+      "symptom_key": "execution",
+      "open_event_ids": [
+        "evt_1d0bc26c-f7e4-4e17-9515-2113b6921890"
+      ],
+      "independent_incidents": 1,
+      "max_severity": "friction"
     }
   ],
-  "state": "collecting",
-  "authorized_workflow": null,
-  "authorization_reason": null,
-  "trigger_event_ids": [],
-  "threshold_session_id": null,
+  "state": "eligible_pending_cooldown",
+  "authorized_workflow": "skill-evolution",
+  "authorization_reason": "ten_use_unresolved",
+  "trigger_event_ids": [
+    "evt_1d0bc26c-f7e4-4e17-9515-2113b6921890"
+  ],
+  "threshold_session_id": "01e4a52c-1aed-4b74-b504-1896a6b0ed28",
   "not_before": null,
   "active_review_id": null,
   "last_completed_review_id": "review_0f903112-5dfb-4554-ad08-9d6b39426b12",
-  "review_reentry_basis": "queued_pre_close_evidence",
+  "review_reentry_basis": "post_review_incident",
   "target_name": "grill-with-docs",
   "target_repo_relative_path": ".claude/skills/grill-with-docs",
-  "derivation_session_id": "cda8ae21-d160-433e-9ee8-9dff4a4d9585"
+  "derivation_session_id": "01e4a52c-1aed-4b74-b504-1896a6b0ed28"
 }
