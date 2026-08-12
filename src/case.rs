@@ -2396,11 +2396,9 @@ const DECISION_REFUSAL: event::EnvelopeRefusal<'static> = event::EnvelopeRefusal
 };
 
 fn validate_recorded_opening(event: &CaseOpenedEvent) -> Result<(), TerminalFailure> {
-    event.envelope.validate(
-        EventType::CaseOpened,
-        EventPosition::Opening,
-        &OPENING_REFUSAL,
-    )?;
+    event
+        .envelope
+        .validate(EventType::CaseOpened, &OPENING_REFUSAL)?;
     if event.case_id.get_version_num() != 4 {
         return Err(TerminalFailure::refusal(
             format!(
@@ -2489,31 +2487,25 @@ fn validate_occurrence(
 }
 
 fn validate_recorded_append(event: &OccurrenceAppendedEvent) -> Result<(), TerminalFailure> {
-    event.envelope.validate(
-        EventType::OccurrenceAppended,
-        EventPosition::Later,
-        &APPEND_REFUSAL,
-    )?;
+    event
+        .envelope
+        .validate(EventType::OccurrenceAppended, &APPEND_REFUSAL)?;
     validate_occurrence(&event.occurrence, 1, "occurrence.evidence")
 }
 
 fn validate_recorded_early_review(
     event: &EarlyReviewAuthorizedEvent,
 ) -> Result<(), TerminalFailure> {
-    event.envelope.validate(
-        EventType::EarlyReviewAuthorized,
-        EventPosition::Later,
-        &EARLY_REVIEW_REFUSAL,
-    )?;
+    event
+        .envelope
+        .validate(EventType::EarlyReviewAuthorized, &EARLY_REVIEW_REFUSAL)?;
     validate_early_review_content(&event.reason, &event.review_appetite, &event.evidence)
 }
 
 fn validate_recorded_decision(event: &ReuseDecisionAcceptedEvent) -> Result<(), TerminalFailure> {
-    event.envelope.validate(
-        EventType::ReuseDecisionAccepted,
-        EventPosition::Later,
-        &DECISION_REFUSAL,
-    )?;
+    event
+        .envelope
+        .validate(EventType::ReuseDecisionAccepted, &DECISION_REFUSAL)?;
     validate_decision_content(&event.content)
 }
 

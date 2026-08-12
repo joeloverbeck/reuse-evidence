@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use super::CASE_SCHEMA_VERSION;
 use super::instant::{MalformedInstant, RecordedInstant};
-use super::naming::{EventPosition, EventType, OPENING_SEQUENCE};
+use super::naming::EventType;
 use crate::TerminalFailure;
 
 /// The type-independent part of every case event.
@@ -61,15 +61,10 @@ impl Envelope {
     pub(super) fn validate(
         &self,
         event_type: EventType,
-        position: EventPosition,
         refusal: &EnvelopeRefusal<'_>,
     ) -> Result<(), TerminalFailure> {
-        let sequence_matches = match position {
-            EventPosition::Opening => self.sequence == OPENING_SEQUENCE,
-            EventPosition::Later => self.sequence > OPENING_SEQUENCE,
-        };
         if self.schema_version != CASE_SCHEMA_VERSION
-            || !sequence_matches
+            || !event_type.position().permits_sequence(self.sequence)
             || self.event_type != event_type
         {
             return Err(TerminalFailure::refusal(

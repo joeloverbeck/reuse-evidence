@@ -6,8 +6,34 @@ use uuid::Uuid;
 pub(super) const OPENING_SEQUENCE: i64 = 1;
 pub(super) const MAX_CASE_SEQUENCE: i64 = 9_999;
 
+/// Where in a case's event stream one event type may appear.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum EventPosition {
+    Opening,
+    Later,
+}
+
+impl EventPosition {
+    /// Whether an event at this position may occupy `sequence`.
+    ///
+    /// Callers bound the sequence against the four-digit layout first; this
+    /// states only which end of that range the position claims.
+    pub(super) const fn permits_sequence(self, sequence: i64) -> bool {
+        match self {
+            Self::Opening => sequence == OPENING_SEQUENCE,
+            Self::Later => sequence > OPENING_SEQUENCE,
+        }
+    }
+}
+
 macro_rules! define_event_types {
-    ($( $variant:ident => { body: $body:literal, slug: $slug:literal } ),+ $(,)?) => {
+    ($(
+        $variant:ident => {
+            body: $body:literal,
+            slug: $slug:literal,
+            position: $position:ident
+        }
+    ),+ $(,)?) => {
         #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
         pub(super) enum EventType {
             $(
@@ -35,20 +61,42 @@ macro_rules! define_event_types {
                     _ => None,
                 }
             }
+
+            /// Where in a case's event stream this type may appear.
+            ///
+            /// Declared beside the type's spellings so a later event type
+            /// cannot be added without stating it. Two rules read it: which
+            /// sequence the type may occupy, and which staged temporary names
+            /// belong to which event class.
+            pub(super) const fn position(self) -> EventPosition {
+                match self {
+                    $( Self::$variant => EventPosition::$position ),+
+                }
+            }
         }
     };
 }
 
 define_event_types! {
-    CaseOpened => { body: "case_opened", slug: "case-opened" },
-    OccurrenceAppended => { body: "occurrence_appended", slug: "occurrence-appended" },
+    CaseOpened => {
+        body: "case_opened",
+        slug: "case-opened",
+        position: Opening
+    },
+    OccurrenceAppended => {
+        body: "occurrence_appended",
+        slug: "occurrence-appended",
+        position: Later
+    },
     EarlyReviewAuthorized => {
         body: "early_review_authorized",
-        slug: "early-review-authorized"
+        slug: "early-review-authorized",
+        position: Later
     },
     ReuseDecisionAccepted => {
         body: "reuse_decision_accepted",
-        slug: "reuse-decision-accepted"
+        slug: "reuse-decision-accepted",
+        position: Later
     },
 }
 
@@ -58,27 +106,13 @@ pub(super) struct EventFileName {
     event_type: EventType,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum EventPosition {
-    Opening,
-    Later,
-}
-
 impl EventFileName {
     pub(super) const fn new(sequence: i64, event_type: EventType) -> Option<Self> {
         if sequence < OPENING_SEQUENCE || sequence > MAX_CASE_SEQUENCE {
             return None;
         }
-        match event_type {
-            EventType::CaseOpened if sequence != OPENING_SEQUENCE => return None,
-            EventType::OccurrenceAppended
-            | EventType::EarlyReviewAuthorized
-            | EventType::ReuseDecisionAccepted
-                if sequence == OPENING_SEQUENCE =>
-            {
-                return None;
-            }
-            _ => {}
+        if !event_type.position().permits_sequence(sequence) {
+            return None;
         }
         Some(Self {
             sequence,
@@ -140,18 +174,8 @@ pub(super) fn is_staged_temporary(file_name: &std::ffi::OsStr, position: EventPo
         return false;
     };
     Uuid::parse_str(identity).is_ok()
-        && EventFileName::parse(event_file_name).is_some_and(|identity| {
-            matches!(
-                (position, identity.event_type()),
-                (EventPosition::Opening, EventType::CaseOpened)
-                    | (
-                        EventPosition::Later,
-                        EventType::OccurrenceAppended
-                            | EventType::EarlyReviewAuthorized
-                            | EventType::ReuseDecisionAccepted
-                    )
-            )
-        })
+        && EventFileName::parse(event_file_name)
+            .is_some_and(|identity| identity.event_type().position() == position)
 }
 
 #[cfg(test)]
