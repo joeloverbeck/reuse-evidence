@@ -1,13 +1,14 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-12T16:30:51.753022473Z",
+  "generated_at": "2026-08-13T01:25:19.185831186Z",
   "target_content_hash": "58ee690ec479d13e9ff51567f4e57087f319ac7a1aca6511d61c8628f5e43fa6",
-  "qualifying_uses_on_current_hash": 19,
+  "qualifying_uses_on_current_hash": 20,
   "open_incident_ids": [
     "evt_32e7534e-2a65-478e-8c2e-c4a37dc46596",
     "evt_f39866ac-2585-4708-bc3b-096e3c721ef3",
     "evt_35d21a7d-416a-48a1-b85e-4e2593327873",
-    "evt_f3818540-7d53-42db-8f09-0e4b2498da95"
+    "evt_f3818540-7d53-42db-8f09-0e4b2498da95",
+    "evt_92c6ab31-490d-40e0-8501-259434a56ca6"
   ],
   "candidate_clusters": [
     {
@@ -27,6 +28,14 @@
       ],
       "independent_incidents": 2,
       "max_severity": "friction"
+    },
+    {
+      "symptom_key": "coordination",
+      "open_event_ids": [
+        "evt_92c6ab31-490d-40e0-8501-259434a56ca6"
+      ],
+      "independent_incidents": 1,
+      "max_severity": "friction"
     }
   ],
   "state": "eligible",
@@ -42,5 +51,5 @@
   "review_reentry_basis": "first_eligibility",
   "target_name": "code-review",
   "target_repo_relative_path": ".claude/skills/code-review",
-  "derivation_session_id": "019ff6b4-32db-7ee2-bc7d-e5fe82db03dc"
+  "derivation_session_id": "019ff758-4ee9-76e1-95b6-18f29f663464"
 }
