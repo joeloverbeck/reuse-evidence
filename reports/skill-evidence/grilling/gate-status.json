@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-13T06:09:36.057750521Z",
+  "generated_at": "2026-08-13T13:12:09Z",
   "target_content_hash": "b9f458b0917db5368c6826732f0daf19b63f157b11d22034c023c8d465794ee6",
   "qualifying_uses_on_current_hash": 33,
   "open_incident_ids": [
@@ -14,8 +14,6 @@
     "evt_0ef5941b-3fac-484b-8609-4a472204ef21",
     "evt_ee02c57c-0f0d-465b-b3f3-a19adba00e4e",
     "evt_f27e5981-cfc7-40cc-9783-65b77778a86a",
-    "evt_8f4ed02d-6410-4952-8790-b5df00a47dd9",
-    "evt_21671b5b-d4d8-4349-afb3-fab3b5ed59f6",
     "evt_b3e69792-5f00-42a4-94fb-ea87c20ac99d",
     "evt_290138a4-4642-4369-9039-54bb5c6830ac",
     "evt_0a582b78-6b3b-4ace-ae94-80aa48e7ae8d",
@@ -25,29 +23,16 @@
     "evt_bc21c35b-b099-439d-b274-141ee3fc00aa",
     "evt_36255769-327b-4e1f-b334-d8fbf1bbb455",
     "evt_7b4bb5c0-cf00-4c53-8025-25ee26851e6f",
-    "evt_14fcbcd4-fc5a-4502-b341-3273e597e101",
     "evt_d1c009fa-6a88-477e-b71d-c745616e0c1c",
     "evt_135f457f-3904-4e27-921f-85a6f2ac58ab",
     "evt_53a1b1e0-f7a8-4659-bf53-4d66d93147e7",
     "evt_f791f3e5-52bd-433a-8233-38c7f384a266",
     "evt_5f588a60-0b49-4fca-abc6-6f5a2ee5159f",
-    "evt_1dd75cd5-5263-496f-89a3-4ba4b2086643",
     "evt_740d55c9-b4af-4c0a-a38f-44891b94adb8",
     "evt_1c63f06b-9b2c-4747-9296-ffeb7a71a0e8",
     "evt_921abcc5-4c26-48c3-aff7-a8d8d541e068"
   ],
   "candidate_clusters": [
-    {
-      "symptom_key": "coordination",
-      "open_event_ids": [
-        "evt_8f4ed02d-6410-4952-8790-b5df00a47dd9",
-        "evt_21671b5b-d4d8-4349-afb3-fab3b5ed59f6",
-        "evt_14fcbcd4-fc5a-4502-b341-3273e597e101",
-        "evt_1dd75cd5-5263-496f-89a3-4ba4b2086643"
-      ],
-      "independent_incidents": 4,
-      "max_severity": "material_failure"
-    },
     {
       "symptom_key": "execution",
       "open_event_ids": [
@@ -80,21 +65,18 @@
       "max_severity": "material_failure"
     }
   ],
-  "state": "eligible",
-  "authorized_workflow": "skill-evolution",
-  "authorization_reason": "ten_use_unresolved",
-  "trigger_event_ids": [
-    "evt_8f4ed02d-6410-4952-8790-b5df00a47dd9",
-    "evt_21671b5b-d4d8-4349-afb3-fab3b5ed59f6"
-  ],
-  "threshold_session_id": "24ef88a6-eac2-4e83-b9ca-7a7f112e46c5",
+  "state": "collecting",
+  "authorized_workflow": null,
+  "authorization_reason": null,
+  "trigger_event_ids": [],
+  "threshold_session_id": null,
   "not_before": null,
   "active_review_id": null,
-  "last_completed_review_id": "270c958b-054f-4bf3-b6f8-8767ad5245a5",
-  "review_reentry_basis": "post_review_incident",
+  "last_completed_review_id": "bb350a71-879f-4d72-9a93-67bc8a4f32b6",
+  "review_reentry_basis": "queued_pre_close_evidence",
   "target_name": "grilling",
   "target_repo_relative_path": ".claude/skills/grilling",
-  "derivation_session_id": "1ad27a83-6247-4801-ab2e-88a2552eb3a2",
+  "derivation_session_id": "019ffa63-5132-7330-92ad-b6485bd2e079",
   "instrument_limited_incident_ids": [
     "evt_fd786d97-7718-4253-9749-5a5f8b2de8f4",
     "evt_738194db-1039-42b1-93fe-c88f23541cd2",

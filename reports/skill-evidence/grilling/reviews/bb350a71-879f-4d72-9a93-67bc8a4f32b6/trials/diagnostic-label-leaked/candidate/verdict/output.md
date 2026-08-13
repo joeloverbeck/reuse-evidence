@@ -1,0 +1,3 @@
+- **V1 — Reject:** The authoritative contract states the command appends an event, contradicting the write-free claim.
+- **V2 — Adopt:** The contract and test confirm exact retries return the original receipt.
+- **V3 — Modify anchor:** Update the citation from line 90 to line 112; the rule’s meaning is unchanged.

@@ -1,0 +1,3 @@
+Stopped at the required gate. `/code-review` cannot run because this session forbids subagents, while the contract requires independent Standards and Spec reviewers and permits no substitute.
+
+No files or external services were touched. Implementation and reported local tests remain in scope; completion is pending a future run that can execute both required reviewers against the exact fixed-point diff.
