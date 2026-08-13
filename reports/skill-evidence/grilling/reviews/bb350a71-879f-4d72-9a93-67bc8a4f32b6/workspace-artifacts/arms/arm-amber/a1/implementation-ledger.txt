@@ -1,0 +1,12 @@
+fixed_point=1db12a5e6ec9435edd890ef65950d542fc70e51f
+initial_status=(clean)
+phase=started
+red_command=node --test tests/normalize.test.mjs
+red_exit=1
+green_command=node --test tests/normalize.test.mjs
+green_exit=0
+completion_command_1=node --test tests/normalize.test.mjs
+completion_exit_1=0
+completion_command_2=git diff --check
+completion_exit_2=0
+phase=complete

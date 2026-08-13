@@ -1,0 +1,5 @@
+tree 85c9d46320a6dce76964cde4d0f77960d7713a80
+author Blind Trial Fixture <fixture@example.invalid> 946684800 +0000
+committer Blind Trial Fixture <fixture@example.invalid> 946684800 +0000
+
+fixture baseline

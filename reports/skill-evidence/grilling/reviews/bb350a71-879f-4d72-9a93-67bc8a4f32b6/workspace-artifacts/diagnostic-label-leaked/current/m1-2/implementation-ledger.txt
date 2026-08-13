@@ -1,0 +1,7 @@
+fixed_point=1db12a5e6ec9435edd890ef65950d542fc70e51f
+initial_status=(clean)
+phase=started
+red_command=node --test tests/normalize.test.mjs
+red_exit=1
+green_command=node --test tests/normalize.test.mjs
+green_exit=0
