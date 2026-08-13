@@ -1,0 +1,7 @@
+interface:
+  display_name: "Reuse Evidence Capture"
+  short_description: "Capture reuse pressure after completed work"
+  default_prompt: "Use $reuse-evidence-capture after this completed material work to capture qualifying reuse pressure."
+
+policy:
+  allow_implicit_invocation: false
