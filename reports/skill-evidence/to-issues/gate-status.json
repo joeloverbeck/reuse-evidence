@@ -1,33 +1,48 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-13T14:16:36.463Z",
+  "generated_at": "2026-08-13T16:02:24.45225476Z",
   "target_content_hash": "f6086b3322c82fb21d5da0c6cbd04f093ec20d7ca1e6094a9c2324cbeff6dd1d",
-  "qualifying_uses_on_current_hash": 4,
+  "qualifying_uses_on_current_hash": 5,
   "open_incident_ids": [
     "evt_74c863ac-a621-4e58-9244-b7f1d562bfb6",
-    "evt_ffba23f3-16db-4344-a951-4698934275b0"
+    "evt_ffba23f3-16db-4344-a951-4698934275b0",
+    "evt_1cfda609-e244-44b1-8286-73275eb6d528",
+    "evt_0fd2454b-8f4a-4be7-8803-b354218d85f9"
   ],
   "candidate_clusters": [
     {
       "symptom_key": "execution",
       "open_event_ids": [
         "evt_74c863ac-a621-4e58-9244-b7f1d562bfb6",
-        "evt_ffba23f3-16db-4344-a951-4698934275b0"
+        "evt_ffba23f3-16db-4344-a951-4698934275b0",
+        "evt_1cfda609-e244-44b1-8286-73275eb6d528"
       ],
-      "independent_incidents": 2,
+      "independent_incidents": 3,
+      "max_severity": "friction"
+    },
+    {
+      "symptom_key": "coordination",
+      "open_event_ids": [
+        "evt_0fd2454b-8f4a-4be7-8803-b354218d85f9"
+      ],
+      "independent_incidents": 1,
       "max_severity": "friction"
     }
   ],
-  "state": "collecting",
-  "authorized_workflow": null,
-  "authorization_reason": null,
-  "trigger_event_ids": [],
-  "threshold_session_id": null,
+  "state": "eligible_pending_cooldown",
+  "authorized_workflow": "skill-evolution",
+  "authorization_reason": "friction_recurrence:execution",
+  "trigger_event_ids": [
+    "evt_74c863ac-a621-4e58-9244-b7f1d562bfb6",
+    "evt_ffba23f3-16db-4344-a951-4698934275b0",
+    "evt_1cfda609-e244-44b1-8286-73275eb6d528"
+  ],
+  "threshold_session_id": "1dc87af4-2ec1-4e44-b0db-9a7819d07841",
   "not_before": null,
   "active_review_id": null,
   "last_completed_review_id": "04ee37c0-5c7a-4e6e-8d90-cb82a2eea5f8",
-  "review_reentry_basis": null,
+  "review_reentry_basis": "post_review_incident",
   "target_name": "to-issues",
   "target_repo_relative_path": ".claude/skills/to-issues",
-  "derivation_session_id": "019ffaf8-90e4-76d2-85ff-8306a476a1da"
+  "derivation_session_id": "1dc87af4-2ec1-4e44-b0db-9a7819d07841"
 }
