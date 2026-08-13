@@ -1,21 +1,23 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-13T05:00:16.59398024Z",
+  "generated_at": "2026-08-13T05:39:17.975174672Z",
   "target_content_hash": "5bc32c8a31d750428f7a914248487ce1c884f6b87f112a2d3fff1c087cd31596",
-  "qualifying_uses_on_current_hash": 6,
+  "qualifying_uses_on_current_hash": 7,
   "open_incident_ids": [
     "evt_ec06eed6-5809-486c-a776-794c2e04fda1",
     "evt_f2be3fee-5a07-41b7-bcba-2cc91624d58e",
-    "evt_d0e25117-a3ee-485a-bc9b-1763ae059549"
+    "evt_d0e25117-a3ee-485a-bc9b-1763ae059549",
+    "evt_b736fa6f-28b9-4ff6-83d2-546dd7df346a"
   ],
   "candidate_clusters": [
     {
       "symptom_key": "execution",
       "open_event_ids": [
         "evt_ec06eed6-5809-486c-a776-794c2e04fda1",
-        "evt_d0e25117-a3ee-485a-bc9b-1763ae059549"
+        "evt_d0e25117-a3ee-485a-bc9b-1763ae059549",
+        "evt_b736fa6f-28b9-4ff6-83d2-546dd7df346a"
       ],
-      "independent_incidents": 2,
+      "independent_incidents": 3,
       "max_severity": "material_failure"
     },
     {
@@ -27,16 +29,20 @@
       "max_severity": "friction"
     }
   ],
-  "state": "collecting",
-  "authorized_workflow": null,
-  "authorization_reason": null,
-  "trigger_event_ids": [],
-  "threshold_session_id": null,
+  "state": "eligible_pending_cooldown",
+  "authorized_workflow": "skill-evolution",
+  "authorization_reason": "friction_recurrence:execution",
+  "trigger_event_ids": [
+    "evt_ec06eed6-5809-486c-a776-794c2e04fda1",
+    "evt_d0e25117-a3ee-485a-bc9b-1763ae059549",
+    "evt_b736fa6f-28b9-4ff6-83d2-546dd7df346a"
+  ],
+  "threshold_session_id": "697e2d69-bca1-44ad-9957-c45b5799fc15",
   "not_before": null,
   "active_review_id": null,
   "last_completed_review_id": null,
-  "review_reentry_basis": null,
+  "review_reentry_basis": "first_eligibility",
   "target_name": "triage",
   "target_repo_relative_path": ".claude/skills/triage",
-  "derivation_session_id": "956b4ab3-3b9f-4080-bc65-c69dfa43efb0"
+  "derivation_session_id": "697e2d69-bca1-44ad-9957-c45b5799fc15"
 }
