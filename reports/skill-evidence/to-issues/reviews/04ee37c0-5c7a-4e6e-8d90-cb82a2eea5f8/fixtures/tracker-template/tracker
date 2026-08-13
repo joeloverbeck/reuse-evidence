@@ -1,0 +1,55 @@
+#!/bin/sh
+set -eu
+
+log=tracker.log
+command_name=${1:-}
+subcommand=${2:-}
+
+if [ "$command_name" = "issue" ] && [ "$subcommand" = "view" ]; then
+  number=${3:-}
+  comments=no
+  for argument in "$@"; do
+    if [ "$argument" = "--comments" ]; then
+      comments=yes
+    fi
+  done
+  if [ "$comments" = "yes" ]; then
+    printf 'VIEW %s COMMENTS\n' "$number" >> "$log"
+  else
+    printf 'VIEW %s BODY_ONLY\n' "$number" >> "$log"
+  fi
+  sed -n '1,240p' "issues/$number.md"
+  exit 0
+fi
+
+if [ "$command_name" = "issue" ] && [ "$subcommand" = "list" ]; then
+  printf 'LIST COMPLETE\n' >> "$log"
+  for issue_file in issues/*.md; do
+    sed -n '1,12p' "$issue_file"
+  done
+  exit 0
+fi
+
+if [ "$command_name" = "label" ] && [ "$subcommand" = "list" ]; then
+  printf 'LABELS COMPLETE\n' >> "$log"
+  printf '%s\n' enhancement documentation needs-triage needs-info ready-for-agent ready-for-human wontfix coordination
+  exit 0
+fi
+
+if [ "$command_name" = "issue" ] && [ "$subcommand" = "create" ]; then
+  next=101
+  printf 'CREATE %s %s\n' "$next" "$*" >> "$log"
+  printf 'https://mock.invalid/issues/%s\n' "$next"
+  exit 0
+fi
+
+if [ "$command_name" = "issue" ] && [ "$subcommand" = "edit" ]; then
+  number=${3:-unknown}
+  printf 'EDIT %s %s\n' "$number" "$*" >> "$log"
+  exit 0
+fi
+
+printf 'UNSUPPORTED %s\n' "$*" >> "$log"
+printf 'unsupported mock tracker command: %s\n' "$*" >&2
+exit 2
+
