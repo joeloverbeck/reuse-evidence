@@ -45,6 +45,8 @@ enum Command {
         #[arg(long)]
         root: Vec<PathBuf>,
     },
+    /// Name the user-local staging directory for prepared proposals.
+    StagingDirectory,
     /// Record and inspect durable reuse cases.
     Case {
         #[command(subcommand)]
@@ -197,6 +199,10 @@ fn run(cli: Cli) -> ExitCode {
         Some(Command::SetVisibility { visibility }) => run_set_visibility(visibility),
         Some(Command::Portfolio { root }) => {
             run_portfolio(&portfolio::PortfolioLocation::from_environment(root))
+        }
+        Some(Command::StagingDirectory) => {
+            let location = portfolio::PortfolioLocation::from_environment(Vec::new());
+            run_staging_directory(&location)
         }
         Some(Command::Case { command }) => run_case(command),
         Some(Command::Skills(args)) => return run_skills(args),
@@ -512,6 +518,11 @@ const fn skill_exit_meaning(exit: skill_evidence::cli::Exit) -> ExitMeaning {
 
 fn run_portfolio(location: &portfolio::PortfolioLocation) -> Result<(), TerminalFailure> {
     write_stdout(&portfolio::report(location)?)
+}
+
+fn run_staging_directory(location: &portfolio::PortfolioLocation) -> Result<(), TerminalFailure> {
+    let directory = portfolio::prepared_proposal_staging_directory(location)?;
+    write_stdout(&format!("{}\n", directory.display()))
 }
 
 fn run_enroll(

@@ -132,6 +132,32 @@ impl PortfolioLocation {
     }
 }
 
+/// Resolves the user-local staging directory for prepared proposals without
+/// creating it.
+///
+/// # Errors
+///
+/// Returns a classified terminal failure when the current platform's
+/// user-local state directory cannot be determined, configured portfolio roots
+/// cannot be inspected safely, or the resolved staging path is inside a Git
+/// repository.
+#[cfg(feature = "cli")]
+pub fn prepared_proposal_staging_directory(
+    location: &PortfolioLocation,
+) -> Result<PathBuf, TerminalFailure> {
+    let staging_directory = state_path(location)?.with_file_name(PREPARED_PROPOSALS_DIRECTORY);
+    let inspected_repositories = match selected_roots_if_configured(location)? {
+        Some(roots) => scan(&roots)?.inspected_repositories,
+        None => BTreeSet::new(),
+    };
+    ensure_state_outside_repositories(
+        &staging_directory,
+        &inspected_repositories,
+        "prepared-proposal staging directory",
+    )?;
+    Ok(staging_directory)
+}
+
 /// Rescans enrolled repositories and renders the current portfolio report.
 ///
 /// # Errors
@@ -155,7 +181,11 @@ pub fn report(location: &PortfolioLocation) -> Result<String, TerminalFailure> {
     }
 
     let state_path = state_path(location)?;
-    ensure_state_outside_repositories(&state_path, &scan.inspected_repositories)?;
+    ensure_state_outside_repositories(
+        &state_path,
+        &scan.inspected_repositories,
+        "user-local portfolio state",
+    )?;
     let _state_lock = acquire_state_lock(&state_path)?;
     let previous_state = load_state(&state_path)?;
     let previous_repositories = previous_state
@@ -557,12 +587,13 @@ fn next_state(
 fn ensure_state_outside_repositories(
     state_path: &Path,
     inspected_repositories: &BTreeSet<PathBuf>,
+    subject: &str,
 ) -> Result<(), TerminalFailure> {
     let resolved_state_path =
         resolve_path_through_existing_ancestor(state_path).map_err(|error| {
             TerminalFailure::refusal(
                 format!(
-                    "user-local portfolio state path `{}` cannot be resolved: {error}",
+                    "{subject} path `{}` cannot be resolved: {error}",
                     state_path.display()
                 ),
                 "configure an accessible platform state directory outside every Git repository",
@@ -574,7 +605,7 @@ fn ensure_state_outside_repositories(
     {
         return Err(TerminalFailure::refusal(
             format!(
-                "user-local portfolio state `{}` would be stored inside inspected repository `{}`",
+                "{subject} `{}` would be stored inside inspected repository `{}`",
                 state_path.display(),
                 repository.display()
             ),
@@ -587,7 +618,7 @@ fn ensure_state_outside_repositories(
     {
         return Err(TerminalFailure::refusal(
             format!(
-                "user-local portfolio state `{}` would be stored inside Git repository `{}`",
+                "{subject} `{}` would be stored inside Git repository `{}`",
                 state_path.display(),
                 repository.display()
             ),
@@ -985,6 +1016,8 @@ const STATE: UserDirectory = UserDirectory {
     unix_home_relative: ".local/state",
     file_name: "portfolio.toml",
 };
+
+const PREPARED_PROPOSALS_DIRECTORY: &str = "prepared-proposals";
 
 /// Where macOS keeps both kinds, in place of the XDG-style home-relative path.
 const MACOS_HOME_RELATIVE: &str = "Library/Application Support";

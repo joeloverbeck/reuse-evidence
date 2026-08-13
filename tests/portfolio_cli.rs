@@ -75,6 +75,33 @@ fn run_without_config_environment(working_directory: &Path, arguments: &[&str]) 
         .expect("compiled reuse-evidence binary should run")
 }
 
+#[test]
+fn staging_directory_dispatches_to_stdout() {
+    let fixture = Fixture::new("prepared-proposal-staging-terminal-contract");
+    let config_home = fixture.root.join("config");
+    let state_home = fixture.root.join("state");
+
+    let output = run_with_state_home(
+        &fixture.root,
+        &["staging-directory"],
+        &config_home,
+        &state_home,
+    );
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("stdout should be UTF-8"),
+        format!(
+            "{}\n",
+            state_home
+                .join("reuse-evidence")
+                .join("prepared-proposals")
+                .display()
+        )
+    );
+}
+
 fn state_home(config_home: &Path) -> PathBuf {
     config_home
         .parent()

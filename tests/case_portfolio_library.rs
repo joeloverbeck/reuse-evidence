@@ -55,36 +55,6 @@ fn opening_proposal(case_id: &str) -> String {
     )
 }
 
-fn snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
-    fn collect(root: &Path, directory: &Path, files: &mut Vec<(PathBuf, Vec<u8>)>) {
-        let mut entries = fs::read_dir(directory)
-            .expect("snapshot directory should be readable")
-            .map(|entry| entry.expect("snapshot entry should be readable"))
-            .collect::<Vec<_>>();
-        entries.sort_by_key(fs::DirEntry::file_name);
-        for entry in entries {
-            let path = entry.path();
-            let file_type = entry
-                .file_type()
-                .expect("snapshot entry type should be readable");
-            if file_type.is_dir() {
-                collect(root, &path, files);
-            } else if file_type.is_file() {
-                files.push((
-                    path.strip_prefix(root)
-                        .expect("snapshot path should remain beneath its root")
-                        .to_path_buf(),
-                    fs::read(&path).expect("snapshot file should be readable"),
-                ));
-            }
-        }
-    }
-
-    let mut files = Vec::new();
-    collect(root, root, &mut files);
-    files
-}
-
 #[test]
 fn portfolio_case_query_finds_a_case_from_another_enrolled_repository_without_writing() {
     let fixture = Fixture::new("cross-repository");
@@ -126,7 +96,7 @@ fn portfolio_case_query_finds_a_case_from_another_enrolled_repository_without_wr
     fs::write(&state_file, b"sentinel portfolio state\n")
         .expect("state sentinel should be writable");
     let location = fixture.location(&state_directory);
-    let before = snapshot(&fixture.root);
+    let before = support::snapshot(&fixture.root);
 
     let outcome = case::find(&location).expect("the portfolio case query should succeed");
 
@@ -145,7 +115,7 @@ fn portfolio_case_query_finds_a_case_from_another_enrolled_repository_without_wr
         "the query is being exercised with another enrolled repository as its working context"
     );
     assert_eq!(
-        snapshot(&fixture.root),
+        support::snapshot(&fixture.root),
         before,
         "the query must preserve every inspected repository byte and user-local state byte"
     );
@@ -172,7 +142,7 @@ fn review_r1_spec_1_portfolio_case_query_reports_current_complete_privacy() {
     .expect("the public portfolio should open a public case");
 
     support::enrollment_marker(&second_participant, SECOND_PARTICIPANT_ID, "private");
-    let before = snapshot(&fixture.root);
+    let before = support::snapshot(&fixture.root);
 
     let rendered = case::find(&location)
         .expect("the portfolio case query should derive current privacy")
@@ -187,7 +157,7 @@ fn review_r1_spec_1_portfolio_case_query_reports_current_complete_privacy() {
         "opening-recorded privacy must not masquerade as current complete privacy: {rendered}"
     );
     assert_eq!(
-        snapshot(&fixture.root),
+        support::snapshot(&fixture.root),
         before,
         "deriving current complete privacy must remain byte-for-byte write-free"
     );
@@ -215,7 +185,7 @@ fn review_r2_spec_1_portfolio_case_query_treats_unresolved_visibility_as_private
 
     fs::remove_file(second_participant.join("reuse-evidence.toml"))
         .expect("the fixture participant should become unresolved");
-    let before = snapshot(&fixture.root);
+    let before = support::snapshot(&fixture.root);
 
     let rendered = case::find(&location)
         .expect("uncertain visibility should produce a conservative result")
@@ -226,7 +196,7 @@ fn review_r2_spec_1_portfolio_case_query_treats_unresolved_visibility_as_private
         "unresolved participant visibility must conservatively make the case private: {rendered}"
     );
     assert_eq!(
-        snapshot(&fixture.root),
+        support::snapshot(&fixture.root),
         before,
         "conservative privacy derivation must remain byte-for-byte write-free"
     );
@@ -241,7 +211,7 @@ fn portfolio_case_query_refuses_without_a_root_selection() {
         Some(&configuration_directory),
         Some(&fixture.root.join("state")),
     );
-    let before = snapshot(&fixture.root);
+    let before = support::snapshot(&fixture.root);
 
     let Err(failure) = case::find(&location) else {
         panic!("a portfolio-wide query without selected roots must refuse");
@@ -258,7 +228,7 @@ fn portfolio_case_query_refuses_without_a_root_selection() {
         )
     );
     assert_eq!(
-        snapshot(&fixture.root),
+        support::snapshot(&fixture.root),
         before,
         "the refusal must create no state, cache, projection, or repository file"
     );
@@ -306,7 +276,7 @@ fn portfolio_case_query_reports_damaged_history_without_plausible_case_fields() 
         false,
     )
     .expect("the healthy case should open");
-    let before = snapshot(&fixture.root);
+    let before = support::snapshot(&fixture.root);
 
     let outcome = case::find(&location)
         .expect("one damaged case should be reported without hiding healthy portfolio cases");
@@ -333,7 +303,7 @@ fn portfolio_case_query_reports_damaged_history_without_plausible_case_fields() 
         "a damaged neighbour must not hide a healthy case: {rendered}"
     );
     assert_eq!(
-        snapshot(&fixture.root),
+        support::snapshot(&fixture.root),
         before,
         "reporting damaged history must still be byte-for-byte write-free"
     );

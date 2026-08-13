@@ -77,6 +77,11 @@ name = "portfolio_report_library"
 path = "tests/portfolio_report_library.rs"
 required-features = ["cli"]
 
+[[test]]
+name = "prepared_proposal_staging_library"
+path = "tests/prepared_proposal_staging_library.rs"
+required-features = ["cli"]
+
 [lints.rust]
 unsafe_code = "forbid"
 

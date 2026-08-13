@@ -8,11 +8,11 @@ The project is deliberately not a clone detector and not an automatic refactorin
 
 ## Status
 
-**Repository enrollment, marker-only portfolio reporting with derived change state, and the durable case lifecycle from opening through verification disposition are implemented, together with implementation-brief projection, reading, and skill governance.**
+**Repository enrollment, marker-only portfolio reporting with derived change state, prepared-proposal staging resolution, and the durable case lifecycle from opening through verification disposition are implemented, together with implementation-brief projection, reading, and skill governance.**
 
 The public Rust crate and standalone `reuse-evidence` binary can enroll a Git repository, including an npm workspace with no Cargo project. Enrollment writes a human-readable version 1 TOML marker at the nearest repository root, safely revalidates an existing marker without minting another identity, and uses the binary's shared success, unsafe-failure, and refusal exit meanings.
 
-Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, unsupported or unreadable markers, and new, moved, unavailable, visibility-changed, or identity-substituted repositories. The case command can preview and atomically open a steward-local case from two or more evidenced occurrences, append a later occurrence against an expected revision, record a human early-review override on a watching case, record the exact accepted decision on a review-ready case, project that decision's implementation brief, record verification with a closed, parked, or reopened disposition, find cases across the enrolled portfolio, list every case stewarded by the current repository, and show one case's complete evidence record with freshly derived lifecycle, privacy-conflict, and staleness conditions. The binary also mounts the published `skill-evidence` lifecycle under `reuse-evidence skills` and this repository commits the four operator packages it installs. Capture, reuse-review proposal authoring, and this project's own `reuse-evidence-*` skill packages are not implemented yet.
+Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, unsupported or unreadable markers, and new, moved, unavailable, visibility-changed, or identity-substituted repositories. The staging-directory command names the guarded user-local directory where prepared proposals belong without creating it. The case command can preview and atomically open a steward-local case from two or more evidenced occurrences, append a later occurrence against an expected revision, record a human early-review override on a watching case, record the exact accepted decision on a review-ready case, project that decision's implementation brief, record verification with a closed, parked, or reopened disposition, find cases across the enrolled portfolio, list every case stewarded by the current repository, and show one case's complete evidence record with freshly derived lifecycle, privacy-conflict, and staleness conditions. The binary also mounts the published `skill-evidence` lifecycle under `reuse-evidence skills` and this repository commits the four operator packages it installs. Capture, reuse-review proposal authoring, and this project's own `reuse-evidence-*` skill packages are not implemented yet.
 
 The selected delivery constraints are:
 
@@ -110,6 +110,18 @@ The delta file is derived user-local state at:
 The file is disposable and contains the absolute local paths needed to compare observations. Deleting it does not change the current enrolled set; the next successful run rebuilds it and reports the current repositories as new because no prior observation remains. The command refuses if the selected state path resolves inside any inspected repository or another recognizable Git worktree, so the derived file is excluded from repository version control by construction. It is not authoritative evidence and has no committed compatibility promise.
 
 Portfolio reporting remains read-only with respect to every repository it inspects: only an unambiguous successful report may update the user-local delta file. State updates are serialized by a user-local lock and published atomically; an unchanged observation preserves the existing state file. The command performs no network access and emits no score, ranking, percentage, or health metric. Paths shown in the interactive portfolio report are local operational context; they are not recorded case evidence.
+
+## Resolve prepared-proposal staging
+
+Name the user-local directory where capture may keep prepared proposals:
+
+```console
+reuse-evidence staging-directory
+```
+
+The command prints exactly one path: `<state-home>/reuse-evidence/prepared-proposals`. It uses the same platform state-home precedence described for `portfolio.toml` above and has no separate configuration or override. When the state home cannot be determined, the command refuses and names the platform environment variables that can resolve it.
+
+Resolution reuses the portfolio state's outside-repository guard. A path inside a configured portfolio repository, or inside any other recognizable Git repository, refuses with status `3`. The command creates no directory, file, lock, cache, or other state, and performs no network access. The caller creates the directory only when it has a prepared proposal to write there.
 
 ## Open a case
 

@@ -114,3 +114,36 @@ pub fn enrollment_marker(repository: &Path, repository_id: &str, visibility: &st
     )
     .expect("repository fixture should be enrolled");
 }
+
+/// Captures every regular file beneath `root` as a sorted relative path and
+/// byte value, so write-free behavior can be asserted through the filesystem
+/// boundary without depending on traversal order.
+pub fn snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    fn collect(root: &Path, directory: &Path, files: &mut Vec<(PathBuf, Vec<u8>)>) {
+        let mut entries = fs::read_dir(directory)
+            .expect("snapshot directory should be readable")
+            .map(|entry| entry.expect("snapshot entry should be readable"))
+            .collect::<Vec<_>>();
+        entries.sort_by_key(fs::DirEntry::file_name);
+        for entry in entries {
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .expect("snapshot entry type should be readable");
+            if file_type.is_dir() {
+                collect(root, &path, files);
+            } else if file_type.is_file() {
+                files.push((
+                    path.strip_prefix(root)
+                        .expect("snapshot path should remain beneath its root")
+                        .to_path_buf(),
+                    fs::read(&path).expect("snapshot file should be readable"),
+                ));
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    collect(root, root, &mut files);
+    files
+}
