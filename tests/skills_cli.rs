@@ -298,3 +298,41 @@ fn skills_directory_is_the_host_manifest_skill_evolution_package() {
         "self-target refusal must not create or change lifecycle evidence"
     );
 }
+
+#[test]
+fn project_skill_install_dispatches_success_and_refusal_through_the_terminal_contract() {
+    let fixture = Fixture::new("project-skill-install-terminal");
+    let root = fixture.root.to_string_lossy();
+
+    let installed = run_in(&fixture.root, &["install-skills", "--root", &root]);
+
+    assert_eq!(installed.status.code(), Some(0), "{installed:?}");
+    assert!(installed.stderr.is_empty(), "{installed:?}");
+    let stdout = String::from_utf8(installed.stdout).expect("stdout should be UTF-8");
+    assert!(
+        stdout.starts_with("installed reuse-evidence skill packages\nwritten:\n"),
+        "{stdout}"
+    );
+
+    let conflict = ".claude/skills/reuse-evidence-capture/SKILL.md";
+    fs::write(fixture.root.join(conflict), b"local capture edit\n")
+        .expect("the installed capture package should be editable");
+    let refused = run_in(&fixture.root, &["install-skills", "--root", &root]);
+
+    assert_eq!(refused.status.code(), Some(3), "{refused:?}");
+    assert!(refused.stdout.is_empty(), "{refused:?}");
+    let stderr = String::from_utf8(refused.stderr).expect("stderr should be UTF-8");
+    assert!(
+        stderr.starts_with(
+            "refusal: installed reuse-evidence skill paths differ from the package this binary ships:\n"
+        ),
+        "{stderr}"
+    );
+    assert!(stderr.contains(conflict), "{stderr}");
+    assert!(
+        stderr.ends_with(
+            "resolution: rerun with `install-skills --root <ROOT> --force` to replace every differing path\n"
+        ),
+        "{stderr}"
+    );
+}

@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use clap::{CommandFactory, Parser, Subcommand, error::ErrorKind};
 use reuse_evidence::{
     ExitMeaning, TerminalFailure, Visibility, case, case::RecordedInstant,
-    enroll_with_expected_repository_id, portfolio, set_visibility,
+    enroll_with_expected_repository_id, install_skills, portfolio, set_visibility,
 };
 use uuid::Uuid;
 
@@ -47,6 +47,15 @@ enum Command {
     },
     /// Name the user-local staging directory for prepared proposals.
     StagingDirectory,
+    /// Install this project's own skill packages into a target repository.
+    InstallSkills {
+        /// Target repository root that will receive the installed package.
+        #[arg(long)]
+        root: PathBuf,
+        /// Explicitly replace installed paths that differ from the shipped package.
+        #[arg(long)]
+        force: bool,
+    },
     /// Record and inspect durable reuse cases.
     Case {
         #[command(subcommand)]
@@ -204,6 +213,7 @@ fn run(cli: Cli) -> ExitCode {
             let location = portfolio::PortfolioLocation::from_environment(Vec::new());
             run_staging_directory(&location)
         }
+        Some(Command::InstallSkills { root, force }) => run_install_skills(&root, force),
         Some(Command::Case { command }) => run_case(command),
         Some(Command::Skills(args)) => return run_skills(args),
         None => {
@@ -523,6 +533,10 @@ fn run_portfolio(location: &portfolio::PortfolioLocation) -> Result<(), Terminal
 fn run_staging_directory(location: &portfolio::PortfolioLocation) -> Result<(), TerminalFailure> {
     let directory = portfolio::prepared_proposal_staging_directory(location)?;
     write_stdout(&format!("{}\n", directory.display()))
+}
+
+fn run_install_skills(target_root: &Path, force: bool) -> Result<(), TerminalFailure> {
+    write_stdout(&install_skills(target_root, force)?.to_string())
 }
 
 fn run_enroll(

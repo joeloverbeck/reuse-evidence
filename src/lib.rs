@@ -13,6 +13,7 @@ pub mod portfolio;
 #[cfg(not(feature = "cli"))]
 #[allow(dead_code)]
 mod portfolio;
+mod skill_install;
 
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -21,6 +22,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+pub use skill_install::{SkillInstallOutcome, install_skills};
 
 /// The marker filename at an enrolled repository's root.
 pub const MARKER_FILE: &str = "reuse-evidence.toml";
