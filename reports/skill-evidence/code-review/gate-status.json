@@ -1,33 +1,39 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-13T02:38:06.090176595Z",
+  "generated_at": "2026-08-13T03:49:42.484831709Z",
   "target_content_hash": "58ee690ec479d13e9ff51567f4e57087f319ac7a1aca6511d61c8628f5e43fa6",
-  "qualifying_uses_on_current_hash": 21,
+  "qualifying_uses_on_current_hash": 22,
   "open_incident_ids": [
     "evt_32e7534e-2a65-478e-8c2e-c4a37dc46596",
     "evt_f39866ac-2585-4708-bc3b-096e3c721ef3",
     "evt_35d21a7d-416a-48a1-b85e-4e2593327873",
     "evt_f3818540-7d53-42db-8f09-0e4b2498da95",
-    "evt_92c6ab31-490d-40e0-8501-259434a56ca6"
+    "evt_92c6ab31-490d-40e0-8501-259434a56ca6",
+    "evt_34ace741-c339-406f-80bc-ac1860c96a2f",
+    "evt_e2bc134e-71be-43ed-b7c2-e9731fe2e82a",
+    "evt_e47de04c-b874-43c0-b395-7fd20a9e0975"
   ],
   "candidate_clusters": [
     {
       "symptom_key": "output",
       "open_event_ids": [
         "evt_32e7534e-2a65-478e-8c2e-c4a37dc46596",
-        "evt_35d21a7d-416a-48a1-b85e-4e2593327873"
+        "evt_35d21a7d-416a-48a1-b85e-4e2593327873",
+        "evt_e2bc134e-71be-43ed-b7c2-e9731fe2e82a",
+        "evt_e47de04c-b874-43c0-b395-7fd20a9e0975"
       ],
-      "independent_incidents": 2,
+      "independent_incidents": 3,
       "max_severity": "material_failure"
     },
     {
       "symptom_key": "execution",
       "open_event_ids": [
         "evt_f39866ac-2585-4708-bc3b-096e3c721ef3",
-        "evt_f3818540-7d53-42db-8f09-0e4b2498da95"
+        "evt_f3818540-7d53-42db-8f09-0e4b2498da95",
+        "evt_34ace741-c339-406f-80bc-ac1860c96a2f"
       ],
-      "independent_incidents": 2,
-      "max_severity": "friction"
+      "independent_incidents": 3,
+      "max_severity": "material_failure"
     },
     {
       "symptom_key": "coordination",
@@ -51,5 +57,5 @@
   "review_reentry_basis": "first_eligibility",
   "target_name": "code-review",
   "target_repo_relative_path": ".claude/skills/code-review",
-  "derivation_session_id": "019ff8c3-4003-7453-969b-e998f1f3fc79"
+  "derivation_session_id": "019ff8fd-2526-71a0-bdfa-54a8f8fd60cd"
 }
