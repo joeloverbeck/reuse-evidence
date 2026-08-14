@@ -556,6 +556,7 @@ fn windows_error_4390_regular_file_is_a_replaceable_conflict() {
 fn windows_git_symlink_placeholder_is_a_self_install_no_op() {
     let fixture = windows_temp_root("skill-install-windows-git-placeholder");
     let repository = support::git_repository(&fixture, "target");
+    support::git_index_with_symlink(&repository, DISCOVERY_LINK);
     write_matching_shipped_files(&repository);
     let placeholder = repository.join(DISCOVERY_LINK);
     fs::create_dir_all(
@@ -576,6 +577,41 @@ fn windows_git_symlink_placeholder_is_a_self_install_no_op() {
         "reuse-evidence skill packages already installed\nnothing needed writing\n"
     );
     assert_eq!(support::snapshot(&repository), before);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_untracked_exact_target_regular_file_is_a_conflict() {
+    let fixture = windows_temp_root("skill-install-windows-untracked-exact-target");
+    let repository = support::git_repository(&fixture, "target");
+    write_matching_shipped_files(&repository);
+    let obstruction = repository.join(DISCOVERY_LINK);
+    fs::create_dir_all(
+        obstruction
+            .parent()
+            .expect("the discovery obstruction should have a parent"),
+    )
+    .expect("the discovery parent should be creatable");
+    fs::write(&obstruction, DISCOVERY_TARGET.as_bytes())
+        .expect("the exact-target regular-file obstruction should be writable");
+    let before = support::snapshot(&repository);
+
+    let Err(failure) = install_skills(&repository, false) else {
+        panic!("an untracked regular file must not masquerade as a Git symlink placeholder");
+    };
+
+    assert_eq!(failure.meaning(), ExitMeaning::Refusal, "{failure}");
+    assert_eq!(
+        failure.to_string(),
+        format!(
+            "refusal: installed reuse-evidence skill paths differ from the package this binary ships:\n- {DISCOVERY_LINK}\nresolution: rerun with `install-skills --root <ROOT> --force` to replace every differing path"
+        )
+    );
+    assert_eq!(
+        support::snapshot(&repository),
+        before,
+        "the non-force refusal must not change the obstruction"
+    );
 }
 
 fn assert_unchanged_install_is_a_no_op(case: &str, repository: &Path) {

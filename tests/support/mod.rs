@@ -104,6 +104,35 @@ pub fn git_repository_at(repository: &Path) {
     .expect("repository fixture should contain recognizable Git metadata");
 }
 
+/// Records one symlink-mode path in a version-2 Git index fixture.
+#[cfg(windows)]
+pub fn git_index_with_symlink(repository: &Path, relative_path: &str) {
+    const FIXED_ENTRY_LENGTH: usize = 62;
+    let path = relative_path.as_bytes();
+    assert!(
+        path.len() < 0x0fff,
+        "the fixture path should fit Git index flags"
+    );
+    let entry_length = FIXED_ENTRY_LENGTH + path.len() + 1;
+    let padding = (8 - entry_length % 8) % 8;
+    let mut index = Vec::with_capacity(12 + entry_length + padding + 20);
+    index.extend_from_slice(b"DIRC");
+    index.extend_from_slice(&2_u32.to_be_bytes());
+    index.extend_from_slice(&1_u32.to_be_bytes());
+
+    let mut entry = vec![0; FIXED_ENTRY_LENGTH];
+    entry[24..28].copy_from_slice(&0o120_000_u32.to_be_bytes());
+    let path_length = u16::try_from(path.len()).expect("the fixture path length should fit u16");
+    entry[60..62].copy_from_slice(&path_length.to_be_bytes());
+    index.extend_from_slice(&entry);
+    index.extend_from_slice(path);
+    index.push(0);
+    index.resize(index.len() + padding, 0);
+    index.extend_from_slice(&[0; 20]);
+    fs::write(repository.join(".git/index"), index)
+        .expect("the Git symlink index fixture should be writable");
+}
+
 /// Writes an enrolled repository marker into `repository`.
 pub fn enrollment_marker(repository: &Path, repository_id: &str, visibility: &str) {
     fs::write(

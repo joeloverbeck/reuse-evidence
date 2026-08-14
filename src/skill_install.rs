@@ -3,6 +3,8 @@
 use std::fmt::{self, Write as _};
 use std::fs;
 use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
 
 use crate::{TerminalFailure, create_file_atomically, replace_file_atomically};
 
@@ -429,7 +431,7 @@ fn compare_discovery_link(target_root: &Path) -> Result<InstalledState, Terminal
                 }
                 #[cfg(windows)]
                 {
-                    compare_discovery_regular_file(&link)
+                    compare_discovery_regular_file(target_root, &link)
                 }
             }
             Ok(_) => Ok(InstalledState::Unreplaceable),
@@ -452,7 +454,10 @@ fn compare_discovery_link(target_root: &Path) -> Result<InstalledState, Terminal
 }
 
 #[cfg(windows)]
-fn compare_discovery_regular_file(link: &Path) -> Result<InstalledState, TerminalFailure> {
+fn compare_discovery_regular_file(
+    target_root: &Path,
+    link: &Path,
+) -> Result<InstalledState, TerminalFailure> {
     let bytes = fs::read(link).map_err(|error| {
         TerminalFailure::refusal(
             format!(
@@ -462,11 +467,125 @@ fn compare_discovery_regular_file(link: &Path) -> Result<InstalledState, Termina
             "make the discovery-link path readable, then rerun `install-skills --root <ROOT>`",
         )
     })?;
-    Ok(if bytes == DISCOVERY_TARGET.as_bytes() {
-        InstalledState::Matching
+    Ok(
+        if bytes == DISCOVERY_TARGET.as_bytes()
+            && git_index_records_symlink(target_root, DISCOVERY_LINK.as_bytes())
+        {
+            InstalledState::Matching
+        } else {
+            InstalledState::Differing
+        },
+    )
+}
+
+#[cfg(windows)]
+fn git_index_records_symlink(target_root: &Path, tracked_path: &[u8]) -> bool {
+    let Some(index_path) = git_index_path(target_root) else {
+        return false;
+    };
+    let Ok(index) = fs::read(index_path) else {
+        return false;
+    };
+    index_records_symlink(&index, tracked_path)
+}
+
+#[cfg(windows)]
+fn git_index_path(target_root: &Path) -> Option<PathBuf> {
+    let dot_git = target_root.join(".git");
+    let metadata = fs::metadata(&dot_git).ok()?;
+    if metadata.is_dir() {
+        return Some(dot_git.join("index"));
+    }
+    if !metadata.is_file() {
+        return None;
+    }
+    let pointer = fs::read_to_string(dot_git).ok()?;
+    let git_dir = pointer.trim().strip_prefix("gitdir: ")?;
+    let git_dir = Path::new(git_dir);
+    let git_dir = if git_dir.is_absolute() {
+        git_dir.to_path_buf()
     } else {
-        InstalledState::Differing
-    })
+        target_root.join(git_dir)
+    };
+    Some(git_dir.join("index"))
+}
+
+#[cfg(windows)]
+fn index_records_symlink(index: &[u8], tracked_path: &[u8]) -> bool {
+    const HEADER_LENGTH: usize = 12;
+    const FIXED_ENTRY_LENGTH: usize = 62;
+    const SHA1_LENGTH: usize = 20;
+    const EXTENDED_ENTRY: u16 = 0x4000;
+    const SYMLINK_MODE: u32 = 0o120_000;
+    const OBJECT_TYPE_MASK: u32 = 0o170_000;
+
+    if index.len() < HEADER_LENGTH + SHA1_LENGTH || &index[..4] != b"DIRC" {
+        return false;
+    }
+    let version = u32::from_be_bytes(index[4..8].try_into().expect("four-byte index version"));
+    if !matches!(version, 2 | 3) {
+        return false;
+    }
+    let entry_count = u32::from_be_bytes(index[8..12].try_into().expect("four-byte entry count"));
+    let mut cursor = HEADER_LENGTH;
+    let mut found = false;
+    for _ in 0..entry_count {
+        let Some(fixed_end) = cursor.checked_add(FIXED_ENTRY_LENGTH) else {
+            return false;
+        };
+        if fixed_end > index.len().saturating_sub(SHA1_LENGTH) {
+            return false;
+        }
+        let mode = u32::from_be_bytes(
+            index[cursor + 24..cursor + 28]
+                .try_into()
+                .expect("four-byte index mode"),
+        );
+        let flags = u16::from_be_bytes(
+            index[cursor + 60..fixed_end]
+                .try_into()
+                .expect("two-byte index flags"),
+        );
+        let path_start = if flags & EXTENDED_ENTRY == 0 {
+            fixed_end
+        } else if version == 3 {
+            let Some(extended_end) = fixed_end.checked_add(2) else {
+                return false;
+            };
+            if extended_end > index.len().saturating_sub(SHA1_LENGTH) {
+                return false;
+            }
+            extended_end
+        } else {
+            return false;
+        };
+        let Some(path_length) = index[path_start..].iter().position(|byte| *byte == 0) else {
+            return false;
+        };
+        if &index[path_start..path_start + path_length] == tracked_path
+            && mode & OBJECT_TYPE_MASK == SYMLINK_MODE
+        {
+            found = true;
+        }
+        let Some(entry_length) = path_start
+            .checked_add(path_length + 1)
+            .and_then(|end| end.checked_sub(cursor))
+        else {
+            return false;
+        };
+        let padding = (8 - entry_length % 8) % 8;
+        let Some(next_cursor) = cursor
+            .checked_add(entry_length)
+            .and_then(|end| end.checked_add(padding))
+        else {
+            return false;
+        };
+        if next_cursor > index.len().saturating_sub(SHA1_LENGTH) {
+            return false;
+        }
+        cursor = next_cursor;
+    }
+    found
 }
 
 #[cfg(any(unix, windows))]
