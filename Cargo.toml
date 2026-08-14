@@ -7,6 +7,15 @@ description = "Evidence-gated reuse decisions for repository portfolios"
 license = "MIT"
 repository = "https://github.com/joeloverbeck/reuse-evidence"
 readme = "README.md"
+include = [
+    "/src/**/*",
+    "/tests/**/*",
+    "/.claude/skills/reuse-evidence-capture/**/*",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/README.md",
+    "/LICENSE",
+]
 
 [features]
 default = ["cli"]

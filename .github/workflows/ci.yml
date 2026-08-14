@@ -61,6 +61,28 @@ jobs:
       - name: Tests (library only)
         run: cargo test --no-default-features
 
+      - name: Package verification build
+        run: cargo package --locked
+
+      - name: Published file set
+        shell: bash
+        run: |
+          package_contents="$(cargo package --list --locked)"
+          unexpected=0
+          while IFS= read -r path; do
+            case "$path" in
+              .cargo_vcs_info.json | Cargo.lock | Cargo.toml | Cargo.toml.orig | LICENSE | README.md | src/* | tests/* | .claude/skills/reuse-evidence-capture/*)
+                ;;
+              *)
+                echo "::error file=$path::file is outside the published allowlist"
+                unexpected=1
+                ;;
+            esac
+          done <<< "$package_contents"
+          if (( unexpected != 0 )); then
+            exit 1
+          fi
+
       - name: Build (all features)
         run: cargo build --all-features
 
