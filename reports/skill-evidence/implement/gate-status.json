@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-13T05:16:26.336222475Z",
+  "generated_at": "2026-08-14T09:21:44.955776724Z",
   "target_content_hash": "2785481265152dec4b7c8cf4e756bd4c232e0d836bb5d03dd5cec16b588958a9",
-  "qualifying_uses_on_current_hash": 24,
+  "qualifying_uses_on_current_hash": 26,
   "open_incident_ids": [
     "evt_2e1cd2a5-9e32-4a91-a8ce-6b29182cd27b",
     "evt_04781c8b-8a47-4a28-8d60-58016659663d",
@@ -16,7 +16,16 @@
     "evt_64f783af-db78-4464-8466-32242461690d",
     "evt_8c20eaff-837a-4a22-89fc-fb2871d7b802",
     "evt_143f23ce-57ce-46e6-9e7f-de339da9498f",
-    "evt_ead46856-2cc8-4fe8-b9d1-3bd9c2efcb48"
+    "evt_ead46856-2cc8-4fe8-b9d1-3bd9c2efcb48",
+    "evt_8f119d2b-46a8-433c-a2ac-ee63c7a6b814",
+    "evt_603208f0-4f08-4bc5-98c2-40cfac6f6ede",
+    "evt_4fd58544-9a2b-4b8a-bb2c-f50cdddc0355",
+    "evt_006f74c7-fb24-4e43-ba14-e9ab650c31c8",
+    "evt_b3851ab6-3218-43e8-ab81-9da0f731b64c",
+    "evt_519be0aa-2c62-45f4-a332-bdaf3fdbcd34",
+    "evt_9340753d-edff-4e60-8616-a327e2bf0bfd",
+    "evt_755361d1-4da2-42d3-aea5-f77a953370d7",
+    "evt_55c7dc20-03b1-4a5c-9559-04fee80f0f21"
   ],
   "candidate_clusters": [
     {
@@ -25,9 +34,11 @@
         "evt_2e1cd2a5-9e32-4a91-a8ce-6b29182cd27b",
         "evt_8c20eaff-837a-4a22-89fc-fb2871d7b802",
         "evt_143f23ce-57ce-46e6-9e7f-de339da9498f",
-        "evt_ead46856-2cc8-4fe8-b9d1-3bd9c2efcb48"
+        "evt_ead46856-2cc8-4fe8-b9d1-3bd9c2efcb48",
+        "evt_603208f0-4f08-4bc5-98c2-40cfac6f6ede",
+        "evt_006f74c7-fb24-4e43-ba14-e9ab650c31c8"
       ],
-      "independent_incidents": 3,
+      "independent_incidents": 4,
       "max_severity": "material_failure"
     },
     {
@@ -41,10 +52,31 @@
         "evt_366f4505-8f72-4cfe-b5a7-3bfc65b8c260",
         "evt_5a5e6b05-e9cb-4144-80ea-d632048d7a79",
         "evt_146280c2-cc91-42d9-bf55-22b0d81beec9",
-        "evt_64f783af-db78-4464-8466-32242461690d"
+        "evt_64f783af-db78-4464-8466-32242461690d",
+        "evt_8f119d2b-46a8-433c-a2ac-ee63c7a6b814",
+        "evt_4fd58544-9a2b-4b8a-bb2c-f50cdddc0355",
+        "evt_b3851ab6-3218-43e8-ab81-9da0f731b64c",
+        "evt_519be0aa-2c62-45f4-a332-bdaf3fdbcd34",
+        "evt_9340753d-edff-4e60-8616-a327e2bf0bfd"
       ],
-      "independent_incidents": 3,
+      "independent_incidents": 4,
       "max_severity": "material_failure"
+    },
+    {
+      "symptom_key": "cost",
+      "open_event_ids": [
+        "evt_755361d1-4da2-42d3-aea5-f77a953370d7"
+      ],
+      "independent_incidents": 1,
+      "max_severity": "friction"
+    },
+    {
+      "symptom_key": "coordination",
+      "open_event_ids": [
+        "evt_55c7dc20-03b1-4a5c-9559-04fee80f0f21"
+      ],
+      "independent_incidents": 1,
+      "max_severity": "friction"
     }
   ],
   "state": "eligible",
@@ -60,5 +92,5 @@
   "review_reentry_basis": "first_eligibility",
   "target_name": "implement",
   "target_repo_relative_path": ".claude/skills/implement",
-  "derivation_session_id": "019ff980-d1f5-7c12-a460-b106535ec7dd"
+  "derivation_session_id": "019fff42-02b8-7e33-a9a9-b8e5fc5c1885"
 }

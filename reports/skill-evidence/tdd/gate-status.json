@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-13T02:37:02.939536092Z",
+  "generated_at": "2026-08-14T09:23:34.709734055Z",
   "target_content_hash": "fa4587c9947cd3836cebbf6ebda49196f0b9fb0cef1b7b7ff5d03fc01f20d31f",
-  "qualifying_uses_on_current_hash": 24,
+  "qualifying_uses_on_current_hash": 26,
   "open_incident_ids": [
     "evt_920ddf63-df49-4525-bfc0-366b2975ed73",
     "evt_a86195b4-5a88-408f-a22a-f6ada76d20f5",
@@ -23,7 +23,15 @@
     "evt_f5b4d4de-238c-4438-9ec9-2cec34e09595",
     "evt_737179cf-4713-4bff-851e-6f36ca3ddad1",
     "evt_f2e5aaf9-739d-46be-beb9-800492509b0e",
-    "evt_750cf7a5-0c93-40aa-9d9b-11bd4191fdc2"
+    "evt_750cf7a5-0c93-40aa-9d9b-11bd4191fdc2",
+    "evt_fe04c615-1f81-421c-88c9-2e136273de0c",
+    "evt_5df87ede-3109-4635-b842-9772dd8fdf5b",
+    "evt_2985fa95-0dd9-4c6d-8f16-02c546978b2d",
+    "evt_c0b85d96-9324-43ea-86db-391654e12cff",
+    "evt_56cbd32d-81f6-41d1-b22d-8942fc0c411d",
+    "evt_887ecdcd-0e92-497e-acc8-d080aed7ca06",
+    "evt_c40af64f-52d1-4869-b738-977afa0243de",
+    "evt_7574e253-8d0f-4f9b-a5f9-287c18987646"
   ],
   "candidate_clusters": [
     {
@@ -34,9 +42,15 @@
         "evt_fdddc0d8-572b-47a7-b4bb-a1b82c69cfee",
         "evt_99d92c46-d5ce-45d1-a7f6-246546719100",
         "evt_77250aaa-99b7-4ffc-91c0-692855090056",
-        "evt_f5b4d4de-238c-4438-9ec9-2cec34e09595"
+        "evt_f5b4d4de-238c-4438-9ec9-2cec34e09595",
+        "evt_fe04c615-1f81-421c-88c9-2e136273de0c",
+        "evt_5df87ede-3109-4635-b842-9772dd8fdf5b",
+        "evt_c0b85d96-9324-43ea-86db-391654e12cff",
+        "evt_56cbd32d-81f6-41d1-b22d-8942fc0c411d",
+        "evt_887ecdcd-0e92-497e-acc8-d080aed7ca06",
+        "evt_c40af64f-52d1-4869-b738-977afa0243de"
       ],
-      "independent_incidents": 6,
+      "independent_incidents": 7,
       "max_severity": "material_failure"
     },
     {
@@ -55,10 +69,19 @@
         "evt_0657fbd3-3dc1-465f-bc8c-7ed0ab2c9f2e",
         "evt_737179cf-4713-4bff-851e-6f36ca3ddad1",
         "evt_f2e5aaf9-739d-46be-beb9-800492509b0e",
-        "evt_750cf7a5-0c93-40aa-9d9b-11bd4191fdc2"
+        "evt_750cf7a5-0c93-40aa-9d9b-11bd4191fdc2",
+        "evt_2985fa95-0dd9-4c6d-8f16-02c546978b2d"
       ],
-      "independent_incidents": 10,
+      "independent_incidents": 11,
       "max_severity": "material_failure"
+    },
+    {
+      "symptom_key": "cost",
+      "open_event_ids": [
+        "evt_7574e253-8d0f-4f9b-a5f9-287c18987646"
+      ],
+      "independent_incidents": 1,
+      "max_severity": "friction"
     }
   ],
   "state": "eligible",
@@ -75,5 +98,5 @@
   "review_reentry_basis": "first_eligibility",
   "target_name": "tdd",
   "target_repo_relative_path": ".claude/skills/tdd",
-  "derivation_session_id": "019ff8c3-4003-7453-969b-e998f1f3fc79"
+  "derivation_session_id": "019fff42-02b8-7e33-a9a9-b8e5fc5c1885"
 }

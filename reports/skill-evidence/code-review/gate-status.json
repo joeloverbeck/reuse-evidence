@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-13T03:49:42.484831709Z",
+  "generated_at": "2026-08-14T09:25:39.401174207Z",
   "target_content_hash": "58ee690ec479d13e9ff51567f4e57087f319ac7a1aca6511d61c8628f5e43fa6",
-  "qualifying_uses_on_current_hash": 22,
+  "qualifying_uses_on_current_hash": 24,
   "open_incident_ids": [
     "evt_32e7534e-2a65-478e-8c2e-c4a37dc46596",
     "evt_f39866ac-2585-4708-bc3b-096e3c721ef3",
@@ -11,7 +11,8 @@
     "evt_92c6ab31-490d-40e0-8501-259434a56ca6",
     "evt_34ace741-c339-406f-80bc-ac1860c96a2f",
     "evt_e2bc134e-71be-43ed-b7c2-e9731fe2e82a",
-    "evt_e47de04c-b874-43c0-b395-7fd20a9e0975"
+    "evt_e47de04c-b874-43c0-b395-7fd20a9e0975",
+    "evt_a92ecac8-9324-4ce2-afba-e4df15ac0b4c"
   ],
   "candidate_clusters": [
     {
@@ -38,9 +39,10 @@
     {
       "symptom_key": "coordination",
       "open_event_ids": [
-        "evt_92c6ab31-490d-40e0-8501-259434a56ca6"
+        "evt_92c6ab31-490d-40e0-8501-259434a56ca6",
+        "evt_a92ecac8-9324-4ce2-afba-e4df15ac0b4c"
       ],
-      "independent_incidents": 1,
+      "independent_incidents": 2,
       "max_severity": "friction"
     }
   ],
@@ -57,5 +59,5 @@
   "review_reentry_basis": "first_eligibility",
   "target_name": "code-review",
   "target_repo_relative_path": ".claude/skills/code-review",
-  "derivation_session_id": "019ff8fd-2526-71a0-bdfa-54a8f8fd60cd"
+  "derivation_session_id": "019fff42-02b8-7e33-a9a9-b8e5fc5c1885"
 }
