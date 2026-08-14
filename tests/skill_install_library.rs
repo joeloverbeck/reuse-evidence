@@ -96,34 +96,12 @@ fn a_fresh_install_writes_the_shipped_package_and_relative_discovery_link_only()
             "installed {relative_path} should be byte-identical to the shipped source"
         );
     }
-    #[cfg(unix)]
-    assert_eq!(
-        fs::read_link(repository.join(DISCOVERY_LINK))
-            .expect("the installed package should have a discovery link"),
-        PathBuf::from(DISCOVERY_TARGET),
-        "the discovery target should be relative to its own directory"
-    );
-    #[cfg(not(unix))]
-    assert!(
-        !repository.join(DISCOVERY_LINK).exists(),
-        "a platform without ordinary directory symlinks should use the real files alone"
-    );
-
     let mut expected = String::from("installed reuse-evidence skill packages\nwritten:\n");
     for (relative_path, _) in SHIPPED_FILES {
         writeln!(&mut expected, "- {relative_path}")
             .expect("writing expected receipt text to a String cannot fail");
     }
-    #[cfg(unix)]
-    writeln!(
-        &mut expected,
-        "discovery links created:\n- {DISCOVERY_LINK} -> {DISCOVERY_TARGET}"
-    )
-    .expect("writing expected receipt text to a String cannot fail");
-    #[cfg(not(unix))]
-    expected.push_str(
-        "discovery links not created: symbolic links are not supported on this platform\n",
-    );
+    assert_fresh_discovery_link_and_extend_receipt(&repository, &mut expected);
     assert_eq!(outcome.to_string(), expected);
 
     assert_eq!(
@@ -374,12 +352,138 @@ fn force_refuses_unreplaceable_installed_paths_before_replacing_other_files() {
     );
 }
 
+#[test]
+fn non_force_unreplaceable_refusal_names_an_effective_resolution() {
+    let fixture = TempRoot::new("skill-install-unreplaceable-non-force");
+    let repository = support::git_repository(&fixture, "target");
+    install_skills(&repository, false).expect("the fixture should install once");
+    let replaceable = SHIPPED_FILES[0].0;
+    let unreplaceable = SHIPPED_FILES[2].0;
+    fs::write(repository.join(replaceable), b"local capture edit\n")
+        .expect("the replaceable installed file should be editable");
+    fs::remove_file(repository.join(unreplaceable))
+        .expect("the installed file should be removable");
+    fs::create_dir(repository.join(unreplaceable))
+        .expect("a directory should be able to occupy the installed-file path");
+    let before = support::snapshot(&repository);
+
+    let Err(failure) = install_skills(&repository, false) else {
+        panic!("a non-force run must refuse every differing installed path");
+    };
+
+    assert_eq!(failure.meaning(), ExitMeaning::Refusal, "{failure}");
+    assert_eq!(
+        failure.to_string(),
+        format!(
+            "refusal: installed reuse-evidence skill paths differ from the package this binary ships:\n- {replaceable}\n- {unreplaceable}\npaths that cannot be replaced atomically:\n- {unreplaceable}\nresolution: remove every path listed as unreplaceable, then rerun `install-skills --root <ROOT> --force` to replace the remaining differing paths"
+        )
+    );
+    assert_eq!(
+        support::snapshot(&repository),
+        before,
+        "non-force refusal must remain write-free"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn a_symlink_capable_windows_target_receives_the_relative_discovery_link() {
+    let fixture = TempRoot::new("skill-install-windows-link-capability");
+    let repository = support::git_repository(&fixture, "target");
+    let links_supported = windows_supports_directory_links(&fixture);
+
+    let outcome = install_skills(&repository, false)
+        .expect("a Windows installation should succeed with or without link capability");
+
+    if links_supported {
+        assert_eq!(
+            fs::read_link(repository.join(DISCOVERY_LINK))
+                .expect("a capable Windows target should receive a discovery link"),
+            PathBuf::from(DISCOVERY_TARGET)
+        );
+        assert!(
+            outcome.to_string().contains(&format!(
+                "discovery links created:\n- {DISCOVERY_LINK} -> {DISCOVERY_TARGET}"
+            )),
+            "{outcome}"
+        );
+    } else {
+        assert!(
+            outcome.to_string().contains(&format!(
+                "discovery links not created: symbolic links are not supported on this platform\n- {DISCOVERY_LINK}"
+            )),
+            "{outcome}"
+        );
+    }
+    let rerun = install_skills(&repository, false)
+        .expect("the fresh result should be an ordinary unchanged installation");
+    assert!(
+        rerun.to_string().contains("nothing needed writing"),
+        "{rerun}"
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_inspects_and_reports_a_non_link_at_the_discovery_path() {
+    let fixture = TempRoot::new("skill-install-windows-link-obstruction");
+    let repository = support::git_repository(&fixture, "target");
+    let links_supported = windows_supports_directory_links(&fixture);
+    install_skills(&repository, false).expect("the fixture should install once");
+    let link = repository.join(DISCOVERY_LINK);
+    if link.exists() {
+        fs::remove_dir(&link).expect("the discovery link should be removable");
+    }
+    fs::create_dir_all(
+        link.parent()
+            .expect("the discovery link should have a parent directory"),
+    )
+    .expect("the discovery parent should be creatable");
+    fs::write(&link, b"not a discovery link\n")
+        .expect("a regular file should be able to obstruct discovery");
+
+    let Err(failure) = install_skills(&repository, false) else {
+        panic!("a Windows non-link obstruction must be reported before replacement");
+    };
+    assert_eq!(failure.meaning(), ExitMeaning::Refusal, "{failure}");
+    assert!(failure.to_string().contains(DISCOVERY_LINK), "{failure}");
+
+    let outcome = install_skills(&repository, true)
+        .expect("force should succeed even when Windows cannot create links");
+    if links_supported {
+        assert_eq!(
+            fs::read_link(&link).expect("force should restore the discovery link"),
+            PathBuf::from(DISCOVERY_TARGET)
+        );
+        assert!(outcome.to_string().contains(DISCOVERY_LINK), "{outcome}");
+    } else {
+        assert!(
+            outcome.to_string().contains(&format!(
+                "discovery links not created: symbolic links are not supported on this platform\n- {DISCOVERY_LINK}"
+            )),
+            "{outcome}"
+        );
+        assert!(
+            fs::symlink_metadata(&link).is_err(),
+            "force should remove an obsolete discovery obstruction when links are unavailable"
+        );
+    }
+    let rerun = install_skills(&repository, false)
+        .expect("the forced result should be an ordinary unchanged installation");
+    assert!(
+        rerun.to_string().contains("nothing needed writing"),
+        "{rerun}"
+    );
+}
+
 fn assert_unchanged_install_is_a_no_op(case: &str, repository: &Path) {
     let before = support::snapshot(repository);
     #[cfg(unix)]
     let link_before = fs::read_link(repository.join(DISCOVERY_LINK)).unwrap_or_else(|error| {
         panic!("{case}: correct discovery link should be readable: {error}")
     });
+    #[cfg(windows)]
+    let link_before = fs::read_link(repository.join(DISCOVERY_LINK)).ok();
 
     let outcome = install_skills(repository, false)
         .unwrap_or_else(|error| panic!("{case}: an unchanged install should succeed: {error}"));
@@ -387,9 +491,17 @@ fn assert_unchanged_install_is_a_no_op(case: &str, repository: &Path) {
     #[cfg(unix)]
     let expected =
         String::from("reuse-evidence skill packages already installed\nnothing needed writing\n");
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    let expected = if link_before.is_some() {
+        String::from("reuse-evidence skill packages already installed\nnothing needed writing\n")
+    } else {
+        format!(
+            "reuse-evidence skill packages already installed\nnothing needed writing\ndiscovery links not created: symbolic links are not supported on this platform\n- {DISCOVERY_LINK}\n"
+        )
+    };
+    #[cfg(not(any(unix, windows)))]
     let expected = String::from(
-        "reuse-evidence skill packages already installed\nnothing needed writing\ndiscovery links not created: symbolic links are not supported on this platform\n",
+        "reuse-evidence skill packages already installed\nnothing needed writing\ndiscovery links not created: symbolic links are not supported on this platform\n- .agents/skills/reuse-evidence-capture\n",
     );
     assert_eq!(outcome.to_string(), expected, "{case}");
     assert_eq!(
@@ -405,6 +517,64 @@ fn assert_unchanged_install_is_a_no_op(case: &str, repository: &Path) {
         link_before,
         "{case}: a correct discovery link must be left alone"
     );
+    #[cfg(windows)]
+    if let Some(link_before) = link_before {
+        assert_eq!(
+            fs::read_link(repository.join(DISCOVERY_LINK)).unwrap_or_else(|error| panic!(
+                "{case}: discovery link should remain readable: {error}"
+            )),
+            link_before,
+            "{case}: a correct discovery link must be left alone"
+        );
+    }
+}
+
+#[cfg(unix)]
+fn assert_fresh_discovery_link_and_extend_receipt(repository: &Path, expected: &mut String) {
+    assert_eq!(
+        fs::read_link(repository.join(DISCOVERY_LINK))
+            .expect("the installed package should have a discovery link"),
+        PathBuf::from(DISCOVERY_TARGET),
+        "the discovery target should be relative to its own directory"
+    );
+    writeln!(
+        expected,
+        "discovery links created:\n- {DISCOVERY_LINK} -> {DISCOVERY_TARGET}"
+    )
+    .expect("writing expected receipt text to a String cannot fail");
+}
+
+#[cfg(windows)]
+fn assert_fresh_discovery_link_and_extend_receipt(repository: &Path, expected: &mut String) {
+    match fs::read_link(repository.join(DISCOVERY_LINK)) {
+        Ok(target) => {
+            assert_eq!(target, PathBuf::from(DISCOVERY_TARGET));
+            writeln!(
+                expected,
+                "discovery links created:\n- {DISCOVERY_LINK} -> {DISCOVERY_TARGET}"
+            )
+            .expect("writing expected receipt text to a String cannot fail");
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => writeln!(
+            expected,
+            "discovery links not created: symbolic links are not supported on this platform\n- {DISCOVERY_LINK}"
+        )
+        .expect("writing expected receipt text to a String cannot fail"),
+        Err(error) => panic!("the Windows discovery path should be a link or absent: {error}"),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn assert_fresh_discovery_link_and_extend_receipt(repository: &Path, expected: &mut String) {
+    assert!(
+        !repository.join(DISCOVERY_LINK).exists(),
+        "a platform without ordinary directory symlinks should use the real files alone"
+    );
+    writeln!(
+        expected,
+        "discovery links not created: symbolic links are not supported on this platform\n- {DISCOVERY_LINK}"
+    )
+    .expect("writing expected receipt text to a String cannot fail");
 }
 
 #[cfg(unix)]
@@ -412,5 +582,36 @@ fn create_directory_symlink(target: &Path, link: &Path) {
     std::os::unix::fs::symlink(target, link).expect("fixture symlink should be creatable");
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn create_directory_symlink(target: &Path, link: &Path) {
+    match std::os::windows::fs::symlink_dir(target, link) {
+        Ok(()) => {}
+        Err(error)
+            if error.kind() == std::io::ErrorKind::Unsupported
+                || error.raw_os_error() == Some(1314) => {}
+        Err(error) => panic!("fixture symlink should be creatable or unsupported: {error}"),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn create_directory_symlink(_target: &Path, _link: &Path) {}
+
+#[cfg(windows)]
+fn windows_supports_directory_links(fixture: &Path) -> bool {
+    let target = fixture.join("windows-link-probe-target");
+    let link = fixture.join("windows-link-probe");
+    fs::create_dir(&target).expect("the Windows link probe target should be creatable");
+    match std::os::windows::fs::symlink_dir(&target, &link) {
+        Ok(()) => {
+            fs::remove_dir(&link).expect("the Windows probe link should be removable");
+            true
+        }
+        Err(error)
+            if error.kind() == std::io::ErrorKind::Unsupported
+                || error.raw_os_error() == Some(1314) =>
+        {
+            false
+        }
+        Err(error) => panic!("the Windows link probe failed unexpectedly: {error}"),
+    }
+}
