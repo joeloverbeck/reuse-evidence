@@ -25,6 +25,7 @@ enum DiscoveryLinkAction {
     Created,
     Replaced,
     Unsupported,
+    RemovedUnsupported,
 }
 
 const SHIPPED_FILES: &[ShippedFile] = &[
@@ -97,8 +98,15 @@ impl fmt::Display for SkillInstallOutcome {
                 writeln!(formatter, "discovery links replaced:")?;
                 writeln!(formatter, "- {DISCOVERY_LINK} -> {DISCOVERY_TARGET}")?;
             }
+            if self.discovery_link == DiscoveryLinkAction::RemovedUnsupported {
+                writeln!(formatter, "removed discovery paths:")?;
+                writeln!(formatter, "- {DISCOVERY_LINK}")?;
+            }
         }
-        if self.discovery_link == DiscoveryLinkAction::Unsupported {
+        if matches!(
+            self.discovery_link,
+            DiscoveryLinkAction::Unsupported | DiscoveryLinkAction::RemovedUnsupported
+        ) {
             writeln!(
                 formatter,
                 "discovery links not created: symbolic links are not supported on this platform"
@@ -309,13 +317,7 @@ fn write_discovery_link(
             }
         }
         InstalledState::Matching => DiscoveryLinkAction::Unchanged,
-        InstalledState::Differing => {
-            if replace_discovery_link(target_root)? {
-                DiscoveryLinkAction::Replaced
-            } else {
-                DiscoveryLinkAction::Unsupported
-            }
-        }
+        InstalledState::Differing => replace_discovery_link(target_root)?,
         InstalledState::Unreplaceable => {
             unreachable!("unreplaceable paths refuse before the write pass")
         }
@@ -419,19 +421,17 @@ fn compare_discovery_link(target_root: &Path) -> Result<InstalledState, Terminal
         Ok(target) if target == Path::new(DISCOVERY_TARGET) => Ok(InstalledState::Matching),
         Ok(_) => Ok(InstalledState::Differing),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(InstalledState::Missing),
-        Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {
-            match fs::symlink_metadata(&link) {
-                Ok(metadata) if metadata.is_file() => Ok(InstalledState::Differing),
-                Ok(_) => Ok(InstalledState::Unreplaceable),
-                Err(metadata_error) => Err(TerminalFailure::refusal(
-                    format!(
-                        "discovery link `{}` cannot be inspected: {metadata_error}",
-                        link.display()
-                    ),
-                    "make the discovery-link path readable, then rerun `install-skills --root <ROOT>`",
-                )),
-            }
-        }
+        Err(error) if read_link_reported_non_link(&error) => match fs::symlink_metadata(&link) {
+            Ok(metadata) if metadata.is_file() => Ok(InstalledState::Differing),
+            Ok(_) => Ok(InstalledState::Unreplaceable),
+            Err(metadata_error) => Err(TerminalFailure::refusal(
+                format!(
+                    "discovery link `{}` cannot be inspected: {metadata_error}",
+                    link.display()
+                ),
+                "make the discovery-link path readable, then rerun `install-skills --root <ROOT>`",
+            )),
+        },
         Err(error) => Err(TerminalFailure::refusal(
             format!(
                 "discovery link `{}` cannot be inspected: {error}",
@@ -440,6 +440,18 @@ fn compare_discovery_link(target_root: &Path) -> Result<InstalledState, Terminal
             "make the discovery-link path readable, then rerun `install-skills --root <ROOT>`",
         )),
     }
+}
+
+#[cfg(any(unix, windows))]
+fn read_link_reported_non_link(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::InvalidInput {
+        return true;
+    }
+    #[cfg(windows)]
+    if error.raw_os_error() == Some(4390) {
+        return true;
+    }
+    false
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -470,7 +482,7 @@ fn install_discovery_link(target_root: &Path) -> Result<bool, TerminalFailure> {
 }
 
 #[cfg(any(unix, windows))]
-fn replace_discovery_link(target_root: &Path) -> Result<bool, TerminalFailure> {
+fn replace_discovery_link(target_root: &Path) -> Result<DiscoveryLinkAction, TerminalFailure> {
     let link = target_root.join(DISCOVERY_LINK);
     let temporary = crate::temporary_path_for(&link);
     if let Err(error) = create_directory_symlink(Path::new(DISCOVERY_TARGET), &temporary) {
@@ -481,21 +493,13 @@ fn replace_discovery_link(target_root: &Path) -> Result<bool, TerminalFailure> {
                     link.display()
                 ))
             })?;
-            return Ok(false);
+            return Ok(DiscoveryLinkAction::RemovedUnsupported);
         }
         return Err(TerminalFailure::unsafe_failure(format!(
             "could not prepare replacement discovery link `{}`: {error}",
             link.display()
         )));
     }
-    #[cfg(windows)]
-    remove_discovery_obstruction(&link).map_err(|error| {
-        let _ = fs::remove_dir(&temporary);
-        TerminalFailure::unsafe_failure(format!(
-            "could not remove the replaced discovery path `{}`: {error}",
-            link.display()
-        ))
-    })?;
     let result = publish_prepared_discovery_link(&temporary, &link);
     if let Err(error) = result {
         remove_temporary_discovery_link(&temporary);
@@ -504,7 +508,7 @@ fn replace_discovery_link(target_root: &Path) -> Result<bool, TerminalFailure> {
             link.display()
         )));
     }
-    Ok(true)
+    Ok(DiscoveryLinkAction::Replaced)
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -513,8 +517,8 @@ fn install_discovery_link(_target_root: &Path) -> Result<bool, TerminalFailure> 
 }
 
 #[cfg(not(any(unix, windows)))]
-fn replace_discovery_link(_target_root: &Path) -> Result<bool, TerminalFailure> {
-    Ok(false)
+fn replace_discovery_link(_target_root: &Path) -> Result<DiscoveryLinkAction, TerminalFailure> {
+    Ok(DiscoveryLinkAction::Unsupported)
 }
 
 #[cfg(unix)]
@@ -524,7 +528,15 @@ fn create_directory_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
 
 #[cfg(windows)]
 fn create_directory_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
-    std::os::windows::fs::symlink_dir(target, link)
+    std::os::windows::fs::symlink_dir(target, link)?;
+    match fs::read_link(link) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "the platform reported link creation without creating the discovery path",
+        )),
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(any(unix, windows))]
@@ -572,5 +584,24 @@ fn publish_prepared_discovery_link(temporary: &Path, link: &Path) -> std::io::Re
 
 #[cfg(windows)]
 fn publish_prepared_discovery_link(temporary: &Path, link: &Path) -> std::io::Result<()> {
-    fs::rename(temporary, link)
+    fs::remove_dir(temporary)
+        .or_else(|_| fs::remove_file(temporary))
+        .map_err(|error| {
+            std::io::Error::new(
+                error.kind(),
+                format!("could not remove prepared link: {error}"),
+            )
+        })?;
+    remove_discovery_obstruction(link).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!("could not remove existing discovery path: {error}"),
+        )
+    })?;
+    create_directory_symlink(Path::new(DISCOVERY_TARGET), link).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!("could not create replacement link: {error}"),
+        )
+    })
 }

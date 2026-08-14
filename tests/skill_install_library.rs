@@ -385,12 +385,57 @@ fn non_force_unreplaceable_refusal_names_an_effective_resolution() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn unsupported_link_replacement_reports_the_removed_obstruction() {
+    let fixture = TempRoot::new("skill-install-unsupported-link-replacement");
+    let probe_target = fixture.join("probe-target");
+    let probe_link = fixture.join("probe-link");
+    fs::create_dir(&probe_target).expect("the capability probe target should be creatable");
+    match std::os::unix::fs::symlink(&probe_target, &probe_link) {
+        Ok(()) => {
+            fs::remove_file(&probe_link).expect("the capability probe link should be removable");
+            return;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::Unsupported => {}
+        Err(error) => panic!("the capability probe failed unexpectedly: {error}"),
+    }
+
+    let repository = support::git_repository(&fixture, "target");
+    install_skills(&repository, false)
+        .expect("real skill files should install when links are unsupported");
+    let link = repository.join(DISCOVERY_LINK);
+    fs::write(&link, b"obsolete discovery obstruction\n")
+        .expect("the unsupported discovery path should be obstructable");
+
+    let outcome = install_skills(&repository, true)
+        .expect("force should remove the owned obstruction without requiring a link");
+
+    assert_eq!(
+        outcome.to_string(),
+        format!(
+            "installed reuse-evidence skill packages\nremoved discovery paths:\n- {DISCOVERY_LINK}\ndiscovery links not created: symbolic links are not supported on this platform\n- {DISCOVERY_LINK}\n"
+        )
+    );
+    assert!(
+        fs::symlink_metadata(&link).is_err(),
+        "the reported discovery obstruction should be absent"
+    );
+    let rerun = install_skills(&repository, false)
+        .expect("the forced result should be an ordinary unchanged installation");
+    assert!(
+        rerun.to_string().contains("nothing needed writing"),
+        "{rerun}"
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn a_symlink_capable_windows_target_receives_the_relative_discovery_link() {
-    let fixture = TempRoot::new("skill-install-windows-link-capability");
+    let fixture = windows_temp_root("skill-install-windows-link-capability");
     let repository = support::git_repository(&fixture, "target");
     let links_supported = windows_supports_directory_links(&fixture);
+    write_matching_shipped_files(&repository);
 
     let outcome = install_skills(&repository, false)
         .expect("a Windows installation should succeed with or without link capability");
@@ -426,9 +471,10 @@ fn a_symlink_capable_windows_target_receives_the_relative_discovery_link() {
 #[cfg(windows)]
 #[test]
 fn windows_inspects_and_reports_a_non_link_at_the_discovery_path() {
-    let fixture = TempRoot::new("skill-install-windows-link-obstruction");
+    let fixture = windows_temp_root("skill-install-windows-link-obstruction");
     let repository = support::git_repository(&fixture, "target");
     let links_supported = windows_supports_directory_links(&fixture);
+    write_matching_shipped_files(&repository);
     install_skills(&repository, false).expect("the fixture should install once");
     let link = repository.join(DISCOVERY_LINK);
     if link.exists() {
@@ -474,6 +520,35 @@ fn windows_inspects_and_reports_a_non_link_at_the_discovery_path() {
         rerun.to_string().contains("nothing needed writing"),
         "{rerun}"
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_error_4390_regular_file_is_a_replaceable_conflict() {
+    let fixture = windows_temp_root("skill-install-windows-error-4390");
+    let repository = support::git_repository(&fixture, "target");
+    write_matching_shipped_files(&repository);
+    install_skills(&repository, false).expect("the fixture should install once");
+    let link = repository.join(DISCOVERY_LINK);
+    if link.exists() {
+        fs::remove_dir(&link).expect("the discovery link should be removable");
+    }
+    fs::write(&link, b"not a reparse point\n")
+        .expect("a regular file should be able to occupy the discovery path");
+
+    let Err(failure) = install_skills(&repository, false) else {
+        panic!("a Windows regular-file obstruction must be a replaceable conflict");
+    };
+
+    assert_eq!(failure.meaning(), ExitMeaning::Refusal, "{failure}");
+    assert_eq!(
+        failure.to_string(),
+        format!(
+            "refusal: installed reuse-evidence skill paths differ from the package this binary ships:\n- {DISCOVERY_LINK}\nresolution: rerun with `install-skills --root <ROOT> --force` to replace every differing path"
+        )
+    );
+    install_skills(&repository, true)
+        .expect("force should handle the regular-file obstruction after classifying it");
 }
 
 fn assert_unchanged_install_is_a_no_op(case: &str, repository: &Path) {
@@ -603,8 +678,14 @@ fn windows_supports_directory_links(fixture: &Path) -> bool {
     fs::create_dir(&target).expect("the Windows link probe target should be creatable");
     match std::os::windows::fs::symlink_dir(&target, &link) {
         Ok(()) => {
-            fs::remove_dir(&link).expect("the Windows probe link should be removable");
-            true
+            if fs::read_link(&link).is_ok() {
+                fs::remove_dir(&link)
+                    .or_else(|_| fs::remove_file(&link))
+                    .expect("the Windows probe link should be removable");
+                true
+            } else {
+                false
+            }
         }
         Err(error)
             if error.kind() == std::io::ErrorKind::Unsupported
@@ -613,5 +694,21 @@ fn windows_supports_directory_links(fixture: &Path) -> bool {
             false
         }
         Err(error) => panic!("the Windows link probe failed unexpectedly: {error}"),
+    }
+}
+
+#[cfg(windows)]
+fn windows_temp_root(name: &str) -> TempRoot {
+    let current = std::env::current_dir().expect("the Windows test cwd should be readable");
+    TempRoot::beneath(&current, name)
+}
+
+#[cfg(windows)]
+fn write_matching_shipped_files(repository: &Path) {
+    for (relative, bytes) in SHIPPED_FILES {
+        let path = repository.join(relative);
+        fs::create_dir_all(path.parent().expect("a shipped file should have a parent"))
+            .expect("the shipped file parent should be creatable");
+        fs::write(path, bytes).expect("the shipped fixture bytes should be writable");
     }
 }
