@@ -551,6 +551,33 @@ fn windows_error_4390_regular_file_is_a_replaceable_conflict() {
         .expect("force should handle the regular-file obstruction after classifying it");
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_git_symlink_placeholder_is_a_self_install_no_op() {
+    let fixture = windows_temp_root("skill-install-windows-git-placeholder");
+    let repository = support::git_repository(&fixture, "target");
+    write_matching_shipped_files(&repository);
+    let placeholder = repository.join(DISCOVERY_LINK);
+    fs::create_dir_all(
+        placeholder
+            .parent()
+            .expect("the discovery placeholder should have a parent"),
+    )
+    .expect("the discovery parent should be creatable");
+    fs::write(&placeholder, DISCOVERY_TARGET.as_bytes())
+        .expect("the Git symlink placeholder should be writable");
+    let before = support::snapshot(&repository);
+
+    let outcome = install_skills(&repository, false)
+        .expect("an exact Git symlink placeholder should preserve self-install as a no-op");
+
+    assert_eq!(
+        outcome.to_string(),
+        "reuse-evidence skill packages already installed\nnothing needed writing\n"
+    );
+    assert_eq!(support::snapshot(&repository), before);
+}
+
 fn assert_unchanged_install_is_a_no_op(case: &str, repository: &Path) {
     let before = support::snapshot(repository);
     #[cfg(unix)]

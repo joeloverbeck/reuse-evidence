@@ -422,7 +422,16 @@ fn compare_discovery_link(target_root: &Path) -> Result<InstalledState, Terminal
         Ok(_) => Ok(InstalledState::Differing),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(InstalledState::Missing),
         Err(error) if read_link_reported_non_link(&error) => match fs::symlink_metadata(&link) {
-            Ok(metadata) if metadata.is_file() => Ok(InstalledState::Differing),
+            Ok(metadata) if metadata.is_file() => {
+                #[cfg(unix)]
+                {
+                    Ok(InstalledState::Differing)
+                }
+                #[cfg(windows)]
+                {
+                    compare_discovery_regular_file(&link)
+                }
+            }
             Ok(_) => Ok(InstalledState::Unreplaceable),
             Err(metadata_error) => Err(TerminalFailure::refusal(
                 format!(
@@ -440,6 +449,24 @@ fn compare_discovery_link(target_root: &Path) -> Result<InstalledState, Terminal
             "make the discovery-link path readable, then rerun `install-skills --root <ROOT>`",
         )),
     }
+}
+
+#[cfg(windows)]
+fn compare_discovery_regular_file(link: &Path) -> Result<InstalledState, TerminalFailure> {
+    let bytes = fs::read(link).map_err(|error| {
+        TerminalFailure::refusal(
+            format!(
+                "discovery-link placeholder `{}` cannot be read: {error}",
+                link.display()
+            ),
+            "make the discovery-link path readable, then rerun `install-skills --root <ROOT>`",
+        )
+    })?;
+    Ok(if bytes == DISCOVERY_TARGET.as_bytes() {
+        InstalledState::Matching
+    } else {
+        InstalledState::Differing
+    })
 }
 
 #[cfg(any(unix, windows))]
