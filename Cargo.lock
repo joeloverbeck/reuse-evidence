@@ -436,9 +436,9 @@ dependencies = [
 
 [[package]]
 name = "skill-evidence"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "115faac6104df5283d0fd03c12f9e539aedb12d09de3763e30dd4ca106f389ac"
+checksum = "ccd852eb682eba57adb1c4d29ee3678f7155025b485e8bb191b9bbb58d32b200"
 dependencies = [
  "clap",
  "regex",

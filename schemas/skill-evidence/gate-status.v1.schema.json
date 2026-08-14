@@ -97,7 +97,8 @@
     },
     "trigger_event_ids": {
       "type": "array",
-      "items": { "type": "string", "minLength": 1 }
+      "items": { "type": "string", "minLength": 1 },
+      "description": "The open event IDs in the candidate cluster that the current authorization reason says a review would cover if claimed as of this derivation. A review_started event freezes this list at claim time."
     },
     "threshold_session_id": {
       "type": ["string", "null"]
