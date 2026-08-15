@@ -147,6 +147,13 @@ pub fn enrollment_marker(repository: &Path, repository_id: &str, visibility: &st
 /// Captures every regular file beneath `root` as a sorted relative path and
 /// byte value, so write-free behavior can be asserted through the filesystem
 /// boundary without depending on traversal order.
+///
+/// A Cargo build directory sitting directly at `root` is the one exclusion. A
+/// case that snapshots this repository would otherwise assert byte-equality
+/// over output `cargo` itself writes while the test runs, which states nothing
+/// about the code under test and costs gigabytes of reads twice over on a warm
+/// checkout. The exclusion is anchored to `root`, so a fixture repository named
+/// `target` is still captured whole.
 pub fn snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     fn collect(root: &Path, directory: &Path, files: &mut Vec<(PathBuf, Vec<u8>)>) {
         let mut entries = fs::read_dir(directory)
@@ -160,6 +167,9 @@ pub fn snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
                 .file_type()
                 .expect("snapshot entry type should be readable");
             if file_type.is_dir() {
+                if directory == root && entry.file_name() == "target" {
+                    continue;
+                }
                 collect(root, &path, files);
             } else if file_type.is_file() {
                 files.push((

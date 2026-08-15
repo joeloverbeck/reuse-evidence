@@ -1058,3 +1058,443 @@ fn validate_event_sequences(event_paths: &[PathBuf], case_id: Uuid) -> Result<()
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::case::event::Envelope;
+    use crate::case::{
+        AffectedConsumer, ConditionResult, ConsumerResult, DecisionAction, EvidenceKind,
+        EvidenceReference, IdentityVerdict, RejectedAlternative, VerificationContent,
+        VerificationResult,
+    };
+
+    const CASE_ID: &str = "33333333-3333-4333-8333-333333333333";
+    const EVENT_ID: &str = "44444444-4444-4444-8444-444444444444";
+    const FIRST_PARTICIPANT_ID: &str = "11111111-1111-4111-8111-111111111111";
+    const SECOND_PARTICIPANT_ID: &str = "22222222-2222-4222-8222-222222222222";
+    const THIRD_PARTICIPANT_ID: &str = "55555555-5555-4555-8555-555555555555";
+
+    /// Where a case's recorded events sit.
+    ///
+    /// `validate_body_sequence` is the only validator below that prints a path, and none of them
+    /// interpret the directory, so one fixture location serves every event file here.
+    const EVENT_DIRECTORY: &str = "cases/33333333-3333-4333-8333-333333333333";
+
+    /// The one verification condition the fixture decision accepts.
+    const ACCEPTED_CONDITION: &str = "neither consumer gains a dependency";
+    /// The one consumer the fixture decision names as affected.
+    const AFFECTED_CONSUMER: &str = "billing totals";
+
+    fn uuid(value: &str) -> Uuid {
+        Uuid::parse_str(value).expect("the fixture identity is a valid UUID")
+    }
+
+    fn case_id() -> Uuid {
+        uuid(CASE_ID)
+    }
+
+    fn event_path(file_name: &str) -> PathBuf {
+        Path::new(EVENT_DIRECTORY).join(file_name)
+    }
+
+    /// A recorded envelope whose sequence is the only field these validators read.
+    fn envelope(sequence: i64, event_type: EventType) -> Envelope {
+        Envelope {
+            schema_version: CASE_SCHEMA_VERSION,
+            sequence,
+            event_id: uuid(EVENT_ID),
+            event_type,
+            recorded_at: "2026-08-15T06:00:00Z".to_owned(),
+        }
+    }
+
+    fn occurrence(repository_id: &str, consumer: &str) -> Occurrence {
+        Occurrence {
+            repository_id: uuid(repository_id),
+            consumer: consumer.to_owned(),
+            independence: "arose from a separate consumer need".to_owned(),
+            evidence: vec![EvidenceReference {
+                kind: EvidenceKind::Commit,
+                reference: "abc123".to_owned(),
+                path: Some("src/lib.rs".to_owned()),
+            }],
+        }
+    }
+
+    /// An accepted decision recording one verification condition and one affected consumer.
+    ///
+    /// Both prefix validators close by calling the recorded-event validators in `case`, so a
+    /// decision supplied to one has to agree with the verification and the occurrences it is
+    /// checked against. This is the no-change shape, which records no implementation-authorizing
+    /// field.
+    fn decision(sequence: i64) -> ReuseDecisionAcceptedEvent {
+        ReuseDecisionAcceptedEvent {
+            envelope: envelope(sequence, EventType::ReuseDecisionAccepted),
+            content: DecisionContent {
+                identity_verdict: IdentityVerdict::DifferentResponsibilities,
+                action: DecisionAction::RetainIntentionalDuplication,
+                accepted_scope: "no shared surface".to_owned(),
+                non_responsibilities: vec!["rounding policy".to_owned()],
+                affected_consumers: vec![AffectedConsumer {
+                    repository_id: uuid(FIRST_PARTICIPANT_ID),
+                    consumer: AFFECTED_CONSUMER.to_owned(),
+                    expectation: "stays as it is".to_owned(),
+                }],
+                alternatives_rejected: vec![RejectedAlternative {
+                    alternative: "extract locally".to_owned(),
+                    reason: "the two totals change for different reasons".to_owned(),
+                }],
+                compatibility_consequences: "nothing changes".to_owned(),
+                verification_conditions: vec![ACCEPTED_CONDITION.to_owned()],
+                invariant_contract: None,
+                existing_packages_considered: None,
+                required_consumer_level_tests: None,
+                migration_expectations: None,
+                rollback_or_resplitting_path: None,
+            },
+        }
+    }
+
+    /// A verification answering exactly the condition and consumer the fixture decision records.
+    fn verification(
+        sequence: i64,
+        disposition: VerificationDisposition,
+    ) -> VerificationRecordedEvent {
+        VerificationRecordedEvent {
+            envelope: envelope(sequence, EventType::VerificationRecorded),
+            content: VerificationContent {
+                disposition,
+                condition_results: vec![ConditionResult {
+                    condition: ACCEPTED_CONDITION.to_owned(),
+                    outcome: VerificationResult::Met,
+                    exception: None,
+                    evidence: Vec::new(),
+                }],
+                consumer_results: vec![ConsumerResult {
+                    repository_id: uuid(FIRST_PARTICIPANT_ID),
+                    consumer: AFFECTED_CONSUMER.to_owned(),
+                    outcome: VerificationResult::Met,
+                    exception: None,
+                    evidence: Vec::new(),
+                }],
+            },
+        }
+    }
+
+    fn early_review(sequence: i64) -> EarlyReviewAuthorizedEvent {
+        EarlyReviewAuthorizedEvent {
+            envelope: envelope(sequence, EventType::EarlyReviewAuthorized),
+            reason: "divergence is already costing release time".to_owned(),
+            review_appetite: "one afternoon".to_owned(),
+            evidence: Vec::new(),
+        }
+    }
+
+    /// Renders a refused replay the way a command's terminal output does.
+    ///
+    /// `CONSUMER-CONTRACT.md` §1 versions the terminal text and ADR 0016 places refusal prose in
+    /// process, so every expectation below is a literal transcribed from that text rather than a
+    /// substring of it.
+    fn refusal(result: Result<(), TerminalFailure>) -> String {
+        result
+            .expect_err("the validator must refuse this recorded stream")
+            .to_string()
+    }
+
+    #[test]
+    fn a_contiguous_event_sequence_set_is_accepted() {
+        let paths = [
+            event_path("0001-case-opened.toml"),
+            event_path("0002-occurrence-appended.toml"),
+            event_path("0003-reuse-decision-accepted.toml"),
+        ];
+
+        assert!(validate_event_sequences(&paths, case_id()).is_ok());
+    }
+
+    /// The paths arrive sorted, which is the order the refusal names the colliding files in.
+    #[test]
+    fn two_event_files_sharing_a_sequence_number_are_refused() {
+        let paths = [
+            event_path("0001-case-opened.toml"),
+            event_path("0002-early-review-authorized.toml"),
+            event_path("0002-occurrence-appended.toml"),
+        ];
+
+        assert_eq!(
+            refusal(validate_event_sequences(&paths, case_id())),
+            format!(
+                "refusal: case `{CASE_ID}` has duplicated sequence number 2 in files `0002-early-review-authorized.toml`, `0002-occurrence-appended.toml`\nresolution: restore exactly one event file for sequence 2 before reading the case"
+            )
+        );
+    }
+
+    #[test]
+    fn a_gap_in_the_event_sequence_is_refused() {
+        let paths = [
+            event_path("0001-case-opened.toml"),
+            event_path("0003-reuse-decision-accepted.toml"),
+        ];
+
+        assert_eq!(
+            refusal(validate_event_sequences(&paths, case_id())),
+            format!(
+                "refusal: case `{CASE_ID}` is missing sequence number 2 before recorded sequence 3\nresolution: restore event file sequence 2 so the case stream is contiguous before reading it"
+            )
+        );
+    }
+
+    #[test]
+    fn an_event_file_outside_the_accepted_grammar_is_refused() {
+        let paths = [
+            event_path("0001-case-opened.toml"),
+            event_path("notes.toml"),
+        ];
+
+        assert_eq!(
+            refusal(validate_event_sequences(&paths, case_id())),
+            format!(
+                "refusal: case `{CASE_ID}` contains unrecognized event file `notes.toml`\nresolution: restore event filenames in `NNNN-<event-type>.toml` form before reading the case"
+            )
+        );
+    }
+
+    #[test]
+    fn a_file_name_naming_its_recorded_event_type_is_accepted() {
+        assert!(
+            validate_file_event_type(
+                case_id(),
+                "0002-occurrence-appended.toml",
+                2,
+                EventType::OccurrenceAppended,
+            )
+            .is_ok()
+        );
+    }
+
+    /// ADR 0011 made the body spelling and the file-name slug one declaration; this is the
+    /// refusal that holds a recorded pair to it.
+    #[test]
+    fn a_file_name_disagreeing_with_its_recorded_event_type_is_refused() {
+        assert_eq!(
+            refusal(validate_file_event_type(
+                case_id(),
+                "0002-occurrence-appended.toml",
+                2,
+                EventType::EarlyReviewAuthorized,
+            )),
+            format!(
+                "refusal: case `{CASE_ID}` event file `0002-occurrence-appended.toml` does not match its recorded type `early_review_authorized`\nresolution: restore the event as `0002-early-review-authorized.toml` before reading the case"
+            )
+        );
+    }
+
+    #[test]
+    fn a_body_sequence_matching_its_file_name_is_accepted() {
+        assert!(validate_body_sequence(&event_path("0002-occurrence-appended.toml"), 2, 2).is_ok());
+    }
+
+    #[test]
+    fn a_body_sequence_disagreeing_with_its_file_name_is_refused() {
+        let path = event_path("0002-occurrence-appended.toml");
+
+        assert_eq!(
+            refusal(validate_body_sequence(&path, 3, 2)),
+            format!(
+                "refusal: case event `{}` records sequence 3 but its filename records sequence 2\nresolution: restore the event under the filename matching its recorded sequence before reading the case",
+                path.display()
+            )
+        );
+    }
+
+    #[test]
+    fn a_case_recording_no_verification_permits_a_later_event() {
+        assert!(validate_not_extended_after_closure(case_id(), &[]).is_ok());
+    }
+
+    /// `CONTEXT.md` makes closed terminal in version 0.1, so nothing may follow it.
+    #[test]
+    fn an_event_after_a_closed_verification_is_refused() {
+        let verifications = [verification(4, VerificationDisposition::Closed)];
+
+        assert_eq!(
+            refusal(validate_not_extended_after_closure(
+                case_id(),
+                &verifications
+            )),
+            format!(
+                "refusal: case `{CASE_ID}` records an event after its closed verification at sequence 4\nresolution: remove every event after the closed verification; closed is terminal in version 0.1"
+            )
+        );
+    }
+
+    /// Parked and reopened both stand against the same decision, so both permit a later event.
+    #[test]
+    fn an_event_after_a_parked_or_reopened_verification_is_accepted() {
+        for disposition in [
+            VerificationDisposition::Parked,
+            VerificationDisposition::Reopened,
+        ] {
+            let verifications = [verification(4, disposition)];
+
+            assert!(
+                validate_not_extended_after_closure(case_id(), &verifications).is_ok(),
+                "a {} verification must permit a later event",
+                disposition.label()
+            );
+        }
+    }
+
+    /// ADR 0019 records verification against a standing decision, so a stream that verifies
+    /// before one is refused.
+    #[test]
+    fn a_verification_before_an_accepted_decision_is_refused() {
+        let recorded = verification(3, VerificationDisposition::Closed);
+
+        assert_eq!(
+            refusal(validate_verification_prefix(
+                case_id(),
+                None,
+                &[],
+                &recorded
+            )),
+            format!(
+                "refusal: case `{CASE_ID}` records verification at sequence 3 before an accepted reuse decision\nresolution: restore an earlier accepted reuse decision before the verification event"
+            )
+        );
+    }
+
+    #[test]
+    fn the_first_verification_after_an_accepted_decision_is_accepted() {
+        let accepted = decision(3);
+        let recorded = verification(4, VerificationDisposition::Closed);
+
+        assert!(validate_verification_prefix(case_id(), Some(&accepted), &[], &recorded).is_ok());
+    }
+
+    #[test]
+    fn a_verification_after_a_closed_verification_is_refused() {
+        let accepted = decision(3);
+        let prior = [verification(4, VerificationDisposition::Closed)];
+        let recorded = verification(5, VerificationDisposition::Reopened);
+
+        assert_eq!(
+            refusal(validate_verification_prefix(
+                case_id(),
+                Some(&accepted),
+                &prior,
+                &recorded
+            )),
+            format!(
+                "refusal: case `{CASE_ID}` records verification at sequence 5 after a terminal disposition\nresolution: restore the event stream so only parked or reopened cases are verified again"
+            )
+        );
+    }
+
+    #[test]
+    fn a_verification_after_a_parked_or_reopened_verification_is_accepted() {
+        let accepted = decision(3);
+        for disposition in [
+            VerificationDisposition::Parked,
+            VerificationDisposition::Reopened,
+        ] {
+            let prior = [verification(4, disposition)];
+            let recorded = verification(5, VerificationDisposition::Closed);
+
+            assert!(
+                validate_verification_prefix(case_id(), Some(&accepted), &prior, &recorded).is_ok(),
+                "a {} verification must permit verifying again",
+                disposition.label()
+            );
+        }
+    }
+
+    /// `FOUNDATIONS.md` §6 makes the third occurrence the ordinary review threshold, and a
+    /// recorded decision is held to the same prefix a live one is.
+    #[test]
+    fn a_decision_below_the_third_occurrence_is_refused() {
+        let occurrences = [
+            occurrence(FIRST_PARTICIPANT_ID, AFFECTED_CONSUMER),
+            occurrence(SECOND_PARTICIPANT_ID, "invoice totals"),
+        ];
+        let accepted = decision(3);
+
+        assert_eq!(
+            refusal(validate_decision_prefix(
+                case_id(),
+                &occurrences,
+                None,
+                &accepted
+            )),
+            format!(
+                "refusal: case `{CASE_ID}` records a decision at sequence 3 whose event prefix is not review-ready\nresolution: restore a third earlier occurrence or an earlier human-authorized review override before the accepted decision"
+            )
+        );
+    }
+
+    #[test]
+    fn a_decision_after_a_third_occurrence_is_accepted() {
+        let occurrences = [
+            occurrence(FIRST_PARTICIPANT_ID, AFFECTED_CONSUMER),
+            occurrence(SECOND_PARTICIPANT_ID, "invoice totals"),
+            occurrence(THIRD_PARTICIPANT_ID, "statement totals"),
+        ];
+        let accepted = decision(4);
+
+        assert!(validate_decision_prefix(case_id(), &occurrences, None, &accepted).is_ok());
+    }
+
+    /// The override authorizes review after the second occurrence, which is the other prefix a
+    /// recorded decision may stand on.
+    #[test]
+    fn a_decision_under_an_earlier_review_override_is_accepted() {
+        let occurrences = [
+            occurrence(FIRST_PARTICIPANT_ID, AFFECTED_CONSUMER),
+            occurrence(SECOND_PARTICIPANT_ID, "invoice totals"),
+        ];
+        let authorized = early_review(3);
+        let accepted = decision(4);
+
+        assert!(
+            validate_decision_prefix(case_id(), &occurrences, Some(&authorized), &accepted).is_ok()
+        );
+    }
+
+    #[test]
+    fn distinct_participant_and_consumer_pairs_are_accepted() {
+        let occurrences = [
+            occurrence(FIRST_PARTICIPANT_ID, AFFECTED_CONSUMER),
+            occurrence(SECOND_PARTICIPANT_ID, "invoice totals"),
+        ];
+
+        assert!(validate_unique_occurrences(case_id(), &occurrences).is_ok());
+    }
+
+    /// `FOUNDATIONS.md` §5 counts consumer needs rather than repositories, so one participant
+    /// may record two distinct consumers.
+    #[test]
+    fn one_participant_may_record_two_distinct_consumers() {
+        let occurrences = [
+            occurrence(FIRST_PARTICIPANT_ID, AFFECTED_CONSUMER),
+            occurrence(FIRST_PARTICIPANT_ID, "invoice totals"),
+        ];
+
+        assert!(validate_unique_occurrences(case_id(), &occurrences).is_ok());
+    }
+
+    #[test]
+    fn a_repeated_participant_and_consumer_pair_is_refused() {
+        let occurrences = [
+            occurrence(FIRST_PARTICIPANT_ID, AFFECTED_CONSUMER),
+            occurrence(FIRST_PARTICIPANT_ID, AFFECTED_CONSUMER),
+        ];
+
+        assert_eq!(
+            refusal(validate_unique_occurrences(case_id(), &occurrences)),
+            format!(
+                "refusal: case `{CASE_ID}` records participant `{FIRST_PARTICIPANT_ID}` and consumer `{AFFECTED_CONSUMER}` more than once\nresolution: restore the authoritative event stream so each participant repository and consumer pair occurs once before reading the case"
+            )
+        );
+    }
+}

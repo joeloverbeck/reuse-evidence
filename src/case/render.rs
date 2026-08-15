@@ -522,7 +522,7 @@ mod tests {
     use crate::Visibility;
     use crate::case::event::Envelope;
     use crate::case::naming::EventType;
-    use crate::case::read::Conditions;
+    use crate::case::read::{Conditions, PortfolioCaseRecord};
     use crate::case::{
         AffectedConsumer, CASE_SCHEMA_VERSION, ConditionResult, ConsumerResult, DecisionAction,
         EarlyReviewAuthorizedEvent, EvidenceKind, EvidenceReference, ExistingPackageConsidered,
@@ -1266,6 +1266,155 @@ mod tests {
                 "- neither consumer gains a dependency\n",
             ),
             "a decision authorizing no implementation prints no consumers, packages, or migration order"
+        );
+    }
+
+    fn found(state: PortfolioCaseState) -> PortfolioCaseRecord {
+        PortfolioCaseRecord {
+            steward_repository_id: uuid(FIRST_PARTICIPANT_ID),
+            steward_path: PathBuf::from("/portfolio/billing"),
+            case_id: uuid(CASE_ID),
+            state,
+        }
+    }
+
+    fn recorded(case: CaseRecord, privacy: ReportedPrivacy) -> PortfolioCaseState {
+        PortfolioCaseState::Recorded {
+            case: Box::new(case),
+            privacy,
+        }
+    }
+
+    fn find(cases: Vec<PortfolioCaseRecord>) -> String {
+        FindOutcome { cases }.to_string()
+    }
+
+    #[test]
+    fn a_portfolio_scan_finding_no_case_prints_only_its_heading() {
+        assert_eq!(
+            find(Vec::new()),
+            "portfolio cases\n",
+            "an empty scan is a heading and nothing else, not a refusal"
+        );
+    }
+
+    #[test]
+    fn a_recorded_case_reports_its_steward_beside_the_case_it_stewards() {
+        assert_eq!(
+            find(vec![found(recorded(
+                watching_case(),
+                ReportedPrivacy::Derived(Visibility::Private)
+            ))]),
+            concat!(
+                "portfolio cases\n",
+                "- case_id: 33333333-3333-4333-8333-333333333333\n",
+                "  steward_repository_id: 11111111-1111-4111-8111-111111111111\n",
+                "  steward_path: /portfolio/billing\n",
+                "  responsibility: one responsibility\n",
+                "  revision: 1\n",
+                "  state: watching\n",
+                "  privacy: private\n",
+            ),
+            "a found case names the steward that owns its event stream before the case itself"
+        );
+    }
+
+    #[test]
+    fn a_review_ready_case_nests_the_shared_readiness_lines_beneath_it() {
+        assert_eq!(
+            find(vec![found(recorded(
+                review_ready_case(),
+                ReportedPrivacy::Derived(Visibility::Private)
+            ))]),
+            concat!(
+                "portfolio cases\n",
+                "- case_id: 33333333-3333-4333-8333-333333333333\n",
+                "  steward_repository_id: 11111111-1111-4111-8111-111111111111\n",
+                "  steward_path: /portfolio/billing\n",
+                "  responsibility: one responsibility\n",
+                "  revision: 2\n",
+                "  state: review-ready\n",
+                "  readiness_basis: occurrence-count\n",
+                "  readiness: authorizes semantic review; does not authorize extraction\n",
+                "  privacy: private\n",
+            ),
+            "the readiness vocabulary is the shared one, indented to the case it belongs to"
+        );
+    }
+
+    /// `case find` reports an underivable privacy as `unknown` and stops there.
+    ///
+    /// The two footers `write_privacy_line` adds elsewhere explain a single case's missing
+    /// portfolio context. A scan already knows its roots, so both absences read the same here.
+    #[test]
+    fn an_underivable_privacy_prints_unknown_without_either_footer() {
+        for privacy in [
+            ReportedPrivacy::PortfolioUnconfigured,
+            ReportedPrivacy::ParticipantsUnresolved,
+        ] {
+            assert_eq!(
+                find(vec![found(recorded(watching_case(), privacy))]),
+                concat!(
+                    "portfolio cases\n",
+                    "- case_id: 33333333-3333-4333-8333-333333333333\n",
+                    "  steward_repository_id: 11111111-1111-4111-8111-111111111111\n",
+                    "  steward_path: /portfolio/billing\n",
+                    "  responsibility: one responsibility\n",
+                    "  revision: 1\n",
+                    "  state: watching\n",
+                    "  privacy: unknown\n",
+                ),
+                "neither underivable privacy carries its footer into a portfolio scan"
+            );
+        }
+    }
+
+    /// A damaged case stays visible so its healthy neighbours are not hidden by it.
+    #[test]
+    fn a_damaged_case_reports_every_derived_field_as_unavailable() {
+        assert_eq!(
+            find(vec![found(PortfolioCaseState::Damaged {
+                detail: "refusal: case `33333333-3333-4333-8333-333333333333` is missing sequence number 2 before recorded sequence 3\nresolution: restore event file sequence 2 so the case stream is contiguous before reading it".to_owned(),
+            })]),
+            concat!(
+                "portfolio cases\n",
+                "- case_id: 33333333-3333-4333-8333-333333333333\n",
+                "  steward_repository_id: 11111111-1111-4111-8111-111111111111\n",
+                "  steward_path: /portfolio/billing\n",
+                "  condition: damaged-recorded-event-history\n",
+                "  responsibility: unavailable\n",
+                "  revision: unavailable\n",
+                "  state: unavailable\n",
+                "  privacy: unknown\n",
+                "  detail:\n",
+                "    refusal: case `33333333-3333-4333-8333-333333333333` is missing sequence number 2 before recorded sequence 3\n",
+                "    resolution: restore event file sequence 2 so the case stream is contiguous before reading it\n",
+            ),
+            "a damaged case keeps its identity and steward, and every line of its detail is indented"
+        );
+    }
+
+    #[test]
+    fn every_found_case_is_reported_under_one_heading() {
+        let rendered = find(vec![
+            found(recorded(
+                watching_case(),
+                ReportedPrivacy::Derived(Visibility::Private),
+            )),
+            found(PortfolioCaseState::Damaged {
+                detail: "refusal: unreadable".to_owned(),
+            }),
+        ]);
+
+        assert_eq!(
+            rendered.matches("portfolio cases\n").count(),
+            1,
+            "the heading is printed once for the scan, not once per case: {rendered}"
+        );
+        assert_eq!(
+            rendered.matches("- case_id: ").count(),
+            2,
+            "a damaged case does not displace a healthy one: {rendered}"
         );
     }
 }

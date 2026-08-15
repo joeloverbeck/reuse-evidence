@@ -36,6 +36,7 @@ Only the human decision owner can accept, supersede, or reject an ADR. Merge, im
 | [0019](0019-one-event-records-verification-and-its-disposition.md) | One `verification_recorded` event records the verification evidence and its disposition in orthogonal fields; no separate close, park, or reopen event type exists. A parked or reopened case re-verifies against the standing decision. |
 | [0020](0020-what-the-capture-skill-may-not-own.md) | The command owns a capture mechanic whose silent failure would corrupt an authoritative record or lose a recorded human decision; the skill owns what the command cannot verify. Cross-portfolio case lookup and prepared-proposal path resolution are compiled; the fixed no-candidate terminal statement is not, because ADR 0017's owner covers how a case prints and a clean capture has none. |
 | [0021](0021-what-the-project-owned-installer-ships-and-may-not-borrow.md) | The project-owned skill installer is this crate's own code under a command outside the mounted `skills` tree, and it ships one copy of each package embedded straight from `.claude/skills/`, with no `assets/` mirror. The published crate carries a narrow named file set. |
+| [0022](0022-one-owner-for-recorded-case-history-replay.md) | Recorded-history replay takes one owner, `case::replay`, reached one way by the query path and the writer path. It performs no filesystem access: the event reader is injected, which preserves the current refusal ordering that eagerly loading the stream would change. |
 
 ## Adding or changing an ADR
 
