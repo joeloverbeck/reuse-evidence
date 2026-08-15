@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-15T09:30:59.726001323Z",
+  "generated_at": "2026-08-15T10:45:12.520437991Z",
   "target_content_hash": "58ee690ec479d13e9ff51567f4e57087f319ac7a1aca6511d61c8628f5e43fa6",
-  "qualifying_uses_on_current_hash": 26,
+  "qualifying_uses_on_current_hash": 27,
   "open_incident_ids": [
     "evt_32e7534e-2a65-478e-8c2e-c4a37dc46596",
     "evt_f39866ac-2585-4708-bc3b-096e3c721ef3",
@@ -13,7 +13,10 @@
     "evt_e2bc134e-71be-43ed-b7c2-e9731fe2e82a",
     "evt_e47de04c-b874-43c0-b395-7fd20a9e0975",
     "evt_a92ecac8-9324-4ce2-afba-e4df15ac0b4c",
-    "evt_7475dc94-abd0-4086-9688-486a95c6a7bf"
+    "evt_7475dc94-abd0-4086-9688-486a95c6a7bf",
+    "evt_daa7a6d4-e69a-42ee-8efb-dfd392e9f77d",
+    "evt_83af1cd5-4512-48aa-8eca-98fa55b96c1c",
+    "evt_0a0e0364-9c9e-46cc-a9d8-6feb87c12be5"
   ],
   "candidate_clusters": [
     {
@@ -23,9 +26,10 @@
         "evt_35d21a7d-416a-48a1-b85e-4e2593327873",
         "evt_e2bc134e-71be-43ed-b7c2-e9731fe2e82a",
         "evt_e47de04c-b874-43c0-b395-7fd20a9e0975",
-        "evt_7475dc94-abd0-4086-9688-486a95c6a7bf"
+        "evt_7475dc94-abd0-4086-9688-486a95c6a7bf",
+        "evt_83af1cd5-4512-48aa-8eca-98fa55b96c1c"
       ],
-      "independent_incidents": 4,
+      "independent_incidents": 5,
       "max_severity": "material_failure"
     },
     {
@@ -33,9 +37,10 @@
       "open_event_ids": [
         "evt_f39866ac-2585-4708-bc3b-096e3c721ef3",
         "evt_f3818540-7d53-42db-8f09-0e4b2498da95",
-        "evt_34ace741-c339-406f-80bc-ac1860c96a2f"
+        "evt_34ace741-c339-406f-80bc-ac1860c96a2f",
+        "evt_0a0e0364-9c9e-46cc-a9d8-6feb87c12be5"
       ],
-      "independent_incidents": 3,
+      "independent_incidents": 4,
       "max_severity": "material_failure"
     },
     {
@@ -45,6 +50,14 @@
         "evt_a92ecac8-9324-4ce2-afba-e4df15ac0b4c"
       ],
       "independent_incidents": 2,
+      "max_severity": "friction"
+    },
+    {
+      "symptom_key": "state",
+      "open_event_ids": [
+        "evt_daa7a6d4-e69a-42ee-8efb-dfd392e9f77d"
+      ],
+      "independent_incidents": 1,
       "max_severity": "friction"
     }
   ],
@@ -56,7 +69,8 @@
     "evt_35d21a7d-416a-48a1-b85e-4e2593327873",
     "evt_e2bc134e-71be-43ed-b7c2-e9731fe2e82a",
     "evt_e47de04c-b874-43c0-b395-7fd20a9e0975",
-    "evt_7475dc94-abd0-4086-9688-486a95c6a7bf"
+    "evt_7475dc94-abd0-4086-9688-486a95c6a7bf",
+    "evt_83af1cd5-4512-48aa-8eca-98fa55b96c1c"
   ],
   "threshold_session_id": "019febe5-2a89-76b3-ad6d-3f5d8f0e4bba",
   "not_before": null,
@@ -65,5 +79,5 @@
   "review_reentry_basis": "first_eligibility",
   "target_name": "code-review",
   "target_repo_relative_path": ".claude/skills/code-review",
-  "derivation_session_id": "01a00497-5908-7e11-85ce-82dc925769a9"
+  "derivation_session_id": "f682f67e-d93a-4ef9-a2dd-f4904867667d"
 }
