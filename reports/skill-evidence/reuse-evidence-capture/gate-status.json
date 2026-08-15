@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-13T04:41:01.435772884Z",
+  "generated_at": "2026-08-15T11:51:49.326405187Z",
   "target_content_hash": "30711836e567cf009a340626d4085d5c7dd6b64d40dfeb09e048eb6e9833b831",
-  "qualifying_uses_on_current_hash": 3,
+  "qualifying_uses_on_current_hash": 4,
   "open_incident_ids": [],
   "candidate_clusters": [],
   "state": "closed",
@@ -16,5 +16,5 @@
   "review_reentry_basis": null,
   "target_name": "reuse-evidence-capture",
   "target_repo_relative_path": ".claude/skills/reuse-evidence-capture",
-  "derivation_session_id": "6b41f4fe-3fee-4f87-acec-f1218153441a"
+  "derivation_session_id": "01a00509-fca1-78f1-b724-87eece42a978"
 }
