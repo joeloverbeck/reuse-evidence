@@ -5,6 +5,16 @@
 **Decision owner:** Repository maintainer  
 **Governing principles:** [`FOUNDATIONS.md`](../principles/FOUNDATIONS.md), [`PORTFOLIO-PRIVACY-AND-STEWARDSHIP.md`](../principles/PORTFOLIO-PRIVACY-AND-STEWARDSHIP.md), [`CONSUMER-CONTRACT.md`](../principles/CONSUMER-CONTRACT.md)
 
+## Amendment
+
+On 2026-08-15, issue #38 reported that the falsification clause below had fired, counting 42 `PortfolioLocation` positions against the 19 predicted. Re-measurement established that the reported count matched the `::` path separator in constructor expressions as well as in declarations: 11 of the 18 `src/main.rs` hits are `PortfolioLocation::from_environment` calls at the edge this decision authorizes, not threaded parameters.
+
+Declaration sites are 31 crate-wide. In the three files this decision counted they are 24 — `src/portfolio.rs` ×7, `src/case.rs` ×12, `src/case/read.rs` ×5 — against a predicted 19. The remaining 7 are in `src/main.rs`, which this decision did not count because it is the edge that constructs the value. Five of those belong to commands that already threaded a roots value when this decision was taken: `run_open`, `run_decide`, and `run_portfolio` through a `&[PathBuf]` parameter those functions already carried, and `run_append` and `run_override` as later extractions of `Append` and `Override` dispatch that already passed `&root` inline in `run_case`. Only `run_verify` and `run_staging_directory` belong to commands added since, each paying the per-command cost anticipated under **Operational burden** below.
+
+The issue also reported all 17 `case/` signatures as pure conduits; 9 are. The other 8 resolve roots or read absence at the call site, which is where this decision placed that reading.
+
+The decision owner ruled the trigger has not fired. This amendment corrects a prediction's arithmetic and changes no interface, threading, refusal ordering, or runtime behavior. The counts in **Decision** and **Negative and risks** below are left as written, recording what was predicted on 2026-08-11; where they differ from the measurement above, this amendment governs.
+
 ## Context
 
 Commit `9578d70`, "Move the clock and the portfolio out of ambient state," moved the clock and did not touch `src/portfolio.rs`. `RecordedInstant` is now constructed at `src/main.rs:224`, `:257`, `:309`, `:343` and carries ten unit tests in `src/case/instant.rs`. The portfolio kept reading the process environment at its point of use.
@@ -35,7 +45,7 @@ Refusal ordering is a second reason eager failure is unsafe. `case brief` refuse
 The portfolio location is resolved once at the process edge, as a value that represents its own absence.
 
 - One type owns the user-local location: the selected root overrides, the user-local configuration file path, and the user-local state file path. The two file paths are optional. Resolving the location performs **environment reads only** — no filesystem I/O, no validation, and no refusal.
-- The type replaces `root_overrides: &[PathBuf]` at the 19 declaration sites that already carry it — `src/portfolio.rs` ×4, `src/case.rs` ×11, `src/case/read.rs` ×4 — including the eight public entry points `case::open`, `case::append`, `case::authorize_early_review`, `case::decide`, `case::list`, `case::show`, `case::brief`, and `portfolio::report`. No signature gains a second parameter.
+- The type replaces `root_overrides: &[PathBuf]` at the 19 declaration sites that already carry it — `src/portfolio.rs` ×4, `src/case.rs` ×11, `src/case/read.rs` ×4 — including the eight public entry points `case::open`, `case::append`, `case::authorize_early_review`, `case::decide`, `case::list`, `case::show`, `case::brief`, and `portfolio::report`. No signature gains a second parameter. Amended 2026-08-15: those 19 were exact at decision time; the implemented count is 24 in these three files and 31 crate-wide. See **Amendment** above.
 - The type is `pub`, constructed from the environment for the binary and constructed directly from explicit paths for tests and library consumers.
 - Platform precedence is written once behind the six `#[cfg]` variants it replaces, and is unit-tested.
 - **Every consumer keeps today's interpretation of absence at today's call site.** `selected_roots` still refuses with the same text; `selected_roots_if_configured` still returns `Ok(None)`; `report` still refuses on an undeterminable state directory at `src/portfolio.rs:108`. Exit codes, refusal text, and refusal ordering are unchanged.
@@ -64,7 +74,7 @@ This authorizes one resolved location value and one platform-precedence owner. I
 
 ### Negative and risks
 
-- 19 declaration sites and roughly 47 mention sites change type in one mechanical, compile-checked pass. The change is wide and shallow, and a partial application does not compile.
+- 19 declaration sites and roughly 47 mention sites change type in one mechanical, compile-checked pass. The change is wide and shallow, and a partial application does not compile. Amended 2026-08-15: the implemented figures are 24 declaration sites in these three files and 31 crate-wide. See **Amendment** above.
 - The library's public signatures change. This is permitted under `CONSUMER-CONTRACT.md` §8 at `0.x` and is not permitted silently after `1.0.0`.
 - Carrying `Option<PathBuf>` moves the "which absence is fatal here?" question to each call site instead of deleting it. That question is genuinely per-command, but the type does not enforce the answer, so a future entry point can choose the wrong one. Only the two spec tests above pin it.
 - The win is availability, not conversion. Nothing here makes the 33 tests move; it makes moving them possible.
@@ -93,7 +103,7 @@ No recorded evidence, marker, configuration, or state format changes, so `CONSUM
 
 The decision is fit if, after implementation, `src/portfolio.rs` contains one platform-precedence owner with unit tests, no file outside it reads the environment, the full CLI suite passes unchanged with no edit to any expected string or exit code, and at least one test that previously required `run_without_portfolio_configuration` runs in process against `Display` output.
 
-Falsify it if preserving the `portfolio` / `case list` divergence requires the location type to grow per-command variants, which would mean the invariant is the decision rather than the value. Falsify it also if threading the type reaches significantly beyond the 19 sites that carry `root_overrides` today, which would mean the parameter was not in fact already present everywhere it is needed.
+Falsify it if preserving the `portfolio` / `case list` divergence requires the location type to grow per-command variants, which would mean the invariant is the decision rather than the value. Falsify it also if threading the type reaches significantly beyond the 19 sites that carry `root_overrides` today, which would mean the parameter was not in fact already present everywhere it is needed. Measured after implementation on 2026-08-15 and ruled not significantly beyond 19; see the amendment above for the counts.
 
 Reopen it if a second consumer needs the user-local location for something other than portfolio discovery, if a location must vary per invocation, or at `1.0.0`, when `CONSUMER-CONTRACT.md` §8 stops permitting free signature change.
 
