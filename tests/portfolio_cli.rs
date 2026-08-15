@@ -1,21 +1,14 @@
 mod support;
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use support::TempRoot;
-
-struct Fixture {
-    root: TempRoot,
-}
+use support::{Fixture, files_beneath};
 
 impl Fixture {
     fn new(name: &str) -> Self {
-        Self {
-            root: TempRoot::new(name),
-        }
+        Self::from_label(name)
     }
 
     fn repository(&self, portfolio_root: &Path, name: &str) -> PathBuf {
@@ -126,31 +119,6 @@ fn toml_contains_string(value: &toml::Value, expected: &str) -> bool {
             .any(|value| toml_contains_string(value, expected)),
         _ => false,
     }
-}
-
-fn files_beneath(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
-    fn visit(root: &Path, directory: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
-        for entry in fs::read_dir(directory).expect("fixture directory should be readable") {
-            let entry = entry.expect("fixture entry should be readable");
-            let path = entry.path();
-            if path.is_dir() {
-                visit(root, &path, files);
-            } else {
-                let relative = path
-                    .strip_prefix(root)
-                    .expect("fixture entry should be beneath its root")
-                    .to_path_buf();
-                files.insert(
-                    relative,
-                    fs::read(path).expect("fixture file should be readable"),
-                );
-            }
-        }
-    }
-
-    let mut files = BTreeMap::new();
-    visit(root, root, &mut files);
-    files
 }
 
 fn write_marker(repository: &Path, repository_id: &str, ecosystem_id: &str, visibility: &str) {

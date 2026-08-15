@@ -12,49 +12,23 @@
 mod support;
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use reuse_evidence::case::RecordedInstant;
 use reuse_evidence::portfolio::PortfolioLocation;
 use reuse_evidence::{Visibility, case, enroll, portfolio};
-use support::TempRoot;
+use support::{Fixture, files_beneath};
 
 const CASE_ID: &str = "00000000-0000-4000-8000-000000000011";
 
-struct Fixture {
-    root: TempRoot,
-}
-
 impl Fixture {
     fn new() -> Self {
-        Self {
-            root: TempRoot::new("portfolio-location"),
-        }
+        Self::from_label("portfolio-location")
     }
 
     fn repository(&self, name: &str) -> PathBuf {
-        support::git_repository(&self.root, name)
+        self.git_repository(name)
     }
-}
-
-fn files_beneath(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut pending = vec![root.to_path_buf()];
-    while let Some(directory) = pending.pop() {
-        let Ok(entries) = fs::read_dir(&directory) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                pending.push(path);
-            } else {
-                found.push(path);
-            }
-        }
-    }
-    found.sort();
-    found
 }
 
 /// Opens one case whose participants resolve under an explicit portfolio root,

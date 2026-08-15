@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use reuse_evidence::ExitMeaning;
 use reuse_evidence::case::{self, RecordedInstant};
 use reuse_evidence::portfolio::PortfolioLocation;
-use support::TempRoot;
+use support::Fixture;
 
 const CASE_ID: &str = "00000000-0000-4000-8000-000000000021";
 const STEWARD_ID: &str = "00000000-0000-4000-8000-000000000022";
@@ -23,21 +23,13 @@ const HEALTHY_CASE_ID: &str = "00000000-0000-4000-8000-000000000031";
 const HEALTHY_STEWARD_ID: &str = "00000000-0000-4000-8000-000000000032";
 const PINNED_UNIX_SECONDS: i64 = 1_760_000_000;
 
-struct Fixture {
-    root: TempRoot,
-}
-
 impl Fixture {
     fn new(name: &str) -> Self {
-        Self {
-            root: TempRoot::new(&format!("case-portfolio-library-{name}")),
-        }
+        Self::from_label(&format!("case-portfolio-library-{name}"))
     }
 
     fn repository(&self, name: &str, repository_id: &str, visibility: &str) -> PathBuf {
-        let repository = support::git_repository(&self.root, name);
-        support::enrollment_marker(&repository, repository_id, visibility);
-        repository
+        self.enrolled_repository(name, repository_id, visibility)
     }
 
     fn location(&self, state_directory: &Path) -> PortfolioLocation {

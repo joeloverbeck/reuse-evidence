@@ -25,7 +25,7 @@ use std::sync::Barrier;
 use reuse_evidence::case::{self, RecordedInstant};
 use reuse_evidence::portfolio::PortfolioLocation;
 use reuse_evidence::{ExitMeaning, TerminalFailure, Visibility, enroll};
-use support::TempRoot;
+use support::Fixture;
 
 const CASE_ID: &str = "00000000-0000-4000-8000-000000000011";
 const STEWARD_ID: &str = "00000000-0000-4000-8000-000000000012";
@@ -38,21 +38,13 @@ const FOURTH_PARTICIPANT_ID: &str = "00000000-0000-4000-8000-000000000016";
 const PINNED_UNIX_SECONDS: i64 = 1_760_000_000;
 const PINNED_RECORDED_AT: &str = "2025-10-09T08:53:20Z";
 
-struct Fixture {
-    root: TempRoot,
-}
-
 impl Fixture {
     fn new(name: &str) -> Self {
-        Self {
-            root: TempRoot::new(&format!("case-library-{name}")),
-        }
+        Self::from_label(&format!("case-library-{name}"))
     }
 
     fn repository(&self, name: &str, repository_id: &str, visibility: &str) -> PathBuf {
-        let repository = support::git_repository(&self.root, name);
-        support::enrollment_marker(&repository, repository_id, visibility);
-        repository
+        self.enrolled_repository(name, repository_id, visibility)
     }
 
     fn write(&self, name: &str, contents: &str) -> PathBuf {

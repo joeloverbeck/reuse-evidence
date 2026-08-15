@@ -1,13 +1,12 @@
 mod support;
 
-use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, SystemTime};
 
-use support::TempRoot;
+use support::{Fixture, files_beneath};
 
 const CASE_ID: &str = "00000000-0000-4000-8000-000000000011";
 const SECOND_CASE_ID: &str = "00000000-0000-4000-8000-000000000021";
@@ -17,10 +16,6 @@ const SECOND_PARTICIPANT_ID: &str = "00000000-0000-4000-8000-000000000014";
 const THIRD_PARTICIPANT_ID: &str = "00000000-0000-4000-8000-000000000015";
 const DIFFERENT_APPEND_EVENT_ID: &str = "00000000-0000-4000-8000-000000000099";
 const DIFFERENT_DECISION_EVENT_ID: &str = "00000000-0000-4000-8000-000000000098";
-
-struct Fixture {
-    root: TempRoot,
-}
 
 struct WriteProtection {
     entries: Vec<(PathBuf, fs::Permissions)>,
@@ -54,19 +49,11 @@ impl Drop for WriteProtection {
 
 impl Fixture {
     fn new(name: &str) -> Self {
-        Self {
-            root: TempRoot::new(&format!("case-{name}")),
-        }
+        Self::from_label(&format!("case-{name}"))
     }
 
     fn repository(&self, name: &str, repository_id: &str, visibility: &str) -> PathBuf {
-        let repository = self.git_repository(name);
-        support::enrollment_marker(&repository, repository_id, visibility);
-        repository
-    }
-
-    fn git_repository(&self, name: &str) -> PathBuf {
-        support::git_repository(&self.root, name)
+        self.enrolled_repository(name, repository_id, visibility)
     }
 
     fn proposal(&self, contents: &str) -> PathBuf {
@@ -280,31 +267,6 @@ fn assert_repeated_open_append_is_idempotent(
         before,
         "repeating the complete open-then-append sequence must add no case or event"
     );
-}
-
-fn files_beneath(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
-    fn visit(root: &Path, directory: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
-        for entry in fs::read_dir(directory).expect("fixture directory should be readable") {
-            let entry = entry.expect("fixture entry should be readable");
-            let path = entry.path();
-            if path.is_dir() {
-                visit(root, &path, files);
-            } else {
-                let relative = path
-                    .strip_prefix(root)
-                    .expect("fixture entry should be beneath its root")
-                    .to_path_buf();
-                files.insert(
-                    relative,
-                    fs::read(path).expect("fixture file should be readable"),
-                );
-            }
-        }
-    }
-
-    let mut files = BTreeMap::new();
-    visit(root, root, &mut files);
-    files
 }
 
 fn case_event_path_at_sequence(repository: &Path, case_id: &str, sequence: i64) -> PathBuf {

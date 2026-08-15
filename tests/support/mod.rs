@@ -1,14 +1,15 @@
 //! Fixture scaffolding shared by every test suite in this directory.
 //!
-//! Six suites each grew their own `Fixture` with the same two invariants: a uniquely named
-//! temporary root removed on drop, and a directory recognizable as a Git repository. Only that
-//! core lives here. Enrollment markers, portfolio configuration, canonicalization, and the
-//! search for a directory outside Git differ per suite by intent and stay with their suite.
+//! Every suite uses the same invariant fixture core: a uniquely named temporary root removed on
+//! drop, directories recognizable as Git repositories, and enrolled-repository markers. Only
+//! that core lives here. Portfolio configuration, canonicalization, and the search for a
+//! directory outside Git differ per suite by intent and stay with their suite.
 //!
 //! Integration tests are separate crates, so each one compiles its own copy of this module and
 //! uses only part of it.
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -87,6 +88,44 @@ impl Drop for TempRoot {
     }
 }
 
+/// The invariant fixture core shared by every integration-test crate.
+pub struct Fixture {
+    pub root: TempRoot,
+}
+
+impl Fixture {
+    /// Creates a fixture rooted beneath the platform temporary directory.
+    pub fn from_label(name: &str) -> Self {
+        Self {
+            root: TempRoot::new(name),
+        }
+    }
+
+    /// Creates a fixture beneath a suite-selected parent directory.
+    pub fn beneath(parent: &Path, name: &str) -> Self {
+        Self {
+            root: TempRoot::beneath(parent, name),
+        }
+    }
+
+    /// Creates a Git repository beneath this fixture's temporary root.
+    pub fn git_repository(&self, name: &str) -> PathBuf {
+        git_repository(&self.root, name)
+    }
+
+    /// Creates and enrolls a Git repository beneath this fixture's temporary root.
+    pub fn enrolled_repository(
+        &self,
+        name: &str,
+        repository_id: &str,
+        visibility: &str,
+    ) -> PathBuf {
+        let repository = self.git_repository(name);
+        enrollment_marker(&repository, repository_id, visibility);
+        repository
+    }
+}
+
 /// Creates `parent/name` as a directory this crate recognizes as a Git repository.
 pub fn git_repository(parent: &Path, name: &str) -> PathBuf {
     let repository = parent.join(name);
@@ -142,6 +181,32 @@ pub fn enrollment_marker(repository: &Path, repository_id: &str, visibility: &st
         ),
     )
     .expect("repository fixture should be enrolled");
+}
+
+/// Captures every regular file beneath `root` by relative path and byte value.
+pub fn files_beneath(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    fn visit(root: &Path, directory: &Path, files: &mut BTreeMap<PathBuf, Vec<u8>>) {
+        for entry in fs::read_dir(directory).expect("fixture directory should be readable") {
+            let entry = entry.expect("fixture entry should be readable");
+            let path = entry.path();
+            if path.is_dir() {
+                visit(root, &path, files);
+            } else {
+                let relative = path
+                    .strip_prefix(root)
+                    .expect("fixture entry should be beneath its root")
+                    .to_path_buf();
+                files.insert(
+                    relative,
+                    fs::read(path).expect("fixture file should be readable"),
+                );
+            }
+        }
+    }
+
+    let mut files = BTreeMap::new();
+    visit(root, root, &mut files);
+    files
 }
 
 /// Captures every regular file beneath `root` as a sorted relative path and

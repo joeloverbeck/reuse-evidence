@@ -14,22 +14,17 @@ use std::path::{Path, PathBuf};
 
 use reuse_evidence::ExitMeaning;
 use reuse_evidence::portfolio::{self, PortfolioLocation};
-use support::TempRoot;
+use support::Fixture;
 
 const REPOSITORY_ID: &str = "00000000-0000-4000-8000-000000000021";
-
-struct Fixture {
-    root: TempRoot,
-}
 
 impl Fixture {
     /// One enrolled repository beneath an explicit root, with a user-local
     /// state directory that no other test shares.
     fn new(name: &str) -> Self {
-        let root = TempRoot::new(name);
-        let repository = support::git_repository(&root, "enrolled");
-        support::enrollment_marker(&repository, REPOSITORY_ID, "public");
-        Self { root }
+        let fixture = Self::from_label(name);
+        fixture.enrolled_repository("enrolled", REPOSITORY_ID, "public");
+        fixture
     }
 
     fn state_directory(&self) -> PathBuf {

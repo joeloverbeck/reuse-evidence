@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use support::TempRoot;
+use support::Fixture;
 
 const INSTALLED_FILES: &[&str] = &[
     ".claude/skills/method-gap-research-status/SKILL.md",
@@ -29,15 +29,9 @@ const INSTALLED_PACKAGES: &[&str] = &[
     "skill-evolution-status",
 ];
 
-struct Fixture {
-    root: TempRoot,
-}
-
 impl Fixture {
     fn new(name: &str) -> Self {
-        Self {
-            root: TempRoot::new(name),
-        }
+        Self::from_label(name)
     }
 }
 

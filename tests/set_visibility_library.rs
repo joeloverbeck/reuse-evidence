@@ -9,20 +9,16 @@ mod support;
 use std::fs;
 
 use reuse_evidence::{ExitMeaning, Visibility, set_visibility};
-use support::TempRoot;
+use support::Fixture;
 
 const STEWARD_ID: &str = "00000000-0000-4000-8000-000000000012";
 const CASE_ID: &str = "00000000-0000-4000-8000-000000000011";
 
-struct Fixture {
-    root: TempRoot,
-}
-
 impl Fixture {
     fn new() -> Self {
-        let root = TempRoot::new("library-visibility");
-        support::git_repository_at(&root);
-        Self { root }
+        let fixture = Self::from_label("library-visibility");
+        support::git_repository_at(&fixture.root);
+        fixture
     }
 }
 
