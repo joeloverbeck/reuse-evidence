@@ -246,7 +246,9 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
             proposal,
             root,
             preview,
-        } => run_append(
+        } => run_case_event(
+            &APPEND_EDGE,
+            case::append,
             &case_id,
             expected_revision,
             proposal.as_deref(),
@@ -259,7 +261,9 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
             proposal,
             root,
             preview,
-        } => run_override(
+        } => run_case_event(
+            &OVERRIDE_EDGE,
+            case::authorize_early_review,
             &case_id,
             expected_revision,
             proposal.as_deref(),
@@ -272,7 +276,9 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
             proposal,
             root,
             preview,
-        } => run_decide(
+        } => run_case_event(
+            &DECIDE_EDGE,
+            case::decide,
             &case_id,
             expected_revision,
             proposal.as_deref(),
@@ -285,7 +291,9 @@ fn run_case(command: CaseCommand) -> Result<(), TerminalFailure> {
             proposal,
             root,
             preview,
-        } => run_verify(
+        } => run_case_event(
+            &VERIFY_EDGE,
+            case::verify,
             &case_id,
             expected_revision,
             proposal.as_deref(),
@@ -336,104 +344,57 @@ fn run_open(
     write_stdout(&outcome.to_string())
 }
 
-fn run_append(
-    case_id: &str,
-    expected_revision: Option<i64>,
-    proposal: Option<&Path>,
-    location: &portfolio::PortfolioLocation,
-    preview: bool,
-) -> Result<(), TerminalFailure> {
-    let expected_revision = expected_revision.ok_or_else(|| {
-        TerminalFailure::refusal(
-            "missing required `--expected-revision`",
-            "rerun with `case append <CASE_ID> --expected-revision <REVISION>`",
-        )
-    })?;
-    let proposal = proposal.ok_or_else(|| {
-        TerminalFailure::refusal(
-            "missing required `--proposal`",
-            "rerun with `case append <CASE_ID> --proposal <PATH>`",
-        )
-    })?;
-    let outcome = case::append(
-        Path::new("."),
-        case_id,
-        expected_revision,
-        proposal,
-        location,
-        RecordedInstant::now()?,
-        preview,
-    )?;
-    write_stdout(&outcome.to_string())
+struct CaseEventEdge {
+    verb: &'static str,
+    missing_expected_revision_resolution: &'static str,
+    missing_proposal_resolution: &'static str,
 }
 
-fn run_override(
-    case_id: &str,
-    expected_revision: Option<i64>,
-    proposal: Option<&Path>,
-    location: &portfolio::PortfolioLocation,
-    preview: bool,
-) -> Result<(), TerminalFailure> {
-    let expected_revision = expected_revision.ok_or_else(|| {
-        TerminalFailure::refusal(
-            "missing required `--expected-revision`",
-            format!(
-                "run `case show {case_id}` to recover the current revision, then rerun `case override {case_id} --expected-revision <REVISION>`"
-            ),
-        )
-    })?;
-    let proposal = proposal.ok_or_else(|| {
-        TerminalFailure::refusal(
-            "missing required `--proposal`",
-            "rerun with `case override <CASE_ID> --proposal <PATH>`",
-        )
-    })?;
-    let outcome = case::authorize_early_review(
-        Path::new("."),
-        case_id,
-        expected_revision,
-        proposal,
-        location,
-        RecordedInstant::now()?,
-        preview,
-    )?;
-    write_stdout(&outcome.to_string())
+impl CaseEventEdge {
+    fn resolution(&self, template: &str, case_id: &str) -> String {
+        template
+            .replace("{verb}", self.verb)
+            .replace("{case_id}", case_id)
+    }
 }
 
-fn run_decide(
-    case_id: &str,
-    expected_revision: Option<i64>,
-    proposal: Option<&Path>,
-    location: &portfolio::PortfolioLocation,
-    preview: bool,
-) -> Result<(), TerminalFailure> {
-    let expected_revision = expected_revision.ok_or_else(|| {
-        TerminalFailure::refusal(
-            "missing required `--expected-revision`",
-            format!(
-                "run `case show {case_id}` to recover the current revision, then rerun `case decide {case_id} --expected-revision <REVISION>`"
-            ),
-        )
-    })?;
-    let proposal = proposal.ok_or_else(|| {
-        TerminalFailure::refusal(
-            "missing required `--proposal`",
-            "rerun with `case decide <CASE_ID> --proposal <PATH>`",
-        )
-    })?;
-    let outcome = case::decide(
-        Path::new("."),
-        case_id,
-        expected_revision,
-        proposal,
-        location,
-        RecordedInstant::now()?,
-        preview,
-    )?;
-    write_stdout(&outcome.to_string())
-}
+const APPEND_EDGE: CaseEventEdge = CaseEventEdge {
+    verb: "append",
+    missing_expected_revision_resolution: "rerun with `case {verb} <CASE_ID> --expected-revision <REVISION>`",
+    missing_proposal_resolution: "rerun with `case {verb} <CASE_ID> --proposal <PATH>`",
+};
 
-fn run_verify(
+const OVERRIDE_EDGE: CaseEventEdge = CaseEventEdge {
+    verb: "override",
+    missing_expected_revision_resolution: "run `case show {case_id}` to recover the current revision, then rerun `case {verb} {case_id} --expected-revision <REVISION>`",
+    missing_proposal_resolution: "rerun with `case {verb} <CASE_ID> --proposal <PATH>`",
+};
+
+const DECIDE_EDGE: CaseEventEdge = CaseEventEdge {
+    verb: "decide",
+    missing_expected_revision_resolution: "run `case show {case_id}` to recover the current revision, then rerun `case {verb} {case_id} --expected-revision <REVISION>`",
+    missing_proposal_resolution: "rerun with `case {verb} <CASE_ID> --proposal <PATH>`",
+};
+
+const VERIFY_EDGE: CaseEventEdge = CaseEventEdge {
+    verb: "verify",
+    missing_expected_revision_resolution: "run `case show {case_id}` to recover the current revision, then rerun `case {verb} {case_id} --expected-revision <REVISION>`",
+    missing_proposal_resolution: "rerun with `case {verb} <CASE_ID> --proposal <PATH>`",
+};
+
+type CaseEventCallee = fn(
+    &Path,
+    &str,
+    i64,
+    &Path,
+    &portfolio::PortfolioLocation,
+    RecordedInstant,
+    bool,
+) -> Result<case::LaterEventOutcome, TerminalFailure>;
+
+fn run_case_event(
+    edge: &CaseEventEdge,
+    callee: CaseEventCallee,
     case_id: &str,
     expected_revision: Option<i64>,
     proposal: Option<&Path>,
@@ -443,18 +404,16 @@ fn run_verify(
     let expected_revision = expected_revision.ok_or_else(|| {
         TerminalFailure::refusal(
             "missing required `--expected-revision`",
-            format!(
-                "run `case show {case_id}` to recover the current revision, then rerun `case verify {case_id} --expected-revision <REVISION>`"
-            ),
+            edge.resolution(edge.missing_expected_revision_resolution, case_id),
         )
     })?;
     let proposal = proposal.ok_or_else(|| {
         TerminalFailure::refusal(
             "missing required `--proposal`",
-            "rerun with `case verify <CASE_ID> --proposal <PATH>`",
+            edge.resolution(edge.missing_proposal_resolution, case_id),
         )
     })?;
-    let outcome = case::verify(
+    let outcome = callee(
         Path::new("."),
         case_id,
         expected_revision,
