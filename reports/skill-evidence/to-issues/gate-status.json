@@ -1,13 +1,15 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-13T16:02:24.45225476Z",
+  "generated_at": "2026-08-15T13:34:01.667683036Z",
   "target_content_hash": "f6086b3322c82fb21d5da0c6cbd04f093ec20d7ca1e6094a9c2324cbeff6dd1d",
-  "qualifying_uses_on_current_hash": 5,
+  "qualifying_uses_on_current_hash": 6,
   "open_incident_ids": [
     "evt_74c863ac-a621-4e58-9244-b7f1d562bfb6",
     "evt_ffba23f3-16db-4344-a951-4698934275b0",
     "evt_1cfda609-e244-44b1-8286-73275eb6d528",
-    "evt_0fd2454b-8f4a-4be7-8803-b354218d85f9"
+    "evt_0fd2454b-8f4a-4be7-8803-b354218d85f9",
+    "evt_f11272cb-5065-48c9-8469-a45081b8d56c",
+    "evt_eae5730c-86fe-49f0-9764-6738510b67cb"
   ],
   "candidate_clusters": [
     {
@@ -15,9 +17,10 @@
       "open_event_ids": [
         "evt_74c863ac-a621-4e58-9244-b7f1d562bfb6",
         "evt_ffba23f3-16db-4344-a951-4698934275b0",
-        "evt_1cfda609-e244-44b1-8286-73275eb6d528"
+        "evt_1cfda609-e244-44b1-8286-73275eb6d528",
+        "evt_f11272cb-5065-48c9-8469-a45081b8d56c"
       ],
-      "independent_incidents": 3,
+      "independent_incidents": 4,
       "max_severity": "friction"
     },
     {
@@ -27,15 +30,24 @@
       ],
       "independent_incidents": 1,
       "max_severity": "friction"
+    },
+    {
+      "symptom_key": "state",
+      "open_event_ids": [
+        "evt_eae5730c-86fe-49f0-9764-6738510b67cb"
+      ],
+      "independent_incidents": 1,
+      "max_severity": "friction"
     }
   ],
-  "state": "eligible_pending_cooldown",
+  "state": "eligible",
   "authorized_workflow": "skill-evolution",
   "authorization_reason": "friction_recurrence:execution",
   "trigger_event_ids": [
     "evt_74c863ac-a621-4e58-9244-b7f1d562bfb6",
     "evt_ffba23f3-16db-4344-a951-4698934275b0",
-    "evt_1cfda609-e244-44b1-8286-73275eb6d528"
+    "evt_1cfda609-e244-44b1-8286-73275eb6d528",
+    "evt_f11272cb-5065-48c9-8469-a45081b8d56c"
   ],
   "threshold_session_id": "1dc87af4-2ec1-4e44-b0db-9a7819d07841",
   "not_before": null,
@@ -44,5 +56,5 @@
   "review_reentry_basis": "post_review_incident",
   "target_name": "to-issues",
   "target_repo_relative_path": ".claude/skills/to-issues",
-  "derivation_session_id": "1dc87af4-2ec1-4e44-b0db-9a7819d07841"
+  "derivation_session_id": "bf8bd4b2-a19d-41de-add0-244627a0ed07"
 }
