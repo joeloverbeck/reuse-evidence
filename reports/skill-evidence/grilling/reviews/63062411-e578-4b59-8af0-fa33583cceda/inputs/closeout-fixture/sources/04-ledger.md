@@ -1,0 +1,1 @@
+- Ratified and evidence-resolved decisions entered in the ledger.

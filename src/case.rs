@@ -29,26 +29,14 @@ const CASE_SCHEMA_VERSION: i64 = 1;
 const IMPLEMENTATION_NOTICE: &str =
     "decision: authorizes implementation outside the reuse lifecycle; does not perform it";
 const NO_IMPLEMENTATION_NOTICE: &str = "decision: authorizes no implementation";
-const APPEND_UNSTEWARDED_RESOLUTION: &str =
-    "run `case list` in this steward repository and retry with a recorded case identity";
-const EARLY_REVIEW_UNSTEWARDED_RESOLUTION: &str = "run `case list` in this steward repository and retry `case override` with a recorded watching case identity";
-const DECISION_UNSTEWARDED_RESOLUTION: &str = "run `case list` in this steward repository and retry `case decide` with a recorded review-ready case identity";
-const VERIFICATION_UNSTEWARDED_RESOLUTION: &str = "run `case list` in this steward repository and retry `case verify` with a recorded awaiting-verification, parked, or reopened case identity";
-/// What each command tells a reader to do about a steward marker it cannot use.
+/// What opening tells a reader to do about a steward marker it cannot use.
 ///
 /// ADR 0018 makes the marker fault's own wording shared and this sentence the
-/// command's, because it names the command to retry. `case::read` holds the
-/// three for the query commands.
+/// command's, because it names the command to retry. Each later event type
+/// carries its own in [`LaterEventDescriptor`]; `case::read` holds the three
+/// for the query commands.
 const OPEN_MARKER_RESOLUTION: &str =
     "restore a supported `reuse-evidence.toml` marker before opening a case";
-const APPEND_MARKER_RESOLUTION: &str =
-    "restore a supported `reuse-evidence.toml` marker before appending an occurrence";
-const EARLY_REVIEW_MARKER_RESOLUTION: &str =
-    "restore a supported `reuse-evidence.toml` marker before authorizing early review";
-const DECISION_MARKER_RESOLUTION: &str =
-    "restore a supported `reuse-evidence.toml` marker before recording a reuse decision";
-const VERIFICATION_MARKER_RESOLUTION: &str =
-    "restore a supported `reuse-evidence.toml` marker before recording verification";
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -204,17 +192,22 @@ struct PreparedOpening {
     bytes: String,
 }
 
+/// The approved identity and bytes one later case event would enter history with.
+///
+/// Every later event type stages the same three facts, so one carrier serves all four
+/// under ADR 0013. Opening stages a steward and a privacy instead and keeps
+/// [`PreparedOpening`].
 #[derive(Debug)]
-struct AppendProposal {
-    occurrence: Occurrence,
-    prepared: Option<PreparedAppend>,
-}
-
-#[derive(Debug)]
-struct PreparedAppend {
+struct PreparedLaterEvent {
     sequence: i64,
     event_id: Uuid,
     bytes: String,
+}
+
+#[derive(Debug)]
+struct AppendProposal {
+    occurrence: Occurrence,
+    prepared: Option<PreparedLaterEvent>,
 }
 
 #[derive(Debug)]
@@ -222,40 +215,19 @@ struct EarlyReviewProposal {
     reason: String,
     review_appetite: String,
     evidence: Vec<EvidenceReference>,
-    prepared: Option<PreparedEarlyReview>,
-}
-
-#[derive(Debug)]
-struct PreparedEarlyReview {
-    sequence: i64,
-    event_id: Uuid,
-    bytes: String,
+    prepared: Option<PreparedLaterEvent>,
 }
 
 #[derive(Debug)]
 struct DecisionProposal {
     content: DecisionContent,
-    prepared: Option<PreparedDecision>,
-}
-
-#[derive(Debug)]
-struct PreparedDecision {
-    sequence: i64,
-    event_id: Uuid,
-    bytes: String,
+    prepared: Option<PreparedLaterEvent>,
 }
 
 #[derive(Debug)]
 struct VerificationProposal {
     content: VerificationContent,
-    prepared: Option<PreparedVerification>,
-}
-
-#[derive(Debug)]
-struct PreparedVerification {
-    sequence: i64,
-    event_id: Uuid,
-    bytes: String,
+    prepared: Option<PreparedLaterEvent>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -623,16 +595,19 @@ impl LaterEventHeadings {
     }
 }
 
-/// The words one later event type supplies to the shared publication refusals.
+/// Everything one later event type contributes to the machinery all four of them share.
 ///
-/// Every later event type refuses a failed publication in the same shape; only the words
-/// naming the event and its retry differ. `case::naming` owns the machine spellings under
-/// ADR 0011 — the recorded body string and the file-name slug — so the operator-facing
-/// vocabulary lives here beside the headings rather than widening the naming module. ADR 0017
-/// moved receipt text to `case::render`; a refusal is not a receipt, and both stay each event
-/// type's decision under ADR 0010.
-#[derive(Clone, Copy, Debug)]
-struct LaterEventRefusals {
+/// The publication protocol, the envelope rule, and the preview-or-publish branch shape are
+/// shared under ADRs 0009, 0013, and 0014; the words are not. Each event type states its own
+/// words once, here, so the four spellings a reader must keep consistent sit adjacent rather
+/// than scattered across the module. `case::naming` still owns the machine spellings under
+/// ADR 0011 — the recorded body string and the file-name slug — and this carries only the
+/// operator-facing vocabulary. Headings stay with the receipt builder that names them under
+/// ADR 0017, because verification derives its own from the recorded disposition and no shared
+/// step reads them.
+struct LaterEventDescriptor {
+    /// The event this type records, in `case::naming`'s vocabulary.
+    event_type: EventType,
     /// Names the recorded event in a condition: `recorded {event} event ...`.
     event: &'static str,
     /// Names the operation in a resolution: `... before retrying the {operation}`.
@@ -643,14 +618,28 @@ struct LaterEventRefusals {
     /// approved proposal, for an operation that carries one. An operation whose retry needs
     /// no proposal supplies none and names no command.
     retry_command: Option<&'static str>,
+    /// Tells the operator to preview this operation again. The prepared-sequence refusal and
+    /// the private-steward refusal both end on this phrase, so each type spells it once here
+    /// instead of once per refusal. It is stated rather than built from `operation` because
+    /// verification takes no article and the other three do.
+    preview_again: &'static str,
+    /// What this command tells a reader to do about a steward marker it cannot use, under
+    /// ADR 0018.
+    marker_resolution: &'static str,
+    /// What this command tells a reader to do about a case this repository does not steward.
+    unstewarded_resolution: &'static str,
+    /// The wording this event type's envelope refusals use, under ADR 0014.
+    envelope: event::EnvelopeRefusal<'static>,
+    /// Names the event an unsafe failure could not encode.
+    encode_noun: &'static str,
 }
 
-impl LaterEventRefusals {
+impl LaterEventDescriptor {
     /// Renders one failed publication as this event type's refusal.
     ///
     /// A protocol failure already carries its own terminal meaning and passes through.
     fn publication_failure(
-        self,
+        &self,
         case_id: Uuid,
         failure: publication::PublicationFailure,
     ) -> TerminalFailure {
@@ -684,16 +673,13 @@ impl LaterEventRefusals {
 
     /// Renders an event already recorded at the target sequence as this event type's refusal.
     fn existing_event_failure(
-        self,
+        &self,
         case_id: Uuid,
         failure: publication::ExistingEventFailure,
     ) -> TerminalFailure {
-        let Self {
-            event,
-            operation,
-            conflict_resolution,
-            ..
-        } = self;
+        let event = self.event;
+        let operation = self.operation;
+        let conflict_resolution = self.conflict_resolution;
         match failure {
             publication::ExistingEventFailure::Unreadable { path, error } => {
                 TerminalFailure::refusal(
@@ -750,11 +736,22 @@ const APPEND_HEADINGS: LaterEventHeadings = LaterEventHeadings {
 
 /// Appending retries against a fresh revision rather than a re-approved proposal, so its
 /// revision-conflict resolution names no command and asks for a distinct occurrence.
-const APPEND_REFUSALS: LaterEventRefusals = LaterEventRefusals {
+const APPEND: LaterEventDescriptor = LaterEventDescriptor {
+    event_type: EventType::OccurrenceAppended,
     event: "append",
     operation: "append",
     conflict_resolution: "prepare a distinct occurrence",
     retry_command: None,
+    preview_again: "preview the append again",
+    marker_resolution: "restore a supported `reuse-evidence.toml` marker before appending an occurrence",
+    unstewarded_resolution: "run `case list` in this steward repository and retry with a recorded case identity",
+    envelope: event::EnvelopeRefusal {
+        unsupported: "prepared append event is not a supported `occurrence_appended` event after revision 1",
+        noun: "append",
+        instant_name: "append",
+        preview_command: "case append --preview",
+    },
+    encode_noun: "occurrence append event",
 };
 
 const EARLY_REVIEW_HEADINGS: LaterEventHeadings = LaterEventHeadings {
@@ -763,11 +760,22 @@ const EARLY_REVIEW_HEADINGS: LaterEventHeadings = LaterEventHeadings {
     existing: "early review already authorized",
 };
 
-const EARLY_REVIEW_REFUSALS: LaterEventRefusals = LaterEventRefusals {
+const EARLY_REVIEW: LaterEventDescriptor = LaterEventDescriptor {
+    event_type: EventType::EarlyReviewAuthorized,
     event: "early-review",
     operation: "early-review override",
     conflict_resolution: "prepare a new operation",
     retry_command: Some("case override"),
+    preview_again: "preview the early-review override again",
+    marker_resolution: "restore a supported `reuse-evidence.toml` marker before authorizing early review",
+    unstewarded_resolution: "run `case list` in this steward repository and retry `case override` with a recorded watching case identity",
+    envelope: event::EnvelopeRefusal {
+        unsupported: "prepared early-review event is not a supported `early_review_authorized` event after revision 1",
+        noun: "early-review",
+        instant_name: "early-review authorization",
+        preview_command: "case override --preview",
+    },
+    encode_noun: "early-review authorization event",
 };
 
 const DECISION_HEADINGS: LaterEventHeadings = LaterEventHeadings {
@@ -776,18 +784,40 @@ const DECISION_HEADINGS: LaterEventHeadings = LaterEventHeadings {
     existing: "reuse decision already recorded",
 };
 
-const DECISION_REFUSALS: LaterEventRefusals = LaterEventRefusals {
+const DECISION: LaterEventDescriptor = LaterEventDescriptor {
+    event_type: EventType::ReuseDecisionAccepted,
     event: "reuse decision",
     operation: "reuse decision",
     conflict_resolution: "prepare a new operation",
     retry_command: Some("case decide"),
+    preview_again: "preview the reuse decision again",
+    marker_resolution: "restore a supported `reuse-evidence.toml` marker before recording a reuse decision",
+    unstewarded_resolution: "run `case list` in this steward repository and retry `case decide` with a recorded review-ready case identity",
+    envelope: event::EnvelopeRefusal {
+        unsupported: "prepared reuse decision event is not a supported later event",
+        noun: "reuse decision",
+        instant_name: "reuse decision",
+        preview_command: "case decide --preview",
+    },
+    encode_noun: "accepted reuse decision event",
 };
 
-const VERIFICATION_REFUSALS: LaterEventRefusals = LaterEventRefusals {
+const VERIFICATION: LaterEventDescriptor = LaterEventDescriptor {
+    event_type: EventType::VerificationRecorded,
     event: "verification",
     operation: "verification",
     conflict_resolution: "prepare a new operation",
     retry_command: Some("case verify"),
+    preview_again: "preview verification again",
+    marker_resolution: "restore a supported `reuse-evidence.toml` marker before recording verification",
+    unstewarded_resolution: "run `case list` in this steward repository and retry `case verify` with a recorded awaiting-verification, parked, or reopened case identity",
+    envelope: event::EnvelopeRefusal {
+        unsupported: "prepared verification event is not a supported later event",
+        noun: "verification",
+        instant_name: "verification",
+        preview_command: "case verify --preview",
+    },
+    encode_noun: "verification event",
 };
 
 /// The complete case privacy a receipt reports, or why it could not be derived.
@@ -903,19 +933,26 @@ pub fn append(
     recorded_at: RecordedInstant,
     preview: bool,
 ) -> Result<LaterEventOutcome, TerminalFailure> {
-    let located = locate_later_event_case(
-        working_directory,
-        case_id,
-        expected_revision,
-        APPEND_MARKER_RESOLUTION,
-        APPEND_UNSTEWARDED_RESOLUTION,
-    )?;
+    let located = locate_later_event_case(working_directory, case_id, expected_revision, &APPEND)?;
     let case_id = located.case_id;
     let proposal = read_append_proposal(proposal_path)?;
-    validate_prepared_append_sequence(&proposal, expected_revision, located.sequence)?;
-    let (relative_event_path, absolute_event_path) =
-        later_event_paths(&located, EventType::OccurrenceAppended)?;
-    let event = append_event_bytes(&proposal, located.sequence, recorded_at)?;
+    validate_prepared_sequence(
+        proposal.prepared.as_ref(),
+        &APPEND,
+        expected_revision,
+        located.sequence,
+    )?;
+    let (relative_event_path, absolute_event_path) = later_event_paths(&located)?;
+    let event = later_event_bytes(proposal.prepared.as_ref(), &APPEND, || {
+        OccurrenceAppendedEvent {
+            envelope: event::Envelope::new(
+                located.sequence,
+                EventType::OccurrenceAppended,
+                recorded_at,
+            ),
+            occurrence: proposal.occurrence.clone(),
+        }
+    })?;
     let eligibility = |case: &read::CaseRecord, ()| {
         validate_new_append(case, &proposal, &located.steward, location)
     };
@@ -926,7 +963,6 @@ pub fn append(
         event_id: proposal.prepared.as_ref().map(|prepared| prepared.event_id),
         event,
         preview,
-        refusals: APPEND_REFUSALS,
     }
     .execute(
         |_| Ok(()),
@@ -997,20 +1033,28 @@ fn append_retry_outcome(
     )
 }
 
-fn validate_prepared_append_sequence(
-    proposal: &AppendProposal,
+/// Refuses a prepared later event staged against a different sequence than this run requires.
+///
+/// One approved proposal names one sequence. Every later event type refuses a mismatch the same
+/// way and differs only in the words its [`LaterEventDescriptor`] states.
+fn validate_prepared_sequence(
+    prepared: Option<&PreparedLaterEvent>,
+    descriptor: &LaterEventDescriptor,
     expected_revision: i64,
     sequence: i64,
 ) -> Result<(), TerminalFailure> {
-    if let Some(prepared) = &proposal.prepared
+    if let Some(prepared) = prepared
         && prepared.sequence != sequence
     {
         return Err(TerminalFailure::refusal(
             format!(
-                "prepared append event records sequence {}, but expected revision {expected_revision} requires sequence {sequence}",
-                prepared.sequence
+                "prepared {} event records sequence {}, but expected revision {expected_revision} requires sequence {sequence}",
+                descriptor.event, prepared.sequence
             ),
-            "preview the append again against the current expected revision",
+            format!(
+                "{} against the current expected revision",
+                descriptor.preview_again
+            ),
         ));
     }
     Ok(())
@@ -1031,19 +1075,29 @@ pub fn authorize_early_review(
     recorded_at: RecordedInstant,
     preview: bool,
 ) -> Result<LaterEventOutcome, TerminalFailure> {
-    let located = locate_later_event_case(
-        working_directory,
-        case_id,
-        expected_revision,
-        EARLY_REVIEW_MARKER_RESOLUTION,
-        EARLY_REVIEW_UNSTEWARDED_RESOLUTION,
-    )?;
+    let located =
+        locate_later_event_case(working_directory, case_id, expected_revision, &EARLY_REVIEW)?;
     let case_id = located.case_id;
     let proposal = read_early_review_proposal(proposal_path)?;
-    validate_prepared_early_review_sequence(&proposal, expected_revision, located.sequence)?;
-    let (relative_event_path, absolute_event_path) =
-        later_event_paths(&located, EventType::EarlyReviewAuthorized)?;
-    let event = early_review_event_bytes(&proposal, located.sequence, recorded_at)?;
+    validate_prepared_sequence(
+        proposal.prepared.as_ref(),
+        &EARLY_REVIEW,
+        expected_revision,
+        located.sequence,
+    )?;
+    let (relative_event_path, absolute_event_path) = later_event_paths(&located)?;
+    let event = later_event_bytes(proposal.prepared.as_ref(), &EARLY_REVIEW, || {
+        EarlyReviewAuthorizedEvent {
+            envelope: event::Envelope::new(
+                located.sequence,
+                EventType::EarlyReviewAuthorized,
+                recorded_at,
+            ),
+            reason: proposal.reason.clone(),
+            review_appetite: proposal.review_appetite.clone(),
+            evidence: proposal.evidence.clone(),
+        }
+    })?;
     let case_privacy = |case: &read::CaseRecord| -> Result<Visibility, TerminalFailure> {
         let roots = portfolio::selected_roots(location)?;
         let privacy = derive_complete_case_privacy(case, &located.steward, &roots)?;
@@ -1061,7 +1115,6 @@ pub fn authorize_early_review(
         event_id: proposal.prepared.as_ref().map(|prepared| prepared.event_id),
         event,
         preview,
-        refusals: EARLY_REVIEW_REFUSALS,
     }
     .execute(
         case_privacy,
@@ -1105,19 +1158,27 @@ pub fn decide(
     recorded_at: RecordedInstant,
     preview: bool,
 ) -> Result<LaterEventOutcome, TerminalFailure> {
-    let located = locate_later_event_case(
-        working_directory,
-        case_id,
-        expected_revision,
-        DECISION_MARKER_RESOLUTION,
-        DECISION_UNSTEWARDED_RESOLUTION,
-    )?;
+    let located =
+        locate_later_event_case(working_directory, case_id, expected_revision, &DECISION)?;
     let case_id = located.case_id;
     let proposal = read_decision_proposal(proposal_path)?;
-    validate_prepared_decision_sequence(&proposal, expected_revision, located.sequence)?;
-    let (relative_event_path, absolute_event_path) =
-        later_event_paths(&located, EventType::ReuseDecisionAccepted)?;
-    let event = decision_event_bytes(&proposal, located.sequence, recorded_at)?;
+    validate_prepared_sequence(
+        proposal.prepared.as_ref(),
+        &DECISION,
+        expected_revision,
+        located.sequence,
+    )?;
+    let (relative_event_path, absolute_event_path) = later_event_paths(&located)?;
+    let event = later_event_bytes(proposal.prepared.as_ref(), &DECISION, || {
+        ReuseDecisionAcceptedEvent {
+            envelope: event::Envelope::new(
+                located.sequence,
+                EventType::ReuseDecisionAccepted,
+                recorded_at,
+            ),
+            content: proposal.content.clone(),
+        }
+    })?;
     let eligibility = |case: &read::CaseRecord, ()| -> Result<Visibility, TerminalFailure> {
         validate_new_decision(case, &proposal)?;
         let roots = portfolio::selected_roots(location)?;
@@ -1132,7 +1193,6 @@ pub fn decide(
         event_id: proposal.prepared.as_ref().map(|prepared| prepared.event_id),
         event,
         preview,
-        refusals: DECISION_REFUSALS,
     }
     .execute(
         |_| Ok(()),
@@ -1181,19 +1241,27 @@ pub fn verify(
     recorded_at: RecordedInstant,
     preview: bool,
 ) -> Result<LaterEventOutcome, TerminalFailure> {
-    let located = locate_later_event_case(
-        working_directory,
-        case_id,
-        expected_revision,
-        VERIFICATION_MARKER_RESOLUTION,
-        VERIFICATION_UNSTEWARDED_RESOLUTION,
-    )?;
+    let located =
+        locate_later_event_case(working_directory, case_id, expected_revision, &VERIFICATION)?;
     let case_id = located.case_id;
     let proposal = read_verification_proposal(proposal_path)?;
-    validate_prepared_verification_sequence(&proposal, expected_revision, located.sequence)?;
-    let (relative_event_path, absolute_event_path) =
-        later_event_paths(&located, EventType::VerificationRecorded)?;
-    let event = verification_event_bytes(&proposal, located.sequence, recorded_at)?;
+    validate_prepared_sequence(
+        proposal.prepared.as_ref(),
+        &VERIFICATION,
+        expected_revision,
+        located.sequence,
+    )?;
+    let (relative_event_path, absolute_event_path) = later_event_paths(&located)?;
+    let event = later_event_bytes(proposal.prepared.as_ref(), &VERIFICATION, || {
+        VerificationRecordedEvent {
+            envelope: event::Envelope::new(
+                located.sequence,
+                EventType::VerificationRecorded,
+                recorded_at,
+            ),
+            content: proposal.content.clone(),
+        }
+    })?;
     let eligibility = |case: &read::CaseRecord, ()| {
         validate_verification_eligibility(case, &proposal, &located.steward, location)
     };
@@ -1204,7 +1272,6 @@ pub fn verify(
         event_id: proposal.prepared.as_ref().map(|prepared| prepared.event_id),
         event,
         preview,
-        refusals: VERIFICATION_REFUSALS,
     }
     .execute(
         |_| Ok(()),
@@ -1334,26 +1401,10 @@ fn validate_verification_privacy(
                 steward.repository_id(),
                 case.case_id
             ),
-            "run `set-visibility --visibility private` in the steward repository, then preview verification again",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_prepared_verification_sequence(
-    proposal: &VerificationProposal,
-    expected_revision: i64,
-    sequence: i64,
-) -> Result<(), TerminalFailure> {
-    if let Some(prepared) = &proposal.prepared
-        && prepared.sequence != sequence
-    {
-        return Err(TerminalFailure::refusal(
             format!(
-                "prepared verification event records sequence {}, but expected revision {expected_revision} requires sequence {sequence}",
-                prepared.sequence
+                "run `set-visibility --visibility private` in the steward repository, then {}",
+                VERIFICATION.preview_again
             ),
-            "preview verification again against the current expected revision",
         ));
     }
     Ok(())
@@ -1368,28 +1419,27 @@ struct LocatedCase {
     steward: marker::Marker,
     relative_case_directory: PathBuf,
     case: read::CaseRecord,
-    /// The resolution this command's unstewarded-case refusal names, carried so the re-read
-    /// under the publication lock cannot answer that refusal differently from this location.
-    unstewarded_resolution: &'static str,
+    /// The event type this command records, carried so the re-read under the publication lock
+    /// cannot answer this command's refusals differently from this location.
+    descriptor: &'static LaterEventDescriptor,
 }
 
 /// Locates the enrolled steward and the recorded case one later event would extend.
 ///
-/// Every later-event command performs these steps in this order; only the resolution for a case
-/// this repository does not steward varies, because it names the command to retry and the case
-/// state that command requires.
+/// Every later-event command performs these steps in this order and differs only in the words
+/// its [`LaterEventDescriptor`] states, because a marker refusal and an unstewarded-case refusal
+/// each name the command to retry and the case state that command requires.
 fn locate_later_event_case(
     working_directory: &Path,
     case_id: &str,
     expected_revision: i64,
-    marker_resolution: &'static str,
-    unstewarded_resolution: &'static str,
+    descriptor: &'static LaterEventDescriptor,
 ) -> Result<LocatedCase, TerminalFailure> {
     let case_id = parse_case_id(case_id)?;
     let publication = publication::Publication::new(expected_revision)?;
     let sequence = publication.sequence();
     let repository_root = find_repository_root(working_directory)?;
-    let steward = read_steward(&repository_root, marker_resolution)?;
+    let steward = read_steward(&repository_root, descriptor.marker_resolution)?;
     let relative_case_directory = naming::case_directory(case_id);
     validate_case_storage_path(&repository_root, &relative_case_directory)?;
     let case = read::read_case_for(
@@ -1397,7 +1447,7 @@ fn locate_later_event_case(
         &relative_case_directory,
         case_id,
         steward.repository_id(),
-        unstewarded_resolution,
+        descriptor.unstewarded_resolution,
     )?;
     Ok(LocatedCase {
         case_id,
@@ -1407,19 +1457,16 @@ fn locate_later_event_case(
         steward,
         relative_case_directory,
         case,
-        unstewarded_resolution,
+        descriptor,
     })
 }
 
 /// Builds and validates the repository-relative and absolute paths a typed later event occupies.
-fn later_event_paths(
-    located: &LocatedCase,
-    event_type: EventType,
-) -> Result<(PathBuf, PathBuf), TerminalFailure> {
+fn later_event_paths(located: &LocatedCase) -> Result<(PathBuf, PathBuf), TerminalFailure> {
     let relative_event_path = case_event_path(
         &located.relative_case_directory,
         located.sequence,
-        event_type,
+        located.descriptor.event_type,
     )?;
     validate_case_storage_path(&located.repository_root, &relative_event_path)?;
     let absolute_event_path = located.repository_root.join(&relative_event_path);
@@ -1439,7 +1486,6 @@ struct LaterEventExecution<'a> {
     event_id: Option<Uuid>,
     event: String,
     preview: bool,
-    refusals: LaterEventRefusals,
 }
 
 impl LaterEventExecution<'_> {
@@ -1467,7 +1513,6 @@ impl LaterEventExecution<'_> {
             event_id,
             event,
             preview,
-            refusals,
         } = self;
         let case_id = located.case_id;
 
@@ -1484,7 +1529,7 @@ impl LaterEventExecution<'_> {
                     before_revision,
                     after_revision,
                 )
-                .map_err(|failure| refusals.publication_failure(case_id, failure))?;
+                .map_err(|failure| located.descriptor.publication_failure(case_id, failure))?;
             return Ok(match checked {
                 publication::Checked::Existing(existing) => {
                     retry_outcome(&located.case, existing, relative_event_path)
@@ -1517,13 +1562,13 @@ impl LaterEventExecution<'_> {
                         &located.relative_case_directory,
                         case_id,
                         located.steward.repository_id(),
-                        located.unstewarded_resolution,
+                        located.descriptor.unstewarded_resolution,
                     )
                 },
                 before_revision,
                 after_revision,
             )
-            .map_err(|failure| refusals.publication_failure(case_id, failure))?;
+            .map_err(|failure| located.descriptor.publication_failure(case_id, failure))?;
         Ok(match published {
             publication::PublicationOutcome::Created { case, validation } => fresh_outcome(
                 LaterEventEffect::Created,
@@ -1687,26 +1732,10 @@ fn validate_decision_privacy(
                 steward.repository_id(),
                 case.case_id
             ),
-            "run `set-visibility --visibility private` in the steward repository, then preview the reuse decision again",
-        ));
-    }
-    Ok(())
-}
-
-fn validate_prepared_decision_sequence(
-    proposal: &DecisionProposal,
-    expected_revision: i64,
-    sequence: i64,
-) -> Result<(), TerminalFailure> {
-    if let Some(prepared) = &proposal.prepared
-        && prepared.sequence != sequence
-    {
-        return Err(TerminalFailure::refusal(
             format!(
-                "prepared reuse decision event records sequence {}, but expected revision {expected_revision} requires sequence {sequence}",
-                prepared.sequence
+                "run `set-visibility --visibility private` in the steward repository, then {}",
+                DECISION.preview_again
             ),
-            "preview the reuse decision again against the current expected revision",
         ));
     }
     Ok(())
@@ -1758,25 +1787,6 @@ fn early_review_retry_outcome(
     )
 }
 
-fn validate_prepared_early_review_sequence(
-    proposal: &EarlyReviewProposal,
-    expected_revision: i64,
-    sequence: i64,
-) -> Result<(), TerminalFailure> {
-    if let Some(prepared) = &proposal.prepared
-        && prepared.sequence != sequence
-    {
-        return Err(TerminalFailure::refusal(
-            format!(
-                "prepared early-review event records sequence {}, but expected revision {expected_revision} requires sequence {sequence}",
-                prepared.sequence
-            ),
-            "preview the early-review override again against the current expected revision",
-        ));
-    }
-    Ok(())
-}
-
 fn validate_early_review_privacy(
     case: &read::CaseRecord,
     steward: &marker::Marker,
@@ -1789,7 +1799,10 @@ fn validate_early_review_privacy(
                 steward.repository_id(),
                 case.case_id
             ),
-            "run `set-visibility --visibility private` in the steward repository, then preview the early-review override again",
+            format!(
+                "run `set-visibility --visibility private` in the steward repository, then {}",
+                EARLY_REVIEW.preview_again
+            ),
         ));
     }
     Ok(())
@@ -1860,7 +1873,10 @@ fn validate_new_append(
                 steward.repository_id(),
                 case.case_id
             ),
-            "run `set-visibility --visibility private` in the steward repository, then preview the append again",
+            format!(
+                "run `set-visibility --visibility private` in the steward repository, then {}",
+                APPEND.preview_again
+            ),
         ));
     }
     let private_participant = occurrences.iter().find(|occurrence| {
@@ -1875,7 +1891,10 @@ fn validate_new_append(
                 steward.repository_id(),
                 private_participant.repository_id
             ),
-            "run `set-visibility --visibility private` in the steward repository, then preview the append again",
+            format!(
+                "run `set-visibility --visibility private` in the steward repository, then {}",
+                APPEND.preview_again
+            ),
         ));
     }
     if case.privacy == Visibility::Private
@@ -1939,79 +1958,24 @@ fn reported_privacy(
     )
 }
 
-fn append_event_bytes(
-    proposal: &AppendProposal,
-    sequence: i64,
-    recorded_at: RecordedInstant,
+/// Encodes one later case event, or returns the approved bytes a prepared proposal staged.
+///
+/// Approved bytes enter history exactly as the human saw them, so a prepared proposal never
+/// re-encodes. A fresh event is built by its own type and named by its
+/// [`LaterEventDescriptor`] if encoding fails.
+fn later_event_bytes<E: Serialize>(
+    prepared: Option<&PreparedLaterEvent>,
+    descriptor: &LaterEventDescriptor,
+    build: impl FnOnce() -> E,
 ) -> Result<String, TerminalFailure> {
-    if let Some(prepared) = &proposal.prepared {
+    if let Some(prepared) = prepared {
         return Ok(prepared.bytes.clone());
     }
-    let event = OccurrenceAppendedEvent {
-        envelope: event::Envelope::new(sequence, EventType::OccurrenceAppended, recorded_at),
-        occurrence: proposal.occurrence.clone(),
-    };
-    toml::to_string(&event).map_err(|error| {
+    toml::to_string(&build()).map_err(|error| {
         TerminalFailure::unsafe_failure(format!(
-            "occurrence append event could not be encoded: {error}"
+            "{} could not be encoded: {error}",
+            descriptor.encode_noun
         ))
-    })
-}
-
-fn early_review_event_bytes(
-    proposal: &EarlyReviewProposal,
-    sequence: i64,
-    recorded_at: RecordedInstant,
-) -> Result<String, TerminalFailure> {
-    if let Some(prepared) = &proposal.prepared {
-        return Ok(prepared.bytes.clone());
-    }
-    let event = EarlyReviewAuthorizedEvent {
-        envelope: event::Envelope::new(sequence, EventType::EarlyReviewAuthorized, recorded_at),
-        reason: proposal.reason.clone(),
-        review_appetite: proposal.review_appetite.clone(),
-        evidence: proposal.evidence.clone(),
-    };
-    toml::to_string(&event).map_err(|error| {
-        TerminalFailure::unsafe_failure(format!(
-            "early-review authorization event could not be encoded: {error}"
-        ))
-    })
-}
-
-fn decision_event_bytes(
-    proposal: &DecisionProposal,
-    sequence: i64,
-    recorded_at: RecordedInstant,
-) -> Result<String, TerminalFailure> {
-    if let Some(prepared) = &proposal.prepared {
-        return Ok(prepared.bytes.clone());
-    }
-    let event = ReuseDecisionAcceptedEvent {
-        envelope: event::Envelope::new(sequence, EventType::ReuseDecisionAccepted, recorded_at),
-        content: proposal.content.clone(),
-    };
-    toml::to_string(&event).map_err(|error| {
-        TerminalFailure::unsafe_failure(format!(
-            "accepted reuse decision event could not be encoded: {error}"
-        ))
-    })
-}
-
-fn verification_event_bytes(
-    proposal: &VerificationProposal,
-    sequence: i64,
-    recorded_at: RecordedInstant,
-) -> Result<String, TerminalFailure> {
-    if let Some(prepared) = &proposal.prepared {
-        return Ok(prepared.bytes.clone());
-    }
-    let event = VerificationRecordedEvent {
-        envelope: event::Envelope::new(sequence, EventType::VerificationRecorded, recorded_at),
-        content: proposal.content.clone(),
-    };
-    toml::to_string(&event).map_err(|error| {
-        TerminalFailure::unsafe_failure(format!("verification event could not be encoded: {error}"))
     })
 }
 
@@ -2579,7 +2543,7 @@ fn read_append_proposal(path: &Path) -> Result<AppendProposal, TerminalFailure> 
             validate_recorded_append(&event)?;
             AppendProposal {
                 occurrence: event.occurrence,
-                prepared: Some(PreparedAppend {
+                prepared: Some(PreparedLaterEvent {
                     sequence: event.envelope.sequence,
                     event_id: event.envelope.event_id,
                     bytes: text,
@@ -2643,7 +2607,7 @@ fn read_early_review_proposal(path: &Path) -> Result<EarlyReviewProposal, Termin
                 reason: event.reason,
                 review_appetite: event.review_appetite,
                 evidence: event.evidence,
-                prepared: Some(PreparedEarlyReview {
+                prepared: Some(PreparedLaterEvent {
                     sequence: event.envelope.sequence,
                     event_id: event.envelope.event_id,
                     bytes: text,
@@ -2686,7 +2650,7 @@ fn read_decision_proposal(path: &Path) -> Result<DecisionProposal, TerminalFailu
         },
         DecisionProposalDocument::Prepared(event) => {
             validate_recorded_decision(&event)?;
-            let prepared = PreparedDecision {
+            let prepared = PreparedLaterEvent {
                 sequence: event.envelope.sequence,
                 event_id: event.envelope.event_id,
                 bytes: text,
@@ -2727,7 +2691,7 @@ fn read_verification_proposal(path: &Path) -> Result<VerificationProposal, Termi
         },
         VerificationProposalDocument::Prepared(event) => {
             validate_recorded_verification(&event)?;
-            let prepared = PreparedVerification {
+            let prepared = PreparedLaterEvent {
                 sequence: event.envelope.sequence,
                 event_id: event.envelope.event_id,
                 bytes: text,
@@ -2967,34 +2931,6 @@ const OPENING_REFUSAL: event::EnvelopeRefusal<'static> = event::EnvelopeRefusal 
     preview_command: "case open --preview",
 };
 
-const APPEND_REFUSAL: event::EnvelopeRefusal<'static> = event::EnvelopeRefusal {
-    unsupported: "prepared append event is not a supported `occurrence_appended` event after revision 1",
-    noun: "append",
-    instant_name: "append",
-    preview_command: "case append --preview",
-};
-
-const EARLY_REVIEW_REFUSAL: event::EnvelopeRefusal<'static> = event::EnvelopeRefusal {
-    unsupported: "prepared early-review event is not a supported `early_review_authorized` event after revision 1",
-    noun: "early-review",
-    instant_name: "early-review authorization",
-    preview_command: "case override --preview",
-};
-
-const DECISION_REFUSAL: event::EnvelopeRefusal<'static> = event::EnvelopeRefusal {
-    unsupported: "prepared reuse decision event is not a supported later event",
-    noun: "reuse decision",
-    instant_name: "reuse decision",
-    preview_command: "case decide --preview",
-};
-
-const VERIFICATION_REFUSAL: event::EnvelopeRefusal<'static> = event::EnvelopeRefusal {
-    unsupported: "prepared verification event is not a supported later event",
-    noun: "verification",
-    instant_name: "verification",
-    preview_command: "case verify --preview",
-};
-
 fn validate_recorded_opening(event: &CaseOpenedEvent) -> Result<(), TerminalFailure> {
     event
         .envelope
@@ -3089,7 +3025,7 @@ fn validate_occurrence(
 fn validate_recorded_append(event: &OccurrenceAppendedEvent) -> Result<(), TerminalFailure> {
     event
         .envelope
-        .validate(EventType::OccurrenceAppended, &APPEND_REFUSAL)?;
+        .validate(EventType::OccurrenceAppended, &APPEND.envelope)?;
     validate_occurrence(&event.occurrence, 1, "occurrence.evidence")
 }
 
@@ -3098,14 +3034,14 @@ fn validate_recorded_early_review(
 ) -> Result<(), TerminalFailure> {
     event
         .envelope
-        .validate(EventType::EarlyReviewAuthorized, &EARLY_REVIEW_REFUSAL)?;
+        .validate(EventType::EarlyReviewAuthorized, &EARLY_REVIEW.envelope)?;
     validate_early_review_content(&event.reason, &event.review_appetite, &event.evidence)
 }
 
 fn validate_recorded_decision(event: &ReuseDecisionAcceptedEvent) -> Result<(), TerminalFailure> {
     event
         .envelope
-        .validate(EventType::ReuseDecisionAccepted, &DECISION_REFUSAL)?;
+        .validate(EventType::ReuseDecisionAccepted, &DECISION.envelope)?;
     validate_decision_content(&event.content)
 }
 
@@ -3114,7 +3050,7 @@ fn validate_recorded_verification(
 ) -> Result<(), TerminalFailure> {
     event
         .envelope
-        .validate(EventType::VerificationRecorded, &VERIFICATION_REFUSAL)?;
+        .validate(EventType::VerificationRecorded, &VERIFICATION.envelope)?;
     validate_verification_content(&event.content)
 }
 
@@ -3419,21 +3355,21 @@ mod tests {
     }
 
     fn append_refusal(case_id: Uuid, failure: publication::PublicationFailure) -> TerminalFailure {
-        APPEND_REFUSALS.publication_failure(case_id, failure)
+        APPEND.publication_failure(case_id, failure)
     }
 
     fn early_review_refusal(
         case_id: Uuid,
         failure: publication::PublicationFailure,
     ) -> TerminalFailure {
-        EARLY_REVIEW_REFUSALS.publication_failure(case_id, failure)
+        EARLY_REVIEW.publication_failure(case_id, failure)
     }
 
     fn decision_refusal(
         case_id: Uuid,
         failure: publication::PublicationFailure,
     ) -> TerminalFailure {
-        DECISION_REFUSALS.publication_failure(case_id, failure)
+        DECISION.publication_failure(case_id, failure)
     }
 
     fn fixture_case_id() -> Uuid {

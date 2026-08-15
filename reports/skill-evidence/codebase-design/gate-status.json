@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-10T15:47:43.409582084Z",
+  "generated_at": "2026-08-15T03:19:49.111640733Z",
   "target_content_hash": "5ae942c389ca86d6f232cc5ca5251ffb74a670900351671353e8c4387f98dd3a",
-  "qualifying_uses_on_current_hash": 3,
+  "qualifying_uses_on_current_hash": 4,
   "open_incident_ids": [
     "evt_31fefdb2-4446-49c3-bc3c-603bbbf6c8fc"
   ],
@@ -27,5 +27,5 @@
   "review_reentry_basis": null,
   "target_name": "codebase-design",
   "target_repo_relative_path": ".claude/skills/codebase-design",
-  "derivation_session_id": "019febe5-2a89-76b3-ad6d-3f5d8f0e4bba"
+  "derivation_session_id": "253754d8-48dc-4f73-9421-805405141c37"
 }

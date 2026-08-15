@@ -1,0 +1,1 @@
+- Premises verified against current authority.

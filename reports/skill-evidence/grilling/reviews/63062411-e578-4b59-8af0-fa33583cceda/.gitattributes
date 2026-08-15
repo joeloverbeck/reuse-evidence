@@ -1,0 +1,1 @@
+workspace-artifacts/**/tracked.patch -text -diff

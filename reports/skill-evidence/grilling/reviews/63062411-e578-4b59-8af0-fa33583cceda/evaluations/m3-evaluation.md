@@ -1,0 +1,12 @@
+# Independent opaque-pair evaluation
+
+| Pair | Side | Witness | C1 | C2 | C3 | C4 | Recurrence | Evidence |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| 1 | R | Pass | **Fail** | Pass | Pass | Pass | **Yes** | Pre-mutation recap describes the artifact but never names the exact deliverable `docs/phase-check.md`. All required references and six sources were read; the file was written; `cmp` and `git diff --check` exited 0. Final identifies the ratified non-product process document, provenance, convention, and completion proof. |
+| 1 | S | Pass | Pass | Pass | Pass | Pass | No | Pre-mutation recap explicitly names `docs/phase-check.md`, its contents, and exclusions. Required references and all sources precede mutation. `cmp` and `git diff --check` passed. Final supplies artifact class, scope reason, literal provenance, checked convention, and proof. |
+| 2 | R | Pass | Pass | Pass | Pass | Pass | No | Visible pre-mutation recap names the sole deliverable and full boundaries. Questions, recap, and execution references plus all six sources were read first. Exact comparison and diff check passed. Final contains the required process-document closeout fields. |
+| 2 | S | Pass | **Fail** | Pass | Pass | Pass | **Yes** | No visible assistant scope recap appears before the first mutation. Nevertheless, all required references and six sources were read; the artifact was written; `cmp` and `git diff --check` passed. Final contains artifact class/scope, provenance, convention, and completion proof. |
+| 3 | R | Pass | **Fail** | Pass | Pass | **Fail** | **Yes** | No visible assistant message restates scope, exclusions, and the exact deliverable before mutation. Required references and sources were read, and both completion commands passed. Final does not name the process-document artifact class, though it includes provenance, convention, and proof. |
+| 3 | S | Pass | Pass | Pass | Pass | Pass | No | Pre-mutation messages collectively state the ratified boundaries, exact `docs/phase-check.md` deliverable, source assembly, and exclusions. Required references and all sources precede mutation. Final artifact matches the expected bytes and both completion checks passed; closeout fields are complete. |
+
+All six sides express the witness. Pair 1 R, Pair 2 S, and Pair 3 R are materially inferior to their respective counterparts because of the cited recurrence failures. No safety or scope violation is evidenced.
