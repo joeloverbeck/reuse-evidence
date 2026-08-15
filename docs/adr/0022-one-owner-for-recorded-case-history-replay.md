@@ -5,6 +5,10 @@
 **Decision owner:** Repository maintainer  
 **Governing principles:** [`FOUNDATIONS.md`](../principles/FOUNDATIONS.md), [`CONSUMER-CONTRACT.md`](../principles/CONSUMER-CONTRACT.md)
 
+## Amendment
+
+On 2026-08-15, implementation review established that `validate_case_storage_path` inspects filesystem metadata and therefore is not pure. The decision owner accepted the corrected filesystem boundary below. This amendment changes no interface, validation placement, refusal ordering, or runtime behavior.
+
 ## Context
 
 `src/case/read.rs` does two jobs. Lines 1–537 answer the four query commands — `find`, `list`, `show`, `brief` — and hold the outcome values ADR 0017 left with them. Lines 538–1060 fold a case's recorded event stream into a `CaseRecord` and refuse every stream that violates ADR 0009's layout: sequence gaps, duplicated sequence numbers, a file name disagreeing with its recorded type, an event after a closed verification, a decision whose prefix is not review-ready. The two bands share exactly one value, `CaseRecord`, which the second builds and the first reads.
@@ -46,7 +50,7 @@ One internal module owns folding a case's recorded event stream into its derived
 
 - `case::replay` owns the fold and every refusal that rejects a recorded stream: the whole-set sequence check, per-event decoding, the envelope and file-identity checks, the prefix rules for a decision and a verification, and the post-closure rule.
 - It owns the value that fold establishes. `CaseRecord`, `CaseState`, `Conditions` and the internal `CaseEvent` move with it, because ADR 0017 already made `CaseRecord` a projection "whose invariants are established at parse time" and this is that parse. `case::read` and `case::render` reach `case::replay` one way; it reaches neither.
-- **It performs no filesystem access.** Its entry point is
+- **It performs no event-file reads and directly invokes no filesystem APIs.** Its entry point is
 
   ```rust
   pub(super) fn replay(
@@ -58,7 +62,7 @@ One internal module owns folding a case's recorded event stream into its derived
   ) -> Result<CaseRecord, TerminalFailure>
   ```
 
-  `case::read` keeps directory scanning, staged-temporary filtering and path sorting, and supplies the reader. Path validation stays inside `case::replay`, because `strip_prefix` and `validate_case_storage_path` are pure and their `unsafe_failure` is the one refusal no process boundary can state.
+  `case::read` keeps directory scanning, staged-temporary filtering and path sorting, and supplies the event-content reader. Path validation stays inside `case::replay`: `strip_prefix` is lexical, while the existing `case::validate_case_storage_path` remains owned by `src/case.rs` and inspects filesystem metadata. Replay therefore is not transitively filesystem-free. Keeping that call inside replay preserves the existing storage-path refusals and makes the steward-local `unsafe_failure` reachable in process without moving storage-path validation or changing refusal order.
 - **The reader is injected rather than the bytes passed.** Today the whole-set sequence check runs before any file is opened, and each event is then validated in ascending order. Eagerly loading the stream would hoist every I/O refusal ahead of the gap and duplicate refusals, so a stream carrying both faults would refuse differently. ADR 0016 does not authorize any change to refusal ordering, and injection preserves the current order exactly.
 - **It is asserted in process, inside the module.** ADR 0016 forbids widening any `pub(crate)`/`pub(super)` item to public API for test convenience, so `case::replay` is not reachable from `tests/`. Its instrument is a `#[cfg(test)]` module, the shape five modules in this crate already use.
 - The relocation is a path rename at 39 call sites — 38 in `src/case.rs`, one in `src/case/render.rs` — all caught by the compiler.
@@ -76,7 +80,7 @@ This authorizes a placement, an interface, and one relocation. It does **not** a
 
 ### Positive
 
-- Seven refusal classes that need a real directory today, including the `unsafe_failure` that no process boundary can distinguish, become assertable from a hand-built path set and an in-memory reader.
+- Seven refusal classes that need a real directory today, including the `unsafe_failure` that no process boundary can distinguish, become assertable from a hand-built path set and an in-memory event-content reader without creating fixture files. Existing storage-path validation may still inspect metadata for those paths.
 - The seven `expect()`s in the band are pinned by the validator that justifies each one, rather than by a distributed argument across five functions.
 - `src/case/read.rs` becomes one job: scan the directory, run the four queries, print through `case::render`.
 - `case::replay` is reached one way by both the query path and the writer path, the property ADR 0011 required of the naming owner and ADR 0017 of the renderer.
@@ -85,6 +89,7 @@ This authorizes a placement, an interface, and one relocation. It does **not** a
 ### Negative and risks
 
 - A third module under `case` now depends on `src/case.rs`'s validators, so the parent's fan-in grows even though its fan-out does not.
+- Event contents are injected, but storage-path validation remains a transitive filesystem dependency. In-process replay tests use absent hand-built paths and must keep those paths isolated from ambient files and symbolic links.
 - `replay` takes five parameters, one of them a closure. That is the price of stating the fold without owning the input.
 - The relocation of `CaseRecord`, `CaseState` and `Conditions` touches 39 sites across the writer path. Every one is compiler-checked, but ADR 0017 recorded that "a mechanical move across a compatibility surface is where a silent text change hides." The mitigation is that the companion in-process instrument lands first, so the validators are pinned before they move.
 - The `unsafe_failure` divergence ADR 0016 recorded and ADR 0018 partially resolved is made testable here, not resolved. Nothing about its meaning changes.
@@ -112,7 +117,7 @@ None. No recorded evidence changes, no receipt or refusal text changes, no refus
 
 ## Verification and review trigger
 
-The decision is fit if all seven remaining refusal classes above gain an in-process assertion built from a path set and an in-memory reader, with no temporary directory, and `cargo test` reports no change in any CLI suite.
+The decision is fit if all seven remaining refusal classes above gain an in-process assertion built from a path set and an in-memory event-content reader, with no temporary fixture directory, and `cargo test` reports no change in any CLI suite. This proves the event-content seam, not transitive filesystem independence.
 
 Falsify it if preserving the current refusal order requires the reader to know anything beyond a path, or if `case::replay` needs a value from `case::read` — either would mean the seam is not where this ADR draws it.
 

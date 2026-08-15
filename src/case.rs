@@ -6,6 +6,7 @@ mod naming;
 mod publication;
 mod read;
 mod render;
+mod replay;
 
 pub use instant::RecordedInstant;
 pub(crate) use naming::cases_root;
@@ -314,11 +315,11 @@ impl VerificationDisposition {
         }
     }
 
-    const fn state(self) -> read::CaseState {
+    const fn state(self) -> replay::CaseState {
         match self {
-            Self::Closed => read::CaseState::Closed,
-            Self::Parked => read::CaseState::Parked,
-            Self::Reopened => read::CaseState::Reopened,
+            Self::Closed => replay::CaseState::Closed,
+            Self::Parked => replay::CaseState::Parked,
+            Self::Reopened => replay::CaseState::Reopened,
         }
     }
 
@@ -529,12 +530,6 @@ struct VerificationRecordedEvent {
     content: VerificationContent,
 }
 
-impl publication::RevisionedCase for read::CaseRecord {
-    fn revision(&self) -> i64 {
-        self.revision
-    }
-}
-
 /// The complete observable result of opening or previewing a case.
 #[derive(Debug)]
 pub struct OpenOutcome {
@@ -564,7 +559,7 @@ pub struct LaterEventOutcome {
     case_id: Uuid,
     event_path: PathBuf,
     revision: i64,
-    state: Option<read::CaseState>,
+    state: Option<replay::CaseState>,
     privacy: ReportedPrivacy,
     notice: Option<&'static str>,
     event: String,
@@ -953,7 +948,7 @@ pub fn append(
             occurrence: proposal.occurrence.clone(),
         }
     })?;
-    let eligibility = |case: &read::CaseRecord, ()| {
+    let eligibility = |case: &replay::CaseRecord, ()| {
         validate_new_append(case, &proposal, &located.steward, location)
     };
     LaterEventExecution {
@@ -997,7 +992,7 @@ fn append_outcome(
     case_id: Uuid,
     event_path: PathBuf,
     revision: i64,
-    state: read::CaseState,
+    state: replay::CaseState,
     privacy: ReportedPrivacy,
     event: String,
 ) -> LaterEventOutcome {
@@ -1017,7 +1012,7 @@ fn append_outcome(
 fn append_retry_outcome(
     case_id: Uuid,
     event_path: PathBuf,
-    case: &read::CaseRecord,
+    case: &replay::CaseRecord,
     event: publication::ExistingEvent,
     steward: &marker::Marker,
     location: &portfolio::PortfolioLocation,
@@ -1098,13 +1093,13 @@ pub fn authorize_early_review(
             evidence: proposal.evidence.clone(),
         }
     })?;
-    let case_privacy = |case: &read::CaseRecord| -> Result<Visibility, TerminalFailure> {
+    let case_privacy = |case: &replay::CaseRecord| -> Result<Visibility, TerminalFailure> {
         let roots = portfolio::selected_roots(location)?;
         let privacy = derive_complete_case_privacy(case, &located.steward, &roots)?;
         validate_early_review_privacy(case, &located.steward, privacy)?;
         Ok(privacy)
     };
-    let eligibility = |case: &read::CaseRecord, privacy| {
+    let eligibility = |case: &replay::CaseRecord, privacy| {
         validate_new_early_review(case)?;
         Ok(privacy)
     };
@@ -1125,7 +1120,7 @@ pub fn authorize_early_review(
                 case_id,
                 event_path,
                 located.sequence,
-                read::CaseState::ReviewReadyByEarlyReviewOverride,
+                replay::CaseState::ReviewReadyByEarlyReviewOverride,
                 ReportedPrivacy::Derived(privacy),
                 event,
             )
@@ -1179,7 +1174,7 @@ pub fn decide(
             content: proposal.content.clone(),
         }
     })?;
-    let eligibility = |case: &read::CaseRecord, ()| -> Result<Visibility, TerminalFailure> {
+    let eligibility = |case: &replay::CaseRecord, ()| -> Result<Visibility, TerminalFailure> {
         validate_new_decision(case, &proposal)?;
         let roots = portfolio::selected_roots(location)?;
         let privacy = derive_complete_case_privacy(case, &located.steward, &roots)?;
@@ -1205,7 +1200,7 @@ pub fn decide(
                 located.sequence,
                 ReportedPrivacy::Derived(privacy),
                 DecisionReceiptFields {
-                    state: read::CaseState::AwaitingVerification,
+                    state: replay::CaseState::AwaitingVerification,
                     action: proposal.content.action,
                 },
                 event,
@@ -1262,7 +1257,7 @@ pub fn verify(
             content: proposal.content.clone(),
         }
     })?;
-    let eligibility = |case: &read::CaseRecord, ()| {
+    let eligibility = |case: &replay::CaseRecord, ()| {
         validate_verification_eligibility(case, &proposal, &located.steward, location)
     };
     LaterEventExecution {
@@ -1326,7 +1321,7 @@ fn fresh_verification_outcome(
 fn verification_retry_outcome(
     case_id: Uuid,
     event_path: PathBuf,
-    case: &read::CaseRecord,
+    case: &replay::CaseRecord,
     event: publication::ExistingEvent,
     steward: &marker::Marker,
     location: &portfolio::PortfolioLocation,
@@ -1346,7 +1341,7 @@ fn verification_retry_outcome(
 }
 
 fn validate_verification_eligibility(
-    case: &read::CaseRecord,
+    case: &replay::CaseRecord,
     proposal: &VerificationProposal,
     steward: &marker::Marker,
     location: &portfolio::PortfolioLocation,
@@ -1359,7 +1354,7 @@ fn validate_verification_eligibility(
 }
 
 fn validate_new_verification(
-    case: &read::CaseRecord,
+    case: &replay::CaseRecord,
     proposal: &VerificationProposal,
 ) -> Result<(), TerminalFailure> {
     validate_case_accepts_later_event(case)?;
@@ -1376,8 +1371,8 @@ fn validate_new_verification(
     validate_verification_against_decision(case.case_id, &proposal.content, &decision.content)
 }
 
-fn validate_case_accepts_later_event(case: &read::CaseRecord) -> Result<(), TerminalFailure> {
-    if case.state() == read::CaseState::Closed {
+fn validate_case_accepts_later_event(case: &replay::CaseRecord) -> Result<(), TerminalFailure> {
+    if case.state() == replay::CaseState::Closed {
         return Err(TerminalFailure::refusal(
             format!(
                 "case `{}` is closed and terminal in version 0.1",
@@ -1390,7 +1385,7 @@ fn validate_case_accepts_later_event(case: &read::CaseRecord) -> Result<(), Term
 }
 
 fn validate_verification_privacy(
-    case: &read::CaseRecord,
+    case: &replay::CaseRecord,
     steward: &marker::Marker,
     privacy: Visibility,
 ) -> Result<(), TerminalFailure> {
@@ -1418,7 +1413,7 @@ struct LocatedCase {
     repository_root: PathBuf,
     steward: marker::Marker,
     relative_case_directory: PathBuf,
-    case: read::CaseRecord,
+    case: replay::CaseRecord,
     /// The event type this command records, carried so the re-read under the publication lock
     /// cannot answer this command's refusals differently from this location.
     descriptor: &'static LaterEventDescriptor,
@@ -1491,17 +1486,17 @@ struct LaterEventExecution<'a> {
 impl LaterEventExecution<'_> {
     fn execute<B, V>(
         self,
-        before_revision: impl FnOnce(&read::CaseRecord) -> Result<B, TerminalFailure>,
-        after_revision: impl FnOnce(&read::CaseRecord, B) -> Result<V, TerminalFailure>,
+        before_revision: impl FnOnce(&replay::CaseRecord) -> Result<B, TerminalFailure>,
+        after_revision: impl FnOnce(&replay::CaseRecord, B) -> Result<V, TerminalFailure>,
         fresh_outcome: impl FnOnce(
             LaterEventEffect,
-            &read::CaseRecord,
+            &replay::CaseRecord,
             V,
             PathBuf,
             String,
         ) -> LaterEventOutcome,
         retry_outcome: impl FnOnce(
-            &read::CaseRecord,
+            &replay::CaseRecord,
             publication::ExistingEvent,
             PathBuf,
         ) -> LaterEventOutcome,
@@ -1586,7 +1581,7 @@ impl LaterEventExecution<'_> {
 
 #[derive(Clone, Copy)]
 struct DecisionReceiptFields {
-    state: read::CaseState,
+    state: replay::CaseState,
     action: DecisionAction,
 }
 
@@ -1620,7 +1615,7 @@ fn decision_outcome(
 fn decision_retry_outcome(
     case_id: Uuid,
     event_path: PathBuf,
-    case: &read::CaseRecord,
+    case: &replay::CaseRecord,
     event: publication::ExistingEvent,
     steward: &marker::Marker,
     location: &portfolio::PortfolioLocation,
@@ -1649,7 +1644,7 @@ const fn decision_notice(action: DecisionAction) -> &'static str {
 }
 
 fn validate_new_decision(
-    case: &read::CaseRecord,
+    case: &replay::CaseRecord,
     proposal: &DecisionProposal,
 ) -> Result<(), TerminalFailure> {
     validate_case_accepts_later_event(case)?;
@@ -1721,7 +1716,7 @@ fn validate_recorded_decision_participants(
 }
 
 fn validate_decision_privacy(
-    case: &read::CaseRecord,
+    case: &replay::CaseRecord,
     steward: &marker::Marker,
     privacy: Visibility,
 ) -> Result<(), TerminalFailure> {
@@ -1751,7 +1746,7 @@ fn early_review_outcome(
     case_id: Uuid,
     event_path: PathBuf,
     revision: i64,
-    state: read::CaseState,
+    state: replay::CaseState,
     privacy: ReportedPrivacy,
     event: String,
 ) -> LaterEventOutcome {
@@ -1771,7 +1766,7 @@ fn early_review_outcome(
 fn early_review_retry_outcome(
     case_id: Uuid,
     event_path: PathBuf,
-    case: &read::CaseRecord,
+    case: &replay::CaseRecord,
     event: publication::ExistingEvent,
     steward: &marker::Marker,
     location: &portfolio::PortfolioLocation,
@@ -1788,7 +1783,7 @@ fn early_review_retry_outcome(
 }
 
 fn validate_early_review_privacy(
-    case: &read::CaseRecord,
+    case: &replay::CaseRecord,
     steward: &marker::Marker,
     privacy: Visibility,
 ) -> Result<(), TerminalFailure> {
@@ -1808,7 +1803,7 @@ fn validate_early_review_privacy(
     Ok(())
 }
 
-fn validate_new_early_review(case: &read::CaseRecord) -> Result<(), TerminalFailure> {
+fn validate_new_early_review(case: &replay::CaseRecord) -> Result<(), TerminalFailure> {
     validate_case_accepts_later_event(case)?;
     if case.has_decision() {
         return Err(TerminalFailure::refusal(
@@ -1842,7 +1837,7 @@ fn validate_new_early_review(case: &read::CaseRecord) -> Result<(), TerminalFail
 }
 
 fn validate_new_append(
-    case: &read::CaseRecord,
+    case: &replay::CaseRecord,
     proposal: &AppendProposal,
     steward: &marker::Marker,
     location: &portfolio::PortfolioLocation,
@@ -1908,7 +1903,7 @@ fn validate_new_append(
 }
 
 fn derive_complete_case_privacy(
-    case: &read::CaseRecord,
+    case: &replay::CaseRecord,
     steward: &marker::Marker,
     roots: &[PathBuf],
 ) -> Result<Visibility, TerminalFailure> {
@@ -1921,7 +1916,7 @@ fn derive_complete_case_privacy(
 }
 
 fn complete_case_privacy(
-    case: &read::CaseRecord,
+    case: &replay::CaseRecord,
     steward_visibility: Visibility,
     participant_visibilities: impl IntoIterator<Item = Visibility>,
 ) -> Visibility {
@@ -1942,7 +1937,7 @@ fn complete_case_privacy(
 /// A no-write result reports underivable privacy rather than refusing. Every later event retry and
 /// the implementation-brief projection use the same consequence.
 fn reported_privacy(
-    case: &read::CaseRecord,
+    case: &replay::CaseRecord,
     steward: &marker::Marker,
     location: &portfolio::PortfolioLocation,
 ) -> ReportedPrivacy {

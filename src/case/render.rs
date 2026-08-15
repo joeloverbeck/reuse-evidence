@@ -13,9 +13,8 @@ use std::path::Path;
 
 use uuid::Uuid;
 
-use super::read::{
-    BriefOutcome, CaseRecord, CaseState, FindOutcome, ListOutcome, PortfolioCaseState, ShowOutcome,
-};
+use super::read::{BriefOutcome, FindOutcome, ListOutcome, PortfolioCaseState, ShowOutcome};
+use super::replay::{CaseRecord, CaseState};
 use super::{
     AuthorizedImplementation, DecisionAuthorization, DecisionContent, LaterEventEffect,
     LaterEventOutcome, OpenEffect, OpenOutcome, ReportedPrivacy,
@@ -522,7 +521,8 @@ mod tests {
     use crate::Visibility;
     use crate::case::event::Envelope;
     use crate::case::naming::EventType;
-    use crate::case::read::{Conditions, PortfolioCaseRecord};
+    use crate::case::read::PortfolioCaseRecord;
+    use crate::case::replay::Conditions;
     use crate::case::{
         AffectedConsumer, CASE_SCHEMA_VERSION, ConditionResult, ConsumerResult, DecisionAction,
         EarlyReviewAuthorizedEvent, EvidenceKind, EvidenceReference, ExistingPackageConsidered,
