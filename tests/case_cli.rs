@@ -86,6 +86,18 @@ fn run_in(repository: &Path, arguments: &[&str]) -> Output {
         .expect("compiled reuse-evidence binary should run")
 }
 
+fn assert_missing_case_argument_refusal(arguments: &[&str], expected_stderr: &str) {
+    let fixture = Fixture::new("missing-case-argument");
+    let refused = run_in(&fixture.root, arguments);
+
+    assert_eq!(refused.status.code(), Some(3), "{refused:?}");
+    assert!(refused.stdout.is_empty(), "{refused:?}");
+    assert_eq!(
+        String::from_utf8(refused.stderr).expect("stderr should be UTF-8"),
+        expected_stderr
+    );
+}
+
 fn run_without_portfolio_configuration(
     fixture: &Fixture,
     repository: &Path,
@@ -509,6 +521,66 @@ fn case_verify_missing_proposal_uses_the_refusal_terminal_contract() {
     assert_eq!(
         String::from_utf8(refused.stderr).expect("stderr should be UTF-8"),
         "refusal: missing required `--proposal`\nresolution: rerun with `case verify <CASE_ID> --proposal <PATH>`\n"
+    );
+}
+
+#[test]
+fn case_open_missing_proposal_uses_the_refusal_terminal_contract() {
+    assert_missing_case_argument_refusal(
+        &["case", "open"],
+        "refusal: missing required `--proposal`\nresolution: rerun with `case open --proposal <PATH>`\n",
+    );
+}
+
+#[test]
+fn case_append_missing_expected_revision_uses_the_refusal_terminal_contract() {
+    assert_missing_case_argument_refusal(
+        &["case", "append", CASE_ID, "--proposal", "proposal.toml"],
+        "refusal: missing required `--expected-revision`\nresolution: rerun with `case append <CASE_ID> --expected-revision <REVISION>`\n",
+    );
+}
+
+#[test]
+fn case_append_missing_proposal_uses_the_refusal_terminal_contract() {
+    assert_missing_case_argument_refusal(
+        &["case", "append", CASE_ID, "--expected-revision", "1"],
+        "refusal: missing required `--proposal`\nresolution: rerun with `case append <CASE_ID> --proposal <PATH>`\n",
+    );
+}
+
+#[test]
+fn case_override_missing_proposal_uses_the_refusal_terminal_contract() {
+    assert_missing_case_argument_refusal(
+        &["case", "override", CASE_ID, "--expected-revision", "1"],
+        "refusal: missing required `--proposal`\nresolution: rerun with `case override <CASE_ID> --proposal <PATH>`\n",
+    );
+}
+
+#[test]
+fn case_decide_missing_expected_revision_uses_the_refusal_terminal_contract() {
+    assert_missing_case_argument_refusal(
+        &["case", "decide", CASE_ID, "--proposal", "proposal.toml"],
+        &format!(
+            "refusal: missing required `--expected-revision`\nresolution: run `case show {CASE_ID}` to recover the current revision, then rerun `case decide {CASE_ID} --expected-revision <REVISION>`\n"
+        ),
+    );
+}
+
+#[test]
+fn case_decide_missing_proposal_uses_the_refusal_terminal_contract() {
+    assert_missing_case_argument_refusal(
+        &["case", "decide", CASE_ID, "--expected-revision", "1"],
+        "refusal: missing required `--proposal`\nresolution: rerun with `case decide <CASE_ID> --proposal <PATH>`\n",
+    );
+}
+
+#[test]
+fn case_verify_missing_expected_revision_uses_the_refusal_terminal_contract() {
+    assert_missing_case_argument_refusal(
+        &["case", "verify", CASE_ID, "--proposal", "proposal.toml"],
+        &format!(
+            "refusal: missing required `--expected-revision`\nresolution: run `case show {CASE_ID}` to recover the current revision, then rerun `case verify {CASE_ID} --expected-revision <REVISION>`\n"
+        ),
     );
 }
 
