@@ -101,6 +101,7 @@ A repository adopting the tool is responsible for:
 - preserving its stable repository identity;
 - reviewing cross-repository and public-disclosure consequences;
 - not hand-editing authoritative case history once a compiled writer exists;
+- not authoring its own skill packages under a package-name prefix the tool reserves for installed assets;
 - maintaining recoverable evidence references needed by open decisions;
 - implementing accepted changes through its own engineering authority;
 - and verifying consumer behavior rather than treating structural migration as success.

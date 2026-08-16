@@ -3,7 +3,8 @@
 **Status:** Accepted  
 **Date:** 2026-08-13  
 **Decision owner:** Repository maintainer  
-**Governing principles:** [`FOUNDATIONS.md`](../principles/FOUNDATIONS.md), [`CONSUMER-CONTRACT.md`](../principles/CONSUMER-CONTRACT.md), [`CAPABILITY-AND-WORKFLOW-BOUNDARIES.md`](../principles/CAPABILITY-AND-WORKFLOW-BOUNDARIES.md)
+**Governing principles:** [`FOUNDATIONS.md`](../principles/FOUNDATIONS.md), [`CONSUMER-CONTRACT.md`](../principles/CONSUMER-CONTRACT.md), [`CAPABILITY-AND-WORKFLOW-BOUNDARIES.md`](../principles/CAPABILITY-AND-WORKFLOW-BOUNDARIES.md)  
+**Amended:** 2026-08-16 by [ADR 0024](0024-what-the-installer-ships-once-the-set-grows.md), which replaces item 7's set of one with a membership rule — the reserved `reuse-evidence-` prefix — and decides the stale-asset detection item 7 deferred. It also extends item 6's "each installer owns only the names it ships" to detection across that prefix, with writes still confined to the names shipped. Items 1, 2, 3, 4, and 5 are unchanged, and item 4's `.claude/skills/reuse-evidence-*` subtree is carried forward as written.
 
 ## Context
 
