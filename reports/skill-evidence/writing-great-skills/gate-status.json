@@ -1,11 +1,26 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-13T05:18:23.285333921Z",
+  "generated_at": "2026-08-16T13:46:35.959131032Z",
   "target_content_hash": "19d0bf1f451256d66ffe46e6c1d7ead6c6c6f48c063c95fa32498f4bb1d2d82b",
-  "qualifying_uses_on_current_hash": 2,
-  "open_incident_ids": [],
-  "candidate_clusters": [],
-  "state": "closed",
+  "qualifying_uses_on_current_hash": 3,
+  "open_incident_ids": [
+    "evt_ff70d352-b445-4a26-982e-281061c36164",
+    "evt_64504d60-5424-42b9-844b-bafc0f1effa5",
+    "evt_2467b44f-6fd8-451c-bd3f-7f989fa9c40a"
+  ],
+  "candidate_clusters": [
+    {
+      "symptom_key": "output",
+      "open_event_ids": [
+        "evt_ff70d352-b445-4a26-982e-281061c36164",
+        "evt_64504d60-5424-42b9-844b-bafc0f1effa5",
+        "evt_2467b44f-6fd8-451c-bd3f-7f989fa9c40a"
+      ],
+      "independent_incidents": 1,
+      "max_severity": "material_failure"
+    }
+  ],
+  "state": "collecting",
   "authorized_workflow": null,
   "authorization_reason": null,
   "trigger_event_ids": [],
@@ -16,5 +31,5 @@
   "review_reentry_basis": null,
   "target_name": "writing-great-skills",
   "target_repo_relative_path": ".claude/skills/writing-great-skills",
-  "derivation_session_id": "019ff980-d1f5-7c12-a460-b106535ec7dd"
+  "derivation_session_id": "01a00a39-4c69-7a90-8bd8-63fa7bb9c73f"
 }

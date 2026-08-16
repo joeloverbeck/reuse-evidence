@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-16T07:49:36.516081508Z",
+  "generated_at": "2026-08-16T13:49:35.173074672Z",
   "target_content_hash": "58ee690ec479d13e9ff51567f4e57087f319ac7a1aca6511d61c8628f5e43fa6",
-  "qualifying_uses_on_current_hash": 30,
+  "qualifying_uses_on_current_hash": 31,
   "open_incident_ids": [
     "evt_32e7534e-2a65-478e-8c2e-c4a37dc46596",
     "evt_f39866ac-2585-4708-bc3b-096e3c721ef3",
@@ -21,7 +21,8 @@
     "evt_d1d08485-db09-400b-8956-4f951ccf5183",
     "evt_72762175-1000-48ae-ad01-d2124886011b",
     "evt_fb5e4bcd-bd6e-4c3a-9bc5-917e87720675",
-    "evt_cc804b59-71df-4322-a8e6-488b269edd93"
+    "evt_cc804b59-71df-4322-a8e6-488b269edd93",
+    "evt_5ff10c13-ff86-4537-bf6c-de5e38bf97c3"
   ],
   "candidate_clusters": [
     {
@@ -48,9 +49,10 @@
         "evt_d1d08485-db09-400b-8956-4f951ccf5183",
         "evt_72762175-1000-48ae-ad01-d2124886011b",
         "evt_fb5e4bcd-bd6e-4c3a-9bc5-917e87720675",
-        "evt_cc804b59-71df-4322-a8e6-488b269edd93"
+        "evt_cc804b59-71df-4322-a8e6-488b269edd93",
+        "evt_5ff10c13-ff86-4537-bf6c-de5e38bf97c3"
       ],
-      "independent_incidents": 6,
+      "independent_incidents": 7,
       "max_severity": "material_failure"
     },
     {
@@ -90,5 +92,5 @@
   "review_reentry_basis": "first_eligibility",
   "target_name": "code-review",
   "target_repo_relative_path": ".claude/skills/code-review",
-  "derivation_session_id": "2fe15730-1b37-4a26-979f-82915d22cb08"
+  "derivation_session_id": "01a00a39-4c69-7a90-8bd8-63fa7bb9c73f"
 }
