@@ -1,0 +1,7 @@
+interface:
+  display_name: "Reuse Evidence Review"
+  short_description: "Review a case and prepare its reuse decision"
+  default_prompt: "Use $reuse-evidence-review to review this named review-ready case and prepare an exact decision for my approval."
+
+policy:
+  allow_implicit_invocation: false
