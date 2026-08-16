@@ -5,6 +5,18 @@
 **Decision owner:** Repository maintainer  
 **Governing principles:** [`FOUNDATIONS.md`](../principles/FOUNDATIONS.md), [`EVIDENCE-AND-DECISIONS.md`](../principles/EVIDENCE-AND-DECISIONS.md), [`CAPABILITY-AND-WORKFLOW-BOUNDARIES.md`](../principles/CAPABILITY-AND-WORKFLOW-BOUNDARIES.md), [`CONSUMER-CONTRACT.md`](../principles/CONSUMER-CONTRACT.md), [`PORTFOLIO-PRIVACY-AND-STEWARDSHIP.md`](../principles/PORTFOLIO-PRIVACY-AND-STEWARDSHIP.md)
 
+## Amendment
+
+On 2026-08-16, the #46 fixture walkthrough drove one accepted decision on each branch of `EVIDENCE-AND-DECISIONS.md` §8's action list and found that neither this decision nor §8's field sentence accounts for the two actions that authorize no implementation. The implementation has always drawn that line, and its tests pin the refusal of implementation-shaped items on a no-implementation action — see `no_change_decision_carrying_any_implementation_item_refuses_without_writes` and `no_change_decision_records_no_implementation_items_and_authorizes_no_implementation` in `tests/case_cli.rs`. What the walkthrough changed is the record, not the behaviour.
+
+**Decision** item 1 below names four fields the decision event records beyond §8's. Three of them — the invariant contract, existing packages considered, and required consumer-level tests — describe an implementation that retain intentional duplication and wait for more evidence do not authorize. They are omitted for those two actions, together with §8's migration expectations and rollback or re-splitting path. Recording them was already refused: a `retain_intentional_duplication` proposal carrying `existing_packages_considered` refuses with *"reuse decision action authorizes no implementation but carries `existing_packages_considered`"*.
+
+Alternatives rejected is the exception and stays unconditional, because every accepted decision rejected something, and on a no-implementation branch the rejected alternatives are the whole substance of the decision. `validate_common_decision_content` rejects an empty `alternatives_rejected` before the action branch, so that requirement is branch-independent. Omitting the field entirely takes a different path: it carries no default, so the proposal fails untagged deserialization before `validate_decision_content` runs, and refuses without naming the field. Vocabulary validation does run earlier, on the raw text, which is why an unrecognized action or identity verdict is still named. No test pins that omission, and #48 owns it.
+
+Dependent authority updated with this amendment: `EVIDENCE-AND-DECISIONS.md` §8, which carries its own inline amendment note, and `CONTEXT.md`'s **Reuse decision** glossary entry. The repository's [root `README.md`](../../README.md) and the review skill's `decision-and-publication.md` reference already described the conditional split correctly and are unchanged.
+
+This amendment corrects the scope of item 1 and changes no interface, event schema, refusal ordering, or runtime behavior; the implementation already behaved this way. The decision owner accepted it. The **Context** paragraph below is left as written, recording what §8 said on 2026-08-10; where its paraphrase of §8's field list differs from this amendment, this amendment governs. Its count of eight recoverable brief contents is unaffected, because §10 scopes the brief to an accepted change decision.
+
 ## Context
 
 Nothing in this repository records a reuse decision. `src/case.rs` records three event types and `src/main.rs:58` exposes `open`, `append`, `override`, `list`, and `show`. The next slice records the fourth — the accepted decision — which `FOUNDATIONS.md` names as the project's primary outcome. Fixing its fields is therefore the first point at which the brief's home must be settled, because `CONSUMER-CONTRACT.md` §3 makes recorded evidence the hardest compatibility surface: a field added afterward takes a new schema version.
@@ -15,7 +27,7 @@ Two principles reach the brief and point in different directions.
 
 `FOUNDATIONS.md` §12 says to record only decision-bearing facts and to "generate routing, status, hashes, and projections mechanically where possible," and its prohibitions include "no hand-authored routing, provenance, status, or certification paperwork where it can be generated." `CONSUMER-CONTRACT.md` §2 requires derived projections to be rebuildable from authoritative state.
 
-The overlap is what makes this decidable rather than a matter of taste. `EVIDENCE-AND-DECISIONS.md` §8 requires the exact accepted decision to name its identity verdict, action, scope, non-responsibilities, affected consumers, compatibility consequences, migration expectations, rollback or re-splitting path, and verification conditions. Of §10's twelve brief contents, eight are already recoverable from those fields together with the case's opening event and recorded occurrences. Exactly four are not: the invariant contract, alternatives rejected, existing packages considered, and required consumer-level tests. Those four are also the reasons the accepted decision is that decision, which is what `EVIDENCE-AND-DECISIONS.md` §1 asks a case to preserve, and §9 already obliges review to examine plausible alternatives before recommending a new public crate.
+The overlap is what makes this decidable rather than a matter of taste. `EVIDENCE-AND-DECISIONS.md` §8 requires the exact accepted decision to name its identity verdict, action, scope, non-responsibilities, affected consumers, compatibility consequences, migration expectations, rollback or re-splitting path, and verification conditions. Amended 2026-08-16: §8 now makes migration expectations and the rollback or re-splitting path conditional on the action authorizing implementation; the count of eight below is unaffected. See **Amendment** above. Of §10's twelve brief contents, eight are already recoverable from those fields together with the case's opening event and recorded occurrences. Exactly four are not: the invariant contract, alternatives rejected, existing packages considered, and required consumer-level tests. Those four are also the reasons the accepted decision is that decision, which is what `EVIDENCE-AND-DECISIONS.md` §1 asks a case to preserve, and §9 already obliges review to examine plausible alternatives before recommending a new public crate.
 
 So an authored brief would restate eight recorded facts in a second artifact with nothing holding them aligned, in exchange for four facts that belong in the case anyway.
 
@@ -27,7 +39,7 @@ Privacy sharpens the same point. The brief is the artifact most likely to travel
 
 The accepted reuse decision is the single durable record. The implementation brief is derived from it and is never authored.
 
-1. The decision event records `EVIDENCE-AND-DECISIONS.md` §8's fields plus the four brief contents with no other home: the invariant contract, alternatives rejected, existing packages considered, and required consumer-level tests.
+1. The decision event records `EVIDENCE-AND-DECISIONS.md` §8's fields plus the four brief contents with no other home: the invariant contract, alternatives rejected, existing packages considered, and required consumer-level tests. Amended 2026-08-16: alternatives rejected is recorded by every accepted decision; the other three are omitted when the action authorizes no implementation. See **Amendment** above.
 2. The brief is a read-only projection over recorded case state, addressed by case identity so it can be produced in any later session. It writes nothing and commits nothing.
 3. No brief is hand-authored, committed as a separate document, or permitted to state anything not recoverable from recorded events.
 4. `CAPABILITY-AND-WORKFLOW-BOUNDARIES.md` §2 is satisfied by `reuse-evidence-review` producing that projection. §2 assigns the responsibility for the result; it does not select the mechanism, and this decision does not amend it.
@@ -46,14 +58,14 @@ This authorizes the brief's form and the decision event's coverage of it. It doe
 ### Positive
 
 - The brief cannot drift from the decision, because there is only one record.
-- The four otherwise-homeless brief contents become recorded case evidence, which is where `EVIDENCE-AND-DECISIONS.md` §1 and §9 already want them.
+- The four otherwise-homeless brief contents become recorded case evidence, which is where `EVIDENCE-AND-DECISIONS.md` §1 and §9 already want them. Amended 2026-08-16: three of the four are recorded only when the action authorizes implementation; alternatives rejected is recorded by every accepted decision. See **Amendment** above.
 - The brief inherits private dominance mechanically rather than by an author remembering it.
 - The handoff survives interruption. `design/v0.1-scope-and-acceptance.md` §4 requires the slice to resume from durable state, and a brief addressed by case identity satisfies that where a one-time output would not.
 - No new durable artifact class appears, so `FOUNDATIONS.md` §12 is honored rather than argued around.
 
 ### Negative and risks
 
-- The decision event becomes this project's largest event, and four of its fields are earned from principle text rather than from a completed real review. If a real decision leaves them empty, they were modeled too early.
+- The decision event becomes this project's largest event, and four of its fields are earned from principle text rather than from a completed real review. If a real decision leaves them empty, they were modeled too early. Amended 2026-08-16: on a no-implementation action three of the four are refused rather than left empty, so this test bears on change decisions; #46's first two real decisions filled every field their action permitted. See **Amendment** above.
 - A projection renders only what was recorded. A reviewer who needs to say something the fields do not hold must change the schema or say it outside the case.
 - One accepted decision per case keeps the projection unambiguous today. When reopen exists, the projection must name which accepted decision it renders. That is a later decision and is deliberately not prebuilt.
 - A reader of `CAPABILITY-AND-WORKFLOW-BOUNDARIES.md` §2 alone will still expect an authored document. Recording this is the mitigation.

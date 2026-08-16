@@ -168,7 +168,9 @@ Use orthogonal fields in the durable decision rather than one ever-growing statu
 - parked;
 - reopened.
 
-The exact accepted decision must also name scope, non-responsibilities, affected consumers, compatibility consequences, migration expectations, rollback or re-splitting path, and verification conditions.
+The exact accepted decision must also name scope, non-responsibilities, affected consumers, compatibility consequences, and verification conditions. A decision whose action authorizes implementation must additionally name its migration expectations and rollback or re-splitting path; retain intentional duplication and wait for more evidence omit both.
+
+Amended 2026-08-16. The #46 fixture walkthrough drove one accepted decision on each branch of the action list above and found that this sentence required migration expectations and a rollback or re-splitting path from decisions whose action authorizes neither. The compiled surface has always refused them there and `tests/case_cli.rs` pins it, so this records the existing rule rather than changing behaviour. The rest of this section is intact, and no field changes owner: ADR 0012 records the same carve-out for the three implementation-shaped fields it owns and remains the sole home of alternatives rejected, while `CONTEXT.md`'s **Reuse decision** entry carries the matching glossary correction. The decision owner accepted this amendment.
 
 ## 9. Existing dependencies
 
