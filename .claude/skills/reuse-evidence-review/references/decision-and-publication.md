@@ -92,7 +92,7 @@ expectation = "<first accepted migration consequence>"
 ## No-implementation proposal shape
 
 ```toml
-identity_verdict = "<different_responsibilities-or-insufficient_evidence>"
+identity_verdict = "<accepted-verdict>"
 action = "<retain_intentional_duplication-or-wait_for_more_evidence>"
 accepted_scope = "<scope of the intentional locality or deferral>"
 non_responsibilities = ["<claim this decision does not make>"]

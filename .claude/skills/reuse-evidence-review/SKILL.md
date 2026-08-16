@@ -29,6 +29,13 @@ compiled command. Never infer a root, scan outside those roots, or write portfol
   part of review.
 - Relay every compiled refusal verbatim and stop the affected branch. Never restate refused content
   as a proposal the human could approve.
+- At any step, if the existing compiled surface cannot express the required case query, staging
+  location, preview, publication, byte readback, or brief projection, name the exact missing contract
+  as a compiled-surface gap and stop before any further staging or case mutation. Preserve any
+  already-staged candidate exactly and create nothing else. Report `compiled-surface gap: <operation>
+  cannot provide <required contract>`, state which governing requirement needs that contract, and
+  raise the gap to the human before review can continue. Never invent a command, field, path, manual
+  write, or prose substitute.
 - Treat retaining intentional duplication, waiting for evidence, and splitting a wrong abstraction
   as successful decisions when the evidence supports them. Review readiness authorizes analysis,
   never extraction.
@@ -62,6 +69,8 @@ show`. Continue only when `state` is `review-ready`, `stale` is `false`, and
 `privacy_conflicted` is `false`. Otherwise report the exact derived condition and why it blocks a
 fresh decision: another state does not authorize review, stale or unknown participant conditions do
 not support a decision, and a privacy conflict prevents safe publication. Stop without staging.
+When the successful compiled output carries an unresolvable-participant condition or its explanatory
+footer, relay that complete condition and footer verbatim before explaining the stop.
 
 *Done when one healthy review-ready case is bound to its actual steward and its current privacy and
 privacy-conflict condition have been shown before any semantic analysis or write.*
