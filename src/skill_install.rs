@@ -1,16 +1,27 @@
 //! Installation of this project's own agent-skill packages.
 
+use std::collections::HashSet;
 use std::fmt::{self, Write as _};
 use std::fs;
-use std::path::Path;
-#[cfg(windows)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::{TerminalFailure, create_file_atomically, replace_file_atomically};
 
 struct ShippedFile {
     relative_path: &'static str,
     bytes: &'static [u8],
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct DiscoveryLink {
+    relative_path: String,
+    target: String,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct DiscoveryLinkOutcome {
+    link: DiscoveryLink,
+    action: DiscoveryLinkAction,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,36 +56,55 @@ const SHIPPED_FILES: &[ShippedFile] = &[
             "../.claude/skills/reuse-evidence-capture/references/prepared-proposals.md"
         ),
     },
+    ShippedFile {
+        relative_path: ".claude/skills/reuse-evidence-review/SKILL.md",
+        bytes: include_bytes!("../.claude/skills/reuse-evidence-review/SKILL.md"),
+    },
+    ShippedFile {
+        relative_path: ".claude/skills/reuse-evidence-review/agents/openai.yaml",
+        bytes: include_bytes!("../.claude/skills/reuse-evidence-review/agents/openai.yaml"),
+    },
+    ShippedFile {
+        relative_path: ".claude/skills/reuse-evidence-review/references/decision-and-publication.md",
+        bytes: include_bytes!(
+            "../.claude/skills/reuse-evidence-review/references/decision-and-publication.md"
+        ),
+    },
+    ShippedFile {
+        relative_path: ".claude/skills/reuse-evidence-review/references/package-research.md",
+        bytes: include_bytes!(
+            "../.claude/skills/reuse-evidence-review/references/package-research.md"
+        ),
+    },
+    ShippedFile {
+        relative_path: ".claude/skills/reuse-evidence-review/references/review-analysis.md",
+        bytes: include_bytes!(
+            "../.claude/skills/reuse-evidence-review/references/review-analysis.md"
+        ),
+    },
 ];
 
-const DISCOVERY_LINK: &str = ".agents/skills/reuse-evidence-capture";
-const DISCOVERY_TARGET: &str = "../../.claude/skills/reuse-evidence-capture";
-const SKILL_DIRECTORIES: &[&str] = &[
-    ".claude",
-    ".claude/skills",
-    ".claude/skills/reuse-evidence-capture",
-    ".claude/skills/reuse-evidence-capture/agents",
-    ".claude/skills/reuse-evidence-capture/references",
-];
-#[cfg(any(unix, windows))]
-const DISCOVERY_DIRECTORIES: &[&str] = &[".agents", ".agents/skills"];
+const SHIPPED_SKILL_PREFIX: &str = ".claude/skills/";
+const RESERVED_PACKAGE_PREFIX: &str = "reuse-evidence-";
 
 /// The observable result of installing this project's skill packages.
 #[derive(Debug, Eq, PartialEq)]
 pub struct SkillInstallOutcome {
     written: Vec<&'static str>,
     replaced: Vec<&'static str>,
-    discovery_link: DiscoveryLinkAction,
+    discovery_links: Vec<DiscoveryLinkOutcome>,
 }
 
 impl fmt::Display for SkillInstallOutcome {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.written.is_empty()
             && self.replaced.is_empty()
-            && matches!(
-                self.discovery_link,
-                DiscoveryLinkAction::Unchanged | DiscoveryLinkAction::Unsupported
-            )
+            && self.discovery_links.iter().all(|outcome| {
+                matches!(
+                    outcome.action,
+                    DiscoveryLinkAction::Unchanged | DiscoveryLinkAction::Unsupported
+                )
+            })
         {
             writeln!(formatter, "reuse-evidence skill packages already installed")?;
             writeln!(formatter, "nothing needed writing")?;
@@ -92,28 +122,66 @@ impl fmt::Display for SkillInstallOutcome {
                     writeln!(formatter, "- {path}")?;
                 }
             }
-            if self.discovery_link == DiscoveryLinkAction::Created {
+            let created = self
+                .discovery_links
+                .iter()
+                .filter(|outcome| outcome.action == DiscoveryLinkAction::Created)
+                .collect::<Vec<_>>();
+            if !created.is_empty() {
                 writeln!(formatter, "discovery links created:")?;
-                writeln!(formatter, "- {DISCOVERY_LINK} -> {DISCOVERY_TARGET}")?;
+                for outcome in created {
+                    writeln!(
+                        formatter,
+                        "- {} -> {}",
+                        outcome.link.relative_path, outcome.link.target
+                    )?;
+                }
             }
-            if self.discovery_link == DiscoveryLinkAction::Replaced {
+            let replaced = self
+                .discovery_links
+                .iter()
+                .filter(|outcome| outcome.action == DiscoveryLinkAction::Replaced)
+                .collect::<Vec<_>>();
+            if !replaced.is_empty() {
                 writeln!(formatter, "discovery links replaced:")?;
-                writeln!(formatter, "- {DISCOVERY_LINK} -> {DISCOVERY_TARGET}")?;
+                for outcome in replaced {
+                    writeln!(
+                        formatter,
+                        "- {} -> {}",
+                        outcome.link.relative_path, outcome.link.target
+                    )?;
+                }
             }
-            if self.discovery_link == DiscoveryLinkAction::RemovedUnsupported {
+            let removed = self
+                .discovery_links
+                .iter()
+                .filter(|outcome| outcome.action == DiscoveryLinkAction::RemovedUnsupported)
+                .collect::<Vec<_>>();
+            if !removed.is_empty() {
                 writeln!(formatter, "removed discovery paths:")?;
-                writeln!(formatter, "- {DISCOVERY_LINK}")?;
+                for outcome in removed {
+                    writeln!(formatter, "- {}", outcome.link.relative_path)?;
+                }
             }
         }
-        if matches!(
-            self.discovery_link,
-            DiscoveryLinkAction::Unsupported | DiscoveryLinkAction::RemovedUnsupported
-        ) {
+        let unsupported = self
+            .discovery_links
+            .iter()
+            .filter(|outcome| {
+                matches!(
+                    outcome.action,
+                    DiscoveryLinkAction::Unsupported | DiscoveryLinkAction::RemovedUnsupported
+                )
+            })
+            .collect::<Vec<_>>();
+        if !unsupported.is_empty() {
             writeln!(
                 formatter,
                 "discovery links not created: symbolic links are not supported on this platform"
             )?;
-            writeln!(formatter, "- {DISCOVERY_LINK}")?;
+            for outcome in unsupported {
+                writeln!(formatter, "- {}", outcome.link.relative_path)?;
+            }
         }
         Ok(())
     }
@@ -133,15 +201,48 @@ pub fn install_skills(
     validate_target_root(target_root)?;
     validate_installation_directories(target_root)?;
     let comparisons = compare_shipped_files(target_root)?;
-    let link_state = compare_discovery_link(target_root)?;
-    refuse_unapproved_or_unreplaceable(&comparisons, link_state, force)?;
+    let link_comparisons = compare_discovery_links(target_root)?;
+    let stale_paths = find_stale_paths(target_root)?;
+    refuse_unapproved_or_unreplaceable(&comparisons, &link_comparisons, &stale_paths, force)?;
     let (written, replaced) = write_shipped_files(target_root, comparisons)?;
-    let discovery_link = write_discovery_link(target_root, link_state)?;
+    let discovery_links = write_discovery_links(target_root, link_comparisons)?;
     Ok(SkillInstallOutcome {
         written,
         replaced,
-        discovery_link,
+        discovery_links,
     })
+}
+
+fn shipped_package_names() -> Vec<&'static str> {
+    let mut names = Vec::new();
+    for shipped in SHIPPED_FILES {
+        let package_and_file = shipped
+            .relative_path
+            .strip_prefix(SHIPPED_SKILL_PREFIX)
+            .expect("every shipped skill file must live under .claude/skills");
+        let package_name = package_and_file
+            .split_once('/')
+            .map(|(name, _)| name)
+            .expect("every shipped skill file must name a file inside its package");
+        assert!(
+            package_name.starts_with(RESERVED_PACKAGE_PREFIX),
+            "every shipped skill package must use the reserved reuse-evidence- prefix"
+        );
+        if !names.contains(&package_name) {
+            names.push(package_name);
+        }
+    }
+    names
+}
+
+fn shipped_discovery_links() -> Vec<DiscoveryLink> {
+    shipped_package_names()
+        .into_iter()
+        .map(|package_name| DiscoveryLink {
+            relative_path: format!(".agents/skills/{package_name}"),
+            target: format!("../../.claude/skills/{package_name}"),
+        })
+        .collect()
 }
 
 fn validate_target_root(target_root: &Path) -> Result<(), TerminalFailure> {
@@ -187,31 +288,53 @@ fn compare_shipped_files(
 
 fn refuse_unapproved_or_unreplaceable(
     comparisons: &[(&ShippedFile, InstalledState)],
-    link_state: InstalledState,
+    link_comparisons: &[(DiscoveryLink, InstalledState)],
+    stale_paths: &[String],
     force: bool,
 ) -> Result<(), TerminalFailure> {
-    let mut differing = comparisons
-        .iter()
-        .filter_map(|(shipped, state)| {
-            matches!(
-                state,
-                InstalledState::Differing | InstalledState::Unreplaceable
+    let differing = differing_paths(comparisons, link_comparisons);
+    let unreplaceable = unreplaceable_paths(comparisons, link_comparisons);
+    if !stale_paths.is_empty() {
+        let mut condition = if differing.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "installed reuse-evidence skill paths differ from the package this binary ships:\n- {}\n",
+                differing.join("\n- ")
             )
-            .then_some(shipped.relative_path)
-        })
-        .collect::<Vec<_>>();
-    if matches!(
-        link_state,
-        InstalledState::Differing | InstalledState::Unreplaceable
-    ) {
-        differing.push(DISCOVERY_LINK);
+        };
+        write!(
+            &mut condition,
+            "stale reuse-evidence skill paths are not shipped by this binary:\n- {}",
+            stale_paths.join("\n- ")
+        )
+        .expect("writing refusal text to a String cannot fail");
+        if !unreplaceable.is_empty() {
+            write!(
+                &mut condition,
+                "\npaths that cannot be replaced atomically:\n- {}",
+                unreplaceable.join("\n- ")
+            )
+            .expect("writing refusal text to a String cannot fail");
+        }
+        let mut resolution = "remove every stale path or move it outside the reserved `reuse-evidence-` package prefix".to_owned();
+        if !unreplaceable.is_empty() {
+            resolution.push_str(", and remove every path listed as unreplaceable");
+        }
+        if differing.is_empty() {
+            resolution.push_str(", then rerun `install-skills --root <ROOT>`");
+        } else {
+            resolution.push_str(
+                ", then rerun `install-skills --root <ROOT> --force` to replace every differing path",
+            );
+        }
+        return Err(TerminalFailure::refusal(condition, resolution));
     }
     if !differing.is_empty() && !force {
         let mut condition = format!(
             "installed reuse-evidence skill paths differ from the package this binary ships:\n- {}",
             differing.join("\n- ")
         );
-        let unreplaceable = unreplaceable_paths(comparisons, link_state);
         let resolution = if unreplaceable.is_empty() {
             "rerun with `install-skills --root <ROOT> --force` to replace every differing path"
                 .to_owned()
@@ -226,14 +349,38 @@ fn refuse_unapproved_or_unreplaceable(
         };
         return Err(TerminalFailure::refusal(condition, resolution));
     }
-    refuse_unreplaceable(comparisons, link_state)
+    refuse_unreplaceable(comparisons, link_comparisons)
+}
+
+fn differing_paths(
+    comparisons: &[(&ShippedFile, InstalledState)],
+    link_comparisons: &[(DiscoveryLink, InstalledState)],
+) -> Vec<String> {
+    let mut differing = Vec::new();
+    for (shipped, state) in comparisons {
+        if matches!(
+            state,
+            InstalledState::Differing | InstalledState::Unreplaceable
+        ) {
+            differing.push(shipped.relative_path.to_owned());
+        }
+    }
+    for (link, state) in link_comparisons {
+        if matches!(
+            state,
+            InstalledState::Differing | InstalledState::Unreplaceable
+        ) {
+            differing.push(link.relative_path.clone());
+        }
+    }
+    differing
 }
 
 fn refuse_unreplaceable(
     comparisons: &[(&ShippedFile, InstalledState)],
-    link_state: InstalledState,
+    link_comparisons: &[(DiscoveryLink, InstalledState)],
 ) -> Result<(), TerminalFailure> {
-    let unreplaceable = unreplaceable_paths(comparisons, link_state);
+    let unreplaceable = unreplaceable_paths(comparisons, link_comparisons);
     if unreplaceable.is_empty() {
         return Ok(());
     }
@@ -248,16 +395,18 @@ fn refuse_unreplaceable(
 
 fn unreplaceable_paths(
     comparisons: &[(&ShippedFile, InstalledState)],
-    link_state: InstalledState,
-) -> Vec<&'static str> {
-    let mut unreplaceable = comparisons
-        .iter()
-        .filter_map(|(shipped, state)| {
-            (*state == InstalledState::Unreplaceable).then_some(shipped.relative_path)
-        })
-        .collect::<Vec<_>>();
-    if link_state == InstalledState::Unreplaceable {
-        unreplaceable.push(DISCOVERY_LINK);
+    link_comparisons: &[(DiscoveryLink, InstalledState)],
+) -> Vec<String> {
+    let mut unreplaceable = Vec::new();
+    for (shipped, state) in comparisons {
+        if *state == InstalledState::Unreplaceable {
+            unreplaceable.push(shipped.relative_path.to_owned());
+        }
+    }
+    for (link, state) in link_comparisons {
+        if *state == InstalledState::Unreplaceable {
+            unreplaceable.push(link.relative_path.clone());
+        }
     }
     unreplaceable
 }
@@ -306,33 +455,226 @@ fn write_shipped_files(
     Ok((written, replaced))
 }
 
-fn write_discovery_link(
+fn write_discovery_links(
     target_root: &Path,
-    link_state: InstalledState,
-) -> Result<DiscoveryLinkAction, TerminalFailure> {
-    Ok(match link_state {
-        InstalledState::Missing => {
-            if install_discovery_link(target_root)? {
-                DiscoveryLinkAction::Created
-            } else {
-                DiscoveryLinkAction::Unsupported
-            }
+    comparisons: Vec<(DiscoveryLink, InstalledState)>,
+) -> Result<Vec<DiscoveryLinkOutcome>, TerminalFailure> {
+    comparisons
+        .into_iter()
+        .map(|(link, state)| {
+            let action = match state {
+                InstalledState::Missing => {
+                    if install_discovery_link(target_root, &link)? {
+                        DiscoveryLinkAction::Created
+                    } else {
+                        DiscoveryLinkAction::Unsupported
+                    }
+                }
+                InstalledState::Matching => DiscoveryLinkAction::Unchanged,
+                InstalledState::Differing => replace_discovery_link(target_root, &link)?,
+                InstalledState::Unreplaceable => {
+                    unreachable!("unreplaceable paths refuse before the write pass")
+                }
+            };
+            Ok(DiscoveryLinkOutcome { link, action })
+        })
+        .collect()
+}
+
+fn installation_directories() -> Vec<PathBuf> {
+    let mut directories = Vec::new();
+    for shipped in SHIPPED_FILES {
+        let parent = Path::new(shipped.relative_path)
+            .parent()
+            .expect("every shipped skill file must have a parent directory");
+        push_directory_prefixes(&mut directories, parent);
+    }
+    #[cfg(any(unix, windows))]
+    for link in shipped_discovery_links() {
+        let parent = Path::new(&link.relative_path)
+            .parent()
+            .expect("every discovery link must have a parent directory");
+        push_directory_prefixes(&mut directories, parent);
+    }
+    directories
+}
+
+fn push_directory_prefixes(directories: &mut Vec<PathBuf>, path: &Path) {
+    let mut prefix = PathBuf::new();
+    for component in path.components() {
+        prefix.push(component);
+        if !directories.contains(&prefix) {
+            directories.push(prefix.clone());
         }
-        InstalledState::Matching => DiscoveryLinkAction::Unchanged,
-        InstalledState::Differing => replace_discovery_link(target_root)?,
-        InstalledState::Unreplaceable => {
-            unreachable!("unreplaceable paths refuse before the write pass")
+    }
+}
+
+fn compare_discovery_links(
+    target_root: &Path,
+) -> Result<Vec<(DiscoveryLink, InstalledState)>, TerminalFailure> {
+    shipped_discovery_links()
+        .into_iter()
+        .map(|link| compare_discovery_link(target_root, &link).map(|state| (link, state)))
+        .collect()
+}
+
+fn find_stale_paths(target_root: &Path) -> Result<Vec<String>, TerminalFailure> {
+    let shipped_paths = shipped_paths();
+    let mut stale_paths = Vec::new();
+    collect_reserved_entries(
+        target_root,
+        Path::new(".claude/skills"),
+        &shipped_paths,
+        &mut stale_paths,
+    )?;
+    collect_reserved_entries(
+        target_root,
+        Path::new(".agents/skills"),
+        &shipped_paths,
+        &mut stale_paths,
+    )?;
+    Ok(stale_paths)
+}
+
+fn shipped_paths() -> HashSet<PathBuf> {
+    let mut paths = HashSet::new();
+    for shipped in SHIPPED_FILES {
+        let relative_path = Path::new(shipped.relative_path);
+        paths.insert(relative_path.to_path_buf());
+        for ancestor in relative_path
+            .parent()
+            .expect("every shipped skill file must have a parent directory")
+            .ancestors()
+        {
+            paths.insert(ancestor.to_path_buf());
         }
+    }
+    for link in shipped_discovery_links() {
+        paths.insert(PathBuf::from(link.relative_path));
+    }
+    paths
+}
+
+fn collect_reserved_entries(
+    target_root: &Path,
+    relative_directory: &Path,
+    shipped_paths: &HashSet<PathBuf>,
+    stale_paths: &mut Vec<String>,
+) -> Result<(), TerminalFailure> {
+    let directory = target_root.join(relative_directory);
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(reserved_inspection_failure("directory", &directory, &error));
+        }
+    };
+    let mut entries = entries
+        .map(|entry| {
+            entry.map_err(|error| reserved_inspection_failure("directory", &directory, &error))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(fs::DirEntry::file_name);
+    for entry in entries {
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(RESERVED_PACKAGE_PREFIX)
+        {
+            collect_reserved_path(target_root, &entry.path(), shipped_paths, stale_paths)?;
+        }
+    }
+    Ok(())
+}
+
+fn collect_reserved_path(
+    target_root: &Path,
+    path: &Path,
+    shipped_paths: &HashSet<PathBuf>,
+    stale_paths: &mut Vec<String>,
+) -> Result<(), TerminalFailure> {
+    let relative_path = path.strip_prefix(target_root).map_err(|error| {
+        TerminalFailure::unsafe_failure(format!(
+            "reserved skill path `{}` is not beneath target root `{}`: {error}",
+            path.display(),
+            target_root.display()
+        ))
+    })?;
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| reserved_inspection_failure("path", path, &error))?;
+    if !shipped_paths.contains(relative_path) && !is_installer_temporary(relative_path, &metadata) {
+        stale_paths.push(render_relative_path(relative_path));
+    }
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        let mut children = fs::read_dir(path)
+            .map_err(|error| reserved_inspection_failure("directory", path, &error))?
+            .map(|entry| {
+                entry.map_err(|error| reserved_inspection_failure("directory", path, &error))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        children.sort_by_key(fs::DirEntry::file_name);
+        for child in children {
+            collect_reserved_path(target_root, &child.path(), shipped_paths, stale_paths)?;
+        }
+    }
+    Ok(())
+}
+
+fn reserved_inspection_failure(
+    path_kind: &str,
+    path: &Path,
+    error: &std::io::Error,
+) -> TerminalFailure {
+    TerminalFailure::refusal(
+        format!(
+            "reserved skill {path_kind} `{}` cannot be inspected: {error}",
+            path.display()
+        ),
+        "make every reserved reuse-evidence skill path inspectable, then rerun `install-skills --root <ROOT>`",
+    )
+}
+
+fn is_installer_temporary(relative_path: &Path, metadata: &fs::Metadata) -> bool {
+    if !metadata.is_file() {
+        return false;
+    }
+    let Some(candidate_name) = relative_path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    SHIPPED_FILES.iter().any(|shipped| {
+        let destination = Path::new(shipped.relative_path);
+        if relative_path.parent() != destination.parent() {
+            return false;
+        }
+        let destination_name = destination
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("every shipped skill file must have a UTF-8 file name");
+        let prefix = format!(".{destination_name}.");
+        let Some(identifier) = candidate_name
+            .strip_prefix(&prefix)
+            .and_then(|rest| rest.strip_suffix(".tmp"))
+        else {
+            return false;
+        };
+        uuid::Uuid::parse_str(identifier).is_ok_and(|id| {
+            id.get_version_num() == 4
+                && id.get_variant() == uuid::Variant::RFC4122
+                && id.to_string() == identifier
+        })
     })
 }
 
+fn render_relative_path(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 fn validate_installation_directories(target_root: &Path) -> Result<(), TerminalFailure> {
-    for relative in SKILL_DIRECTORIES
-        .iter()
-        .copied()
-        .chain(discovery_directories())
-    {
-        let directory = target_root.join(relative);
+    for relative in installation_directories() {
+        let directory = target_root.join(&relative);
         match fs::symlink_metadata(&directory) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(TerminalFailure::refusal(
@@ -366,16 +708,6 @@ fn validate_installation_directories(target_root: &Path) -> Result<(), TerminalF
         }
     }
     Ok(())
-}
-
-#[cfg(any(unix, windows))]
-fn discovery_directories() -> impl Iterator<Item = &'static str> {
-    DISCOVERY_DIRECTORIES.iter().copied()
-}
-
-#[cfg(not(any(unix, windows)))]
-fn discovery_directories() -> impl Iterator<Item = &'static str> {
-    std::iter::empty()
 }
 
 fn compare_file(path: &Path, shipped_bytes: &[u8]) -> Result<InstalledState, TerminalFailure> {
@@ -417,10 +749,13 @@ fn compare_file(path: &Path, shipped_bytes: &[u8]) -> Result<InstalledState, Ter
 }
 
 #[cfg(any(unix, windows))]
-fn compare_discovery_link(target_root: &Path) -> Result<InstalledState, TerminalFailure> {
-    let link = target_root.join(DISCOVERY_LINK);
+fn compare_discovery_link(
+    target_root: &Path,
+    shipped_link: &DiscoveryLink,
+) -> Result<InstalledState, TerminalFailure> {
+    let link = target_root.join(&shipped_link.relative_path);
     match fs::read_link(&link) {
-        Ok(target) if target == Path::new(DISCOVERY_TARGET) => Ok(InstalledState::Matching),
+        Ok(target) if target == Path::new(&shipped_link.target) => Ok(InstalledState::Matching),
         Ok(_) => Ok(InstalledState::Differing),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(InstalledState::Missing),
         Err(error) if read_link_reported_non_link(&error) => match fs::symlink_metadata(&link) {
@@ -431,7 +766,7 @@ fn compare_discovery_link(target_root: &Path) -> Result<InstalledState, Terminal
                 }
                 #[cfg(windows)]
                 {
-                    compare_discovery_regular_file(target_root, &link)
+                    compare_discovery_regular_file(target_root, &link, shipped_link)
                 }
             }
             Ok(_) => Ok(InstalledState::Unreplaceable),
@@ -457,6 +792,7 @@ fn compare_discovery_link(target_root: &Path) -> Result<InstalledState, Terminal
 fn compare_discovery_regular_file(
     target_root: &Path,
     link: &Path,
+    shipped_link: &DiscoveryLink,
 ) -> Result<InstalledState, TerminalFailure> {
     let bytes = fs::read(link).map_err(|error| {
         TerminalFailure::refusal(
@@ -468,8 +804,8 @@ fn compare_discovery_regular_file(
         )
     })?;
     Ok(
-        if bytes == DISCOVERY_TARGET.as_bytes()
-            && git_index_records_symlink(target_root, DISCOVERY_LINK.as_bytes())
+        if bytes == shipped_link.target.as_bytes()
+            && git_index_records_symlink(target_root, shipped_link.relative_path.as_bytes())
         {
             InstalledState::Matching
         } else {
@@ -601,13 +937,19 @@ fn read_link_reported_non_link(error: &std::io::Error) -> bool {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn compare_discovery_link(_target_root: &Path) -> Result<InstalledState, TerminalFailure> {
+fn compare_discovery_link(
+    _target_root: &Path,
+    _shipped_link: &DiscoveryLink,
+) -> Result<InstalledState, TerminalFailure> {
     Ok(InstalledState::Missing)
 }
 
 #[cfg(any(unix, windows))]
-fn install_discovery_link(target_root: &Path) -> Result<bool, TerminalFailure> {
-    let link = target_root.join(DISCOVERY_LINK);
+fn install_discovery_link(
+    target_root: &Path,
+    shipped_link: &DiscoveryLink,
+) -> Result<bool, TerminalFailure> {
+    let link = target_root.join(&shipped_link.relative_path);
     let parent = link
         .parent()
         .expect("the discovery link has a parent directory");
@@ -617,7 +959,7 @@ fn install_discovery_link(target_root: &Path) -> Result<bool, TerminalFailure> {
             parent.display()
         ))
     })?;
-    match create_directory_symlink(Path::new(DISCOVERY_TARGET), &link) {
+    match create_directory_symlink(Path::new(&shipped_link.target), &link) {
         Ok(()) => Ok(true),
         Err(error) if symlinks_unavailable(&error) => Ok(false),
         Err(error) => Err(TerminalFailure::unsafe_failure(format!(
@@ -628,10 +970,13 @@ fn install_discovery_link(target_root: &Path) -> Result<bool, TerminalFailure> {
 }
 
 #[cfg(any(unix, windows))]
-fn replace_discovery_link(target_root: &Path) -> Result<DiscoveryLinkAction, TerminalFailure> {
-    let link = target_root.join(DISCOVERY_LINK);
+fn replace_discovery_link(
+    target_root: &Path,
+    shipped_link: &DiscoveryLink,
+) -> Result<DiscoveryLinkAction, TerminalFailure> {
+    let link = target_root.join(&shipped_link.relative_path);
     let temporary = crate::temporary_path_for(&link);
-    if let Err(error) = create_directory_symlink(Path::new(DISCOVERY_TARGET), &temporary) {
+    if let Err(error) = create_directory_symlink(Path::new(&shipped_link.target), &temporary) {
         if symlinks_unavailable(&error) {
             remove_discovery_obstruction(&link).map_err(|remove_error| {
                 TerminalFailure::unsafe_failure(format!(
@@ -646,7 +991,8 @@ fn replace_discovery_link(target_root: &Path) -> Result<DiscoveryLinkAction, Ter
             link.display()
         )));
     }
-    let result = publish_prepared_discovery_link(&temporary, &link);
+    let result =
+        publish_prepared_discovery_link(&temporary, &link, Path::new(&shipped_link.target));
     if let Err(error) = result {
         remove_temporary_discovery_link(&temporary);
         return Err(TerminalFailure::unsafe_failure(format!(
@@ -658,12 +1004,18 @@ fn replace_discovery_link(target_root: &Path) -> Result<DiscoveryLinkAction, Ter
 }
 
 #[cfg(not(any(unix, windows)))]
-fn install_discovery_link(_target_root: &Path) -> Result<bool, TerminalFailure> {
+fn install_discovery_link(
+    _target_root: &Path,
+    _shipped_link: &DiscoveryLink,
+) -> Result<bool, TerminalFailure> {
     Ok(false)
 }
 
 #[cfg(not(any(unix, windows)))]
-fn replace_discovery_link(_target_root: &Path) -> Result<DiscoveryLinkAction, TerminalFailure> {
+fn replace_discovery_link(
+    _target_root: &Path,
+    _shipped_link: &DiscoveryLink,
+) -> Result<DiscoveryLinkAction, TerminalFailure> {
     Ok(DiscoveryLinkAction::Unsupported)
 }
 
@@ -724,12 +1076,20 @@ fn remove_discovery_obstruction(path: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(unix)]
-fn publish_prepared_discovery_link(temporary: &Path, link: &Path) -> std::io::Result<()> {
+fn publish_prepared_discovery_link(
+    temporary: &Path,
+    link: &Path,
+    _target: &Path,
+) -> std::io::Result<()> {
     fs::rename(temporary, link).and_then(|()| crate::sync_parent(link))
 }
 
 #[cfg(windows)]
-fn publish_prepared_discovery_link(temporary: &Path, link: &Path) -> std::io::Result<()> {
+fn publish_prepared_discovery_link(
+    temporary: &Path,
+    link: &Path,
+    target: &Path,
+) -> std::io::Result<()> {
     fs::remove_dir(temporary)
         .or_else(|_| fs::remove_file(temporary))
         .map_err(|error| {
@@ -744,7 +1104,7 @@ fn publish_prepared_discovery_link(temporary: &Path, link: &Path) -> std::io::Re
             format!("could not remove existing discovery path: {error}"),
         )
     })?;
-    create_directory_symlink(Path::new(DISCOVERY_TARGET), link).map_err(|error| {
+    create_directory_symlink(target, link).map_err(|error| {
         std::io::Error::new(
             error.kind(),
             format!("could not create replacement link: {error}"),

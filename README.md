@@ -12,7 +12,7 @@ The project is deliberately not a clone detector and not an automatic refactorin
 
 The public Rust crate and standalone `reuse-evidence` binary can enroll a Git repository, including an npm workspace with no Cargo project. Enrollment writes a human-readable version 1 TOML marker at the nearest repository root, safely revalidates an existing marker without minting another identity, and uses the binary's shared success, unsafe-failure, and refusal exit meanings.
 
-Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, unsupported or unreadable markers, and new, moved, unavailable, visibility-changed, or identity-substituted repositories. The staging-directory command names the guarded user-local directory where prepared proposals belong without creating it. The case command can preview and atomically open a steward-local case from two or more evidenced occurrences, append a later occurrence against an expected revision, record a human early-review override on a watching case, record the exact accepted decision on a review-ready case, project that decision's implementation brief, record verification with a closed, parked, or reopened disposition, find cases across the enrolled portfolio, list every case stewarded by the current repository, and show one case's complete evidence record with freshly derived lifecycle, privacy-conflict, and staleness conditions. The binary installs the project-owned `reuse-evidence-capture` package through `install-skills`; it also mounts the published `skill-evidence` lifecycle under `reuse-evidence skills` and this repository commits the four upstream operator packages that subtree installs. This repository now carries the explicit-only `reuse-evidence-review` proposal-authoring package, but `install-skills` does not ship it yet; `reuse-evidence-discover` and `reuse-evidence-status` are not implemented.
+Enrollment refuses implicit visibility, ecosystem-identity, or repository-identity conflicts and refuses malformed, truncated, or unsupported-version markers without rewriting them. Declared visibility can be changed only through the dedicated `set-visibility` command. The portfolio command freshly scans configured roots for marked Git repositories and reports current enrollment, duplicate identities, unsupported or unreadable markers, and new, moved, unavailable, visibility-changed, or identity-substituted repositories. The staging-directory command names the guarded user-local directory where prepared proposals belong without creating it. The case command can preview and atomically open a steward-local case from two or more evidenced occurrences, append a later occurrence against an expected revision, record a human early-review override on a watching case, record the exact accepted decision on a review-ready case, project that decision's implementation brief, record verification with a closed, parked, or reopened disposition, find cases across the enrolled portfolio, list every case stewarded by the current repository, and show one case's complete evidence record with freshly derived lifecycle, privacy-conflict, and staleness conditions. The binary installs the project-owned `reuse-evidence-capture` and `reuse-evidence-review` packages through `install-skills`; it also mounts the published `skill-evidence` lifecycle under `reuse-evidence skills` and this repository commits the four upstream operator packages that subtree installs. `reuse-evidence-discover` and `reuse-evidence-status` are not implemented.
 
 The selected delivery constraints are:
 
@@ -373,13 +373,13 @@ A current public steward with recorded-private case evidence or any currently pr
 
 ## Install project-owned skills
 
-Install the project-owned capture package into an explicitly named target repository:
+Install the project-owned skill packages into an explicitly named target repository:
 
 ```console
 reuse-evidence install-skills --root /path/to/repository
 ```
 
-The command writes the package's three real files under `.claude/skills/reuse-evidence-capture/` and, on platforms with ordinary symbolic-link support, creates `.agents/skills/reuse-evidence-capture` with the relative target `../../.claude/skills/reuse-evidence-capture`. Every written path is reported on stdout. Platforms without that link support still install the real files and report that no discovery link was created.
+The shipped set is every project-authored package under `.claude/skills/` whose name begins `reuse-evidence-`. It currently contains `reuse-evidence-capture` and `reuse-evidence-review`. The command writes every package's real files and, on platforms with ordinary symbolic-link support, creates one same-named discovery link under `.agents/skills/`, relative to its own directory as `../../.claude/skills/<package-name>`. Every written path is reported on stdout. Platforms without that link support still install the real files and report every discovery link not created.
 
 An unchanged installation is a write-free success, including when the target is this repository itself. If any installed file or owned discovery-link path differs, a non-force run names the complete conflict set on stderr, exits with status `3`, and writes nothing. Replacement requires the explicit second step:
 
@@ -387,7 +387,9 @@ An unchanged installation is a write-free success, including when the target is 
 reuse-evidence install-skills --root /path/to/repository --force
 ```
 
-The installer embeds the package directly from this repository's `.claude/skills/` source and has no asset mirror. It requires no enrollment marker, creates none, reads no portfolio or user-local configuration, takes no lock, creates no cache or index, performs no network access, and touches neither upstream operator-package names nor their discovery links.
+`--force` replaces only differing paths the binary still ships. A path under the reserved `reuse-evidence-` package prefix that the running binary does not ship is stale, including a retired package, its discovery path, or an orphaned file inside a current package. Any stale path refuses the whole install even under `--force`, is named exactly, and is never removed; delete it or move it outside the reserved prefix before retrying.
+
+The installer embeds both packages directly from this repository's `.claude/skills/` source and has no asset mirror. It requires no enrollment marker, creates none, reads no portfolio or user-local configuration, takes no lock, creates no cache or index, performs no network access, and touches neither upstream operator-package names nor their discovery links.
 
 ## Skill governance
 

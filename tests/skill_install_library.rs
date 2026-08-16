@@ -1,7 +1,7 @@
 //! In-process coverage for installing this project's own skill packages.
 //!
-//! GitHub #34 and ADR 0016 assign installer behavior to the public library
-//! interface. The process boundary receives one separate test for argv
+//! GitHub #34, GitHub #45, and ADR 0016 assign installer behavior to the public
+//! library interface. The process boundary receives one separate test for argv
 //! dispatch, exit status, and stream routing.
 
 mod support;
@@ -13,21 +13,9 @@ use std::path::{Path, PathBuf};
 use reuse_evidence::{ExitMeaning, install_skills};
 use support::TempRoot;
 
-const SHIPPED_FILES: &[(&str, &[u8])] = &[
-    (
-        ".claude/skills/reuse-evidence-capture/SKILL.md",
-        include_bytes!("../.claude/skills/reuse-evidence-capture/SKILL.md"),
-    ),
-    (
-        ".claude/skills/reuse-evidence-capture/agents/openai.yaml",
-        include_bytes!("../.claude/skills/reuse-evidence-capture/agents/openai.yaml"),
-    ),
-    (
-        ".claude/skills/reuse-evidence-capture/references/prepared-proposals.md",
-        include_bytes!("../.claude/skills/reuse-evidence-capture/references/prepared-proposals.md"),
-    ),
-];
-
+const CAPTURE_SKILL: &str = ".claude/skills/reuse-evidence-capture/SKILL.md";
+const REVIEW_SKILL: &str = ".claude/skills/reuse-evidence-review/SKILL.md";
+const REVIEW_ANALYSIS: &str = ".claude/skills/reuse-evidence-review/references/review-analysis.md";
 const DISCOVERY_LINK: &str = ".agents/skills/reuse-evidence-capture";
 const DISCOVERY_TARGET: &str = "../../.claude/skills/reuse-evidence-capture";
 
@@ -57,9 +45,10 @@ fn a_missing_target_root_refuses_without_writing() {
 }
 
 #[test]
-fn a_fresh_install_writes_the_shipped_package_and_relative_discovery_link_only() {
+fn a_fresh_install_writes_every_shipped_package_and_relative_discovery_link_only() {
     let fixture = TempRoot::new("skill-install-fresh");
     let repository = support::git_repository(&fixture, "target");
+    let shipped_files = shipped_files_at(Path::new(env!("CARGO_MANIFEST_DIR")));
     let upstream_file = repository.join(".claude/skills/skill-evidence-capture/SKILL.md");
     fs::create_dir_all(
         upstream_file
@@ -84,7 +73,7 @@ fn a_fresh_install_writes_the_shipped_package_and_relative_discovery_link_only()
     let outcome = install_skills(&repository, false)
         .expect("a fresh target repository should accept the shipped package");
 
-    for (relative_path, shipped_bytes) in SHIPPED_FILES {
+    for (relative_path, shipped_bytes) in &shipped_files {
         let installed = repository.join(relative_path);
         assert!(
             installed.is_file(),
@@ -96,8 +85,13 @@ fn a_fresh_install_writes_the_shipped_package_and_relative_discovery_link_only()
             "installed {relative_path} should be byte-identical to the shipped source"
         );
     }
+    assert_eq!(
+        shipped_files_at(&repository),
+        shipped_files,
+        "the installed reserved-prefix file set must exactly match the live source tree"
+    );
     let mut expected = String::from("installed reuse-evidence skill packages\nwritten:\n");
-    for (relative_path, _) in SHIPPED_FILES {
+    for (relative_path, _) in &shipped_files {
         writeln!(&mut expected, "- {relative_path}")
             .expect("writing expected receipt text to a String cannot fail");
     }
@@ -143,8 +137,8 @@ fn a_non_force_install_names_every_differing_file_and_writes_nothing() {
     let fixture = TempRoot::new("skill-install-conflicts");
     let repository = support::git_repository(&fixture, "target");
     install_skills(&repository, false).expect("the fixture should install once");
-    let first_conflict = SHIPPED_FILES[0].0;
-    let second_conflict = SHIPPED_FILES[2].0;
+    let first_conflict = CAPTURE_SKILL;
+    let second_conflict = REVIEW_ANALYSIS;
     fs::write(repository.join(first_conflict), b"local capture edit\n")
         .expect("the first installed file should be editable");
     fs::write(
@@ -196,8 +190,8 @@ fn force_replaces_modified_files_and_restores_missing_files_explicitly() {
     let fixture = TempRoot::new("skill-install-force");
     let repository = support::git_repository(&fixture, "target");
     install_skills(&repository, false).expect("the fixture should install once");
-    let modified = SHIPPED_FILES[0].0;
-    let missing = SHIPPED_FILES[2].0;
+    let modified = CAPTURE_SKILL;
+    let missing = REVIEW_ANALYSIS;
     fs::write(repository.join(modified), b"local capture edit\n")
         .expect("the installed file should be editable");
     fs::remove_file(repository.join(missing)).expect("the installed file should be removable");
@@ -211,11 +205,11 @@ fn force_replaces_modified_files_and_restores_missing_files_explicitly() {
             "installed reuse-evidence skill packages\nwritten:\n- {missing}\nreplaced:\n- {modified}\n"
         )
     );
-    for (relative_path, shipped_bytes) in SHIPPED_FILES {
+    for (relative_path, shipped_bytes) in shipped_files_at(Path::new(env!("CARGO_MANIFEST_DIR"))) {
         assert_eq!(
-            fs::read(repository.join(relative_path))
+            fs::read(repository.join(&relative_path))
                 .expect("every installed file should be readable after force"),
-            *shipped_bytes,
+            shipped_bytes,
             "force should leave {relative_path} byte-identical to the shipped source"
         );
     }
@@ -225,6 +219,116 @@ fn force_replaces_modified_files_and_restores_missing_files_explicitly() {
             .expect("a correct discovery link should remain readable"),
         PathBuf::from(DISCOVERY_TARGET),
         "force should leave a correct discovery link alone and unreported"
+    );
+}
+
+#[test]
+fn stale_retired_assets_refuse_the_whole_set_even_under_force() {
+    let fixture = TempRoot::new("skill-install-stale-retired-package");
+    let repository = support::git_repository(&fixture, "target");
+    install_skills(&repository, false).expect("the fixture should install once");
+    let differing = REVIEW_SKILL;
+    fs::write(repository.join(differing), b"local review edit\n")
+        .expect("a shipped review file should be editable");
+    let stale_package = ".claude/skills/reuse-evidence-retired";
+    let stale_file = ".claude/skills/reuse-evidence-retired/SKILL.md";
+    fs::create_dir(repository.join(stale_package))
+        .expect("the retired package directory should be creatable");
+    fs::write(repository.join(stale_file), b"retired instructions\n")
+        .expect("the retired skill should be writable");
+    let stale_orphan = ".claude/skills/reuse-evidence-review/references/retired-guidance.md";
+    fs::write(repository.join(stale_orphan), b"orphaned review guidance\n")
+        .expect("an orphaned file inside a current package should be writable");
+    let stale_link = ".agents/skills/reuse-evidence-retired";
+    fs::write(repository.join(stale_link), b"retired discovery path\n")
+        .expect("the retired discovery path should be writable");
+    let before = support::snapshot(&repository);
+
+    let Err(failure) = install_skills(&repository, true) else {
+        panic!("force must not replace current files while stale paths remain");
+    };
+
+    assert_eq!(failure.meaning(), ExitMeaning::Refusal, "{failure}");
+    assert_eq!(
+        failure.to_string(),
+        format!(
+            "refusal: installed reuse-evidence skill paths differ from the package this binary ships:\n- {differing}\nstale reuse-evidence skill paths are not shipped by this binary:\n- {stale_package}\n- {stale_file}\n- {stale_orphan}\n- {stale_link}\nresolution: remove every stale path or move it outside the reserved `reuse-evidence-` package prefix, then rerun `install-skills --root <ROOT> --force` to replace every differing path"
+        )
+    );
+    assert_eq!(
+        support::snapshot(&repository),
+        before,
+        "stale-path refusal must preserve current, retired, and unrelated bytes"
+    );
+}
+
+#[test]
+fn an_owned_leftover_temporary_is_ignored_and_never_swept() {
+    let fixture = TempRoot::new("skill-install-leftover-temporary");
+    let repository = support::git_repository(&fixture, "target");
+    install_skills(&repository, false).expect("the fixture should install once");
+    let temporary = repository.join(
+        ".claude/skills/reuse-evidence-review/references/.review-analysis.md.00000000-0000-4000-8000-000000000000.tmp",
+    );
+    fs::write(&temporary, b"interrupted staged bytes\n")
+        .expect("a leftover installer temporary should be writable");
+    let before = support::snapshot(&repository);
+
+    let outcome = install_skills(&repository, false)
+        .expect("an installer-owned leftover temporary must not be classified as stale");
+
+    assert_eq!(
+        outcome.to_string(),
+        "reuse-evidence skill packages already installed\nnothing needed writing\n"
+    );
+    assert_eq!(
+        support::snapshot(&repository),
+        before,
+        "a later run must neither report nor sweep an interrupted temporary"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_temporary_exemption_requires_a_regular_file_and_the_exact_generated_name() {
+    let fixture = TempRoot::new("skill-install-temporary-exemption-boundary");
+    let repository = support::git_repository(&fixture, "target");
+    install_skills(&repository, false).expect("the fixture should install once");
+    let canonical_symlink = ".claude/skills/reuse-evidence-review/references/.review-analysis.md.00000000-0000-4000-8000-000000000000.tmp";
+    std::os::unix::fs::symlink(
+        "not-an-installer-temporary",
+        repository.join(canonical_symlink),
+    )
+    .expect("a symlink with the temporary name should be creatable");
+    let non_rfc4122_file = ".claude/skills/reuse-evidence-review/references/.review-analysis.md.00000000-0000-4000-0000-000000000000.tmp";
+    fs::write(
+        repository.join(non_rfc4122_file),
+        b"UUID variant the installer cannot generate\n",
+    )
+    .expect("a non-RFC4122 UUID should be writable");
+    let noncanonical_file = ".claude/skills/reuse-evidence-review/references/.review-analysis.md.00000000000040008000000000000000.tmp";
+    fs::write(
+        repository.join(noncanonical_file),
+        b"noncanonical temporary name\n",
+    )
+    .expect("a noncanonical UUID spelling should be writable");
+    let before = support::snapshot(&repository);
+
+    let Err(failure) = install_skills(&repository, false) else {
+        panic!("only exact installer-owned staged files may bypass stale-path refusal");
+    };
+
+    assert_eq!(failure.meaning(), ExitMeaning::Refusal, "{failure}");
+    assert_eq!(
+        failure.to_string(),
+        format!(
+            "refusal: stale reuse-evidence skill paths are not shipped by this binary:\n- {non_rfc4122_file}\n- {canonical_symlink}\n- {noncanonical_file}\nresolution: remove every stale path or move it outside the reserved `reuse-evidence-` package prefix, then rerun `install-skills --root <ROOT>`"
+        )
+    );
+    assert_eq!(
+        support::snapshot(&repository),
+        before,
+        "the stale-path refusal must preserve both false temporary lookalikes"
     );
 }
 
@@ -324,8 +428,8 @@ fn force_refuses_unreplaceable_installed_paths_before_replacing_other_files() {
     let fixture = TempRoot::new("skill-install-unreplaceable-path");
     let repository = support::git_repository(&fixture, "target");
     install_skills(&repository, false).expect("the fixture should install once");
-    let replaceable = SHIPPED_FILES[0].0;
-    let unreplaceable = SHIPPED_FILES[2].0;
+    let replaceable = CAPTURE_SKILL;
+    let unreplaceable = REVIEW_ANALYSIS;
     fs::write(repository.join(replaceable), b"local capture edit\n")
         .expect("the replaceable installed file should be editable");
     fs::remove_file(repository.join(unreplaceable))
@@ -357,8 +461,8 @@ fn non_force_unreplaceable_refusal_names_an_effective_resolution() {
     let fixture = TempRoot::new("skill-install-unreplaceable-non-force");
     let repository = support::git_repository(&fixture, "target");
     install_skills(&repository, false).expect("the fixture should install once");
-    let replaceable = SHIPPED_FILES[0].0;
-    let unreplaceable = SHIPPED_FILES[2].0;
+    let replaceable = CAPTURE_SKILL;
+    let unreplaceable = REVIEW_ANALYSIS;
     fs::write(repository.join(replaceable), b"local capture edit\n")
         .expect("the replaceable installed file should be editable");
     fs::remove_file(repository.join(unreplaceable))
@@ -617,11 +721,23 @@ fn windows_untracked_exact_target_regular_file_is_a_conflict() {
 fn assert_unchanged_install_is_a_no_op(case: &str, repository: &Path) {
     let before = support::snapshot(repository);
     #[cfg(unix)]
-    let link_before = fs::read_link(repository.join(DISCOVERY_LINK)).unwrap_or_else(|error| {
-        panic!("{case}: correct discovery link should be readable: {error}")
-    });
+    let links_before = shipped_discovery_links()
+        .into_iter()
+        .map(|(link, _)| {
+            let target = fs::read_link(repository.join(&link)).unwrap_or_else(|error| {
+                panic!("{case}: correct discovery link {link} should be readable: {error}")
+            });
+            (link, target)
+        })
+        .collect::<Vec<_>>();
     #[cfg(windows)]
-    let link_before = fs::read_link(repository.join(DISCOVERY_LINK)).ok();
+    let links_before = shipped_discovery_links()
+        .into_iter()
+        .map(|(link, _)| {
+            let target = fs::read_link(repository.join(&link)).ok();
+            (link, target)
+        })
+        .collect::<Vec<_>>();
 
     let outcome = install_skills(repository, false)
         .unwrap_or_else(|error| panic!("{case}: an unchanged install should succeed: {error}"));
@@ -630,17 +746,38 @@ fn assert_unchanged_install_is_a_no_op(case: &str, repository: &Path) {
     let expected =
         String::from("reuse-evidence skill packages already installed\nnothing needed writing\n");
     #[cfg(windows)]
-    let expected = if link_before.is_some() {
+    let unsupported_links = shipped_discovery_links()
+        .into_iter()
+        .filter_map(|(link, _)| {
+            fs::symlink_metadata(repository.join(&link))
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+                .then_some(link)
+        })
+        .collect::<Vec<_>>();
+    #[cfg(windows)]
+    let expected = if unsupported_links.is_empty() {
         String::from("reuse-evidence skill packages already installed\nnothing needed writing\n")
     } else {
-        format!(
-            "reuse-evidence skill packages already installed\nnothing needed writing\ndiscovery links not created: symbolic links are not supported on this platform\n- {DISCOVERY_LINK}\n"
-        )
+        let mut expected = String::from(
+            "reuse-evidence skill packages already installed\nnothing needed writing\ndiscovery links not created: symbolic links are not supported on this platform\n",
+        );
+        for link in unsupported_links {
+            writeln!(&mut expected, "- {link}")
+                .expect("writing expected receipt text to a String cannot fail");
+        }
+        expected
     };
     #[cfg(not(any(unix, windows)))]
-    let expected = String::from(
-        "reuse-evidence skill packages already installed\nnothing needed writing\ndiscovery links not created: symbolic links are not supported on this platform\n- .agents/skills/reuse-evidence-capture\n",
-    );
+    let expected = {
+        let mut expected = String::from(
+            "reuse-evidence skill packages already installed\nnothing needed writing\ndiscovery links not created: symbolic links are not supported on this platform\n",
+        );
+        for (link, _) in shipped_discovery_links() {
+            writeln!(&mut expected, "- {link}")
+                .expect("writing expected receipt text to a String cannot fail");
+        }
+        expected
+    };
     assert_eq!(outcome.to_string(), expected, "{case}");
     assert_eq!(
         support::snapshot(repository),
@@ -648,71 +785,93 @@ fn assert_unchanged_install_is_a_no_op(case: &str, repository: &Path) {
         "{case}: no-op installation must preserve every file byte"
     );
     #[cfg(unix)]
-    assert_eq!(
-        fs::read_link(repository.join(DISCOVERY_LINK)).unwrap_or_else(|error| panic!(
-            "{case}: discovery link should remain readable: {error}"
-        )),
-        link_before,
-        "{case}: a correct discovery link must be left alone"
-    );
-    #[cfg(windows)]
-    if let Some(link_before) = link_before {
+    for (link, target_before) in links_before {
         assert_eq!(
-            fs::read_link(repository.join(DISCOVERY_LINK)).unwrap_or_else(|error| panic!(
-                "{case}: discovery link should remain readable: {error}"
+            fs::read_link(repository.join(&link)).unwrap_or_else(|error| panic!(
+                "{case}: discovery link {link} should remain readable: {error}"
             )),
-            link_before,
-            "{case}: a correct discovery link must be left alone"
+            target_before,
+            "{case}: every correct discovery link must be left alone"
         );
+    }
+    #[cfg(windows)]
+    for (link, target_before) in links_before {
+        if let Some(target_before) = target_before {
+            assert_eq!(
+                fs::read_link(repository.join(&link)).unwrap_or_else(|error| panic!(
+                    "{case}: discovery link {link} should remain readable: {error}"
+                )),
+                target_before,
+                "{case}: every correct discovery link must be left alone"
+            );
+        }
     }
 }
 
 #[cfg(unix)]
 fn assert_fresh_discovery_link_and_extend_receipt(repository: &Path, expected: &mut String) {
-    assert_eq!(
-        fs::read_link(repository.join(DISCOVERY_LINK))
-            .expect("the installed package should have a discovery link"),
-        PathBuf::from(DISCOVERY_TARGET),
-        "the discovery target should be relative to its own directory"
-    );
-    writeln!(
-        expected,
-        "discovery links created:\n- {DISCOVERY_LINK} -> {DISCOVERY_TARGET}"
-    )
-    .expect("writing expected receipt text to a String cannot fail");
+    writeln!(expected, "discovery links created:")
+        .expect("writing expected receipt text to a String cannot fail");
+    for (link, target) in shipped_discovery_links() {
+        assert_eq!(
+            fs::read_link(repository.join(&link))
+                .expect("each installed package should have a discovery link"),
+            PathBuf::from(&target),
+            "each discovery target should be relative to its own directory"
+        );
+        writeln!(expected, "- {link} -> {target}")
+            .expect("writing expected receipt text to a String cannot fail");
+    }
 }
 
 #[cfg(windows)]
 fn assert_fresh_discovery_link_and_extend_receipt(repository: &Path, expected: &mut String) {
-    match fs::read_link(repository.join(DISCOVERY_LINK)) {
-        Ok(target) => {
-            assert_eq!(target, PathBuf::from(DISCOVERY_TARGET));
-            writeln!(
-                expected,
-                "discovery links created:\n- {DISCOVERY_LINK} -> {DISCOVERY_TARGET}"
-            )
+    let links_supported = fs::read_link(repository.join(DISCOVERY_LINK)).is_ok();
+    if links_supported {
+        writeln!(expected, "discovery links created:")
             .expect("writing expected receipt text to a String cannot fail");
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => writeln!(
+    } else {
+        writeln!(
             expected,
-            "discovery links not created: symbolic links are not supported on this platform\n- {DISCOVERY_LINK}"
+            "discovery links not created: symbolic links are not supported on this platform"
         )
-        .expect("writing expected receipt text to a String cannot fail"),
-        Err(error) => panic!("the Windows discovery path should be a link or absent: {error}"),
+        .expect("writing expected receipt text to a String cannot fail");
+    }
+    for (link, target) in shipped_discovery_links() {
+        if links_supported {
+            assert_eq!(
+                fs::read_link(repository.join(&link))
+                    .expect("each installed package should have a discovery link"),
+                PathBuf::from(&target)
+            );
+            writeln!(expected, "- {link} -> {target}")
+                .expect("writing expected receipt text to a String cannot fail");
+        } else {
+            assert!(
+                !repository.join(&link).exists(),
+                "a Windows target without symlink support should use the real files alone"
+            );
+            writeln!(expected, "- {link}")
+                .expect("writing expected receipt text to a String cannot fail");
+        }
     }
 }
 
 #[cfg(not(any(unix, windows)))]
 fn assert_fresh_discovery_link_and_extend_receipt(repository: &Path, expected: &mut String) {
-    assert!(
-        !repository.join(DISCOVERY_LINK).exists(),
-        "a platform without ordinary directory symlinks should use the real files alone"
-    );
     writeln!(
         expected,
-        "discovery links not created: symbolic links are not supported on this platform\n- {DISCOVERY_LINK}"
+        "discovery links not created: symbolic links are not supported on this platform"
     )
     .expect("writing expected receipt text to a String cannot fail");
+    for (link, _) in shipped_discovery_links() {
+        assert!(
+            !repository.join(&link).exists(),
+            "a platform without ordinary directory symlinks should use the real files alone"
+        );
+        writeln!(expected, "- {link}")
+            .expect("writing expected receipt text to a String cannot fail");
+    }
 }
 
 #[cfg(unix)]
@@ -768,10 +927,93 @@ fn windows_temp_root(name: &str) -> TempRoot {
 
 #[cfg(windows)]
 fn write_matching_shipped_files(repository: &Path) {
-    for (relative, bytes) in SHIPPED_FILES {
+    for (relative, bytes) in shipped_files_at(Path::new(env!("CARGO_MANIFEST_DIR"))) {
         let path = repository.join(relative);
         fs::create_dir_all(path.parent().expect("a shipped file should have a parent"))
             .expect("the shipped file parent should be creatable");
         fs::write(path, bytes).expect("the shipped fixture bytes should be writable");
+    }
+}
+
+fn shipped_discovery_links() -> Vec<(String, String)> {
+    let mut package_names = Vec::<String>::new();
+    for (relative_path, _) in shipped_files_at(Path::new(env!("CARGO_MANIFEST_DIR"))) {
+        let package_and_file = relative_path
+            .strip_prefix(".claude/skills/")
+            .expect("a shipped source file must live under .claude/skills");
+        let package_name = package_and_file
+            .split_once('/')
+            .map(|(name, _)| name)
+            .expect("a shipped source file must live inside a package");
+        if !package_names.iter().any(|name| name == package_name) {
+            package_names.push(package_name.to_owned());
+        }
+    }
+    package_names
+        .into_iter()
+        .map(|package_name| {
+            (
+                format!(".agents/skills/{package_name}"),
+                format!("../../.claude/skills/{package_name}"),
+            )
+        })
+        .collect()
+}
+
+fn shipped_files_at(root: &Path) -> Vec<(String, Vec<u8>)> {
+    let skills_root = root.join(".claude/skills");
+    let mut packages = fs::read_dir(&skills_root)
+        .unwrap_or_else(|error| panic!("{} should be readable: {error}", skills_root.display()))
+        .map(|entry| entry.expect("a skill package entry should be readable"))
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("reuse-evidence-")
+        })
+        .collect::<Vec<_>>();
+    packages.sort_by_key(fs::DirEntry::file_name);
+    let mut files = Vec::new();
+    for package in packages {
+        collect_shipped_files(root, &package.path(), &mut files);
+    }
+    files
+}
+
+fn collect_shipped_files(root: &Path, path: &Path, files: &mut Vec<(String, Vec<u8>)>) {
+    let metadata = fs::symlink_metadata(path)
+        .unwrap_or_else(|error| panic!("{} should be inspectable: {error}", path.display()));
+    assert!(
+        !metadata.file_type().is_symlink(),
+        "shipped package source paths must be real files and directories: {}",
+        path.display()
+    );
+    if metadata.is_file() {
+        let relative = path
+            .strip_prefix(root)
+            .expect("a shipped path should remain beneath its root")
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        files.push((
+            relative,
+            fs::read(path)
+                .unwrap_or_else(|error| panic!("{} should be readable: {error}", path.display())),
+        ));
+        return;
+    }
+    assert!(
+        metadata.is_dir(),
+        "{} should be a file or directory",
+        path.display()
+    );
+    let mut entries = fs::read_dir(path)
+        .unwrap_or_else(|error| panic!("{} should be readable: {error}", path.display()))
+        .map(|entry| entry.expect("a shipped package entry should be readable"))
+        .collect::<Vec<_>>();
+    entries.sort_by_key(fs::DirEntry::file_name);
+    for entry in entries {
+        collect_shipped_files(root, &entry.path(), files);
     }
 }
