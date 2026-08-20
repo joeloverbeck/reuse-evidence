@@ -40,6 +40,23 @@ pub(super) struct EnvelopeRefusal<'a> {
 }
 
 impl Envelope {
+    /// Whether a proposal claims to be a prepared recorded event.
+    ///
+    /// Human proposal shapes declare none of the envelope fields. Seeing any
+    /// one of them therefore selects the prepared shape, including when the
+    /// claimed envelope is incomplete and needs a field-specific refusal.
+    pub(super) fn is_claimed_by(table: &toml::Table) -> bool {
+        [
+            "schema_version",
+            "sequence",
+            "event_id",
+            "event_type",
+            "recorded_at",
+        ]
+        .iter()
+        .any(|field| table.contains_key(*field))
+    }
+
     /// Render the envelope for an event this run is about to record.
     ///
     /// The schema version and the fresh event identity are the envelope's to

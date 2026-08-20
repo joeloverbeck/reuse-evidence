@@ -39,39 +39,60 @@ const NO_IMPLEMENTATION_NOTICE: &str = "decision: authorizes no implementation";
 const OPEN_MARKER_RESOLUTION: &str =
     "restore a supported `reuse-evidence.toml` marker before opening a case";
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug)]
 enum OpenProposalDocument {
     Prepared(CaseOpenedEvent),
     Human(HumanOpenProposalDocument),
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug)]
 enum AppendProposalDocument {
     Prepared(OccurrenceAppendedEvent),
     Human(HumanAppendProposalDocument),
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug)]
 enum EarlyReviewProposalDocument {
     Prepared(EarlyReviewAuthorizedEvent),
     Human(HumanEarlyReviewProposalDocument),
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug)]
 enum DecisionProposalDocument {
     Prepared(ReuseDecisionAcceptedEvent),
     Human(DecisionContent),
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug)]
 enum VerificationProposalDocument {
     Prepared(VerificationRecordedEvent),
     Human(VerificationContent),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProposalShape {
+    Prepared,
+    Human,
+}
+
+#[derive(Debug)]
+struct ProposalDeserializationError {
+    shape: Option<ProposalShape>,
+    field: Option<String>,
+    source: toml::de::Error,
+}
+
+impl ProposalDeserializationError {
+    fn new(text: &str, shape: Option<ProposalShape>, source: toml::de::Error) -> Self {
+        let field = missing_field(&source)
+            .map(str::to_owned)
+            .or_else(|| field_at_error_span(text, &source));
+        Self {
+            shape,
+            field,
+            source,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2250,10 +2271,13 @@ fn read_proposal(path: &Path) -> Result<OpenProposal, TerminalFailure> {
             "supply a readable UTF-8 TOML proposal with `--proposal <PATH>`",
         )
     })?;
-    let document = toml::from_str::<OpenProposalDocument>(&text).map_err(|error| {
-        TerminalFailure::refusal(
-            format!("case proposal `{}` is invalid: {error}", path.display()),
-            "provide a complete TOML case-opening proposal",
+    let document = read_open_proposal_document(&text).map_err(|error| {
+        invalid_proposal(
+            path,
+            &error,
+            "case proposal",
+            "case-opening proposal",
+            "case open --preview",
         )
     })?;
     let (case_id, responsibility, occurrences, prepared, content_validated) = match document {
@@ -2293,6 +2317,119 @@ fn read_proposal(path: &Path) -> Result<OpenProposal, TerminalFailure> {
         validate_proposal(&proposal)?;
     }
     Ok(proposal)
+}
+
+fn read_open_proposal_document(
+    text: &str,
+) -> Result<OpenProposalDocument, ProposalDeserializationError> {
+    let shape = proposal_shape(text)?;
+    match shape {
+        ProposalShape::Prepared => toml::from_str::<CaseOpenedEvent>(text)
+            .map(OpenProposalDocument::Prepared)
+            .map_err(|source| ProposalDeserializationError::new(text, Some(shape), source)),
+        ProposalShape::Human => toml::from_str::<HumanOpenProposalDocument>(text)
+            .map(OpenProposalDocument::Human)
+            .map_err(|source| ProposalDeserializationError::new(text, Some(shape), source)),
+    }
+}
+
+fn proposal_shape(text: &str) -> Result<ProposalShape, ProposalDeserializationError> {
+    let table = text
+        .parse::<toml::Table>()
+        .map_err(|source| ProposalDeserializationError::new(text, None, source))?;
+    Ok(if event::Envelope::is_claimed_by(&table) {
+        ProposalShape::Prepared
+    } else {
+        ProposalShape::Human
+    })
+}
+
+fn invalid_proposal(
+    path: &Path,
+    error: &ProposalDeserializationError,
+    condition_name: &str,
+    human_name: &str,
+    preview_command: &str,
+) -> TerminalFailure {
+    let message = proposal_error_message(error);
+    let resolution = if error.shape == Some(ProposalShape::Prepared) {
+        format!("use the exact event rendered by `{preview_command}`")
+    } else if let Some(field) = missing_field(&error.source) {
+        format!("add the required `{field}` field to the {human_name}")
+    } else if let Some((field, _, _)) = unrecognized_value(error) {
+        format!("use one permitted `{field}` value in the {human_name}")
+    } else if let Some((field, _, _)) = invalid_type(error) {
+        format!("provide `{field}` with the expected TOML type in the {human_name}")
+    } else {
+        format!("correct the invalid TOML {human_name}")
+    };
+    let condition_name = if error.shape == Some(ProposalShape::Prepared) {
+        format!("prepared {condition_name}")
+    } else {
+        condition_name.to_owned()
+    };
+    TerminalFailure::refusal(
+        format!(
+            "{condition_name} `{}` is invalid: {message}",
+            path.display()
+        ),
+        resolution,
+    )
+}
+
+fn proposal_error_message(error: &ProposalDeserializationError) -> String {
+    missing_field(&error.source)
+        .map(|field| format!("required field `{field}` is missing"))
+        .or_else(|| {
+            unrecognized_value(error).map(|(field, value, permitted)| {
+                format!(
+                    "field `{field}` value `{value}` is unrecognized; permitted values: {permitted}"
+                )
+            })
+        })
+        .or_else(|| {
+            invalid_type(error).map(|(field, actual, expected)| {
+                format!("field `{field}` has invalid TOML type {actual}; expected {expected}")
+            })
+        })
+        .unwrap_or_else(|| error.source.message().to_owned())
+}
+
+fn missing_field(error: &toml::de::Error) -> Option<&str> {
+    error
+        .message()
+        .strip_prefix("missing field `")?
+        .strip_suffix('`')
+}
+
+fn unrecognized_value(error: &ProposalDeserializationError) -> Option<(&str, &str, &str)> {
+    let message = error.source.message();
+    let remainder = message.strip_prefix("unknown variant `")?;
+    let (value, permitted) = remainder.split_once("`, expected ")?;
+    let permitted = permitted.strip_prefix("one of ").unwrap_or(permitted);
+    Some((error.field.as_deref()?, value, permitted))
+}
+
+fn invalid_type(error: &ProposalDeserializationError) -> Option<(&str, &str, &str)> {
+    let message = error.source.message();
+    let remainder = message.strip_prefix("invalid type: ")?;
+    let (actual, expected) = remainder.split_once(", expected ")?;
+    Some((error.field.as_deref()?, actual, expected))
+}
+
+fn field_at_error_span(text: &str, error: &toml::de::Error) -> Option<String> {
+    let before_error = text.get(..error.span()?.start)?;
+    let equals = before_error.rfind('=')?;
+    let before_equals = &before_error[..equals];
+    let key = before_equals
+        .rsplit(['\n', ',', '{'])
+        .next()?
+        .trim()
+        .rsplit('.')
+        .next()?
+        .trim()
+        .trim_matches(['\'', '"']);
+    (!key.is_empty()).then(|| key.to_owned())
 }
 
 fn validate_decision_content(content: &DecisionContent) -> Result<(), TerminalFailure> {
@@ -2523,10 +2660,13 @@ fn read_append_proposal(path: &Path) -> Result<AppendProposal, TerminalFailure> 
             "supply a readable UTF-8 TOML proposal with `--proposal <PATH>`",
         )
     })?;
-    let document = toml::from_str::<AppendProposalDocument>(&text).map_err(|error| {
-        TerminalFailure::refusal(
-            format!("append proposal `{}` is invalid: {error}", path.display()),
-            "provide a complete TOML occurrence-append proposal",
+    let document = read_append_proposal_document(&text).map_err(|error| {
+        invalid_proposal(
+            path,
+            &error,
+            "append proposal",
+            "occurrence-append proposal",
+            "case append --preview",
         )
     })?;
     let proposal = match document {
@@ -2550,6 +2690,20 @@ fn read_append_proposal(path: &Path) -> Result<AppendProposal, TerminalFailure> 
     Ok(proposal)
 }
 
+fn read_append_proposal_document(
+    text: &str,
+) -> Result<AppendProposalDocument, ProposalDeserializationError> {
+    let shape = proposal_shape(text)?;
+    match shape {
+        ProposalShape::Prepared => toml::from_str::<OccurrenceAppendedEvent>(text)
+            .map(AppendProposalDocument::Prepared)
+            .map_err(|source| ProposalDeserializationError::new(text, Some(shape), source)),
+        ProposalShape::Human => toml::from_str::<HumanAppendProposalDocument>(text)
+            .map(AppendProposalDocument::Human)
+            .map_err(|source| ProposalDeserializationError::new(text, Some(shape), source)),
+    }
+}
+
 fn read_early_review_proposal(path: &Path) -> Result<EarlyReviewProposal, TerminalFailure> {
     let text = fs::read_to_string(path).map_err(|error| {
         TerminalFailure::refusal(
@@ -2560,13 +2714,13 @@ fn read_early_review_proposal(path: &Path) -> Result<EarlyReviewProposal, Termin
             "supply a readable UTF-8 TOML proposal with `--proposal <PATH>`",
         )
     })?;
-    let document = toml::from_str::<EarlyReviewProposalDocument>(&text).map_err(|error| {
-        TerminalFailure::refusal(
-            format!(
-                "early-review proposal `{}` is invalid: {error}",
-                path.display()
-            ),
-            "provide a complete TOML early-review proposal",
+    let document = read_early_review_proposal_document(&text).map_err(|error| {
+        invalid_proposal(
+            path,
+            &error,
+            "early-review proposal",
+            "early-review proposal",
+            "case override --preview",
         )
     })?;
     let proposal = match document {
@@ -2618,6 +2772,20 @@ fn read_early_review_proposal(path: &Path) -> Result<EarlyReviewProposal, Termin
     Ok(proposal)
 }
 
+fn read_early_review_proposal_document(
+    text: &str,
+) -> Result<EarlyReviewProposalDocument, ProposalDeserializationError> {
+    let shape = proposal_shape(text)?;
+    match shape {
+        ProposalShape::Prepared => toml::from_str::<EarlyReviewAuthorizedEvent>(text)
+            .map(EarlyReviewProposalDocument::Prepared)
+            .map_err(|source| ProposalDeserializationError::new(text, Some(shape), source)),
+        ProposalShape::Human => toml::from_str::<HumanEarlyReviewProposalDocument>(text)
+            .map(EarlyReviewProposalDocument::Human)
+            .map_err(|source| ProposalDeserializationError::new(text, Some(shape), source)),
+    }
+}
+
 fn read_decision_proposal(path: &Path) -> Result<DecisionProposal, TerminalFailure> {
     let text = fs::read_to_string(path).map_err(|error| {
         TerminalFailure::refusal(
@@ -2629,13 +2797,13 @@ fn read_decision_proposal(path: &Path) -> Result<DecisionProposal, TerminalFailu
         )
     })?;
     validate_decision_vocabulary(&text)?;
-    let document = toml::from_str::<DecisionProposalDocument>(&text).map_err(|error| {
-        TerminalFailure::refusal(
-            format!(
-                "reuse decision proposal `{}` is invalid: {error}",
-                path.display()
-            ),
-            "provide a complete TOML reuse-decision proposal using one permitted identity verdict and action",
+    let document = read_decision_proposal_document(&text).map_err(|error| {
+        invalid_proposal(
+            path,
+            &error,
+            "reuse decision proposal",
+            "reuse-decision proposal",
+            "case decide --preview",
         )
     })?;
     let proposal = match document {
@@ -2660,6 +2828,20 @@ fn read_decision_proposal(path: &Path) -> Result<DecisionProposal, TerminalFailu
     Ok(proposal)
 }
 
+fn read_decision_proposal_document(
+    text: &str,
+) -> Result<DecisionProposalDocument, ProposalDeserializationError> {
+    let shape = proposal_shape(text)?;
+    match shape {
+        ProposalShape::Prepared => toml::from_str::<ReuseDecisionAcceptedEvent>(text)
+            .map(DecisionProposalDocument::Prepared)
+            .map_err(|source| ProposalDeserializationError::new(text, Some(shape), source)),
+        ProposalShape::Human => toml::from_str::<DecisionContent>(text)
+            .map(DecisionProposalDocument::Human)
+            .map_err(|source| ProposalDeserializationError::new(text, Some(shape), source)),
+    }
+}
+
 fn read_verification_proposal(path: &Path) -> Result<VerificationProposal, TerminalFailure> {
     let text = fs::read_to_string(path).map_err(|error| {
         TerminalFailure::refusal(
@@ -2670,13 +2852,13 @@ fn read_verification_proposal(path: &Path) -> Result<VerificationProposal, Termi
             "supply a readable UTF-8 TOML proposal with `--proposal <PATH>`",
         )
     })?;
-    let document = toml::from_str::<VerificationProposalDocument>(&text).map_err(|error| {
-        TerminalFailure::refusal(
-            format!(
-                "verification proposal `{}` is invalid: {error}",
-                path.display()
-            ),
-            "provide a complete TOML verification proposal using one permitted disposition and result outcome",
+    let document = read_verification_proposal_document(&text).map_err(|error| {
+        invalid_proposal(
+            path,
+            &error,
+            "verification proposal",
+            "verification proposal",
+            "case verify --preview",
         )
     })?;
     let proposal = match document {
@@ -2699,6 +2881,20 @@ fn read_verification_proposal(path: &Path) -> Result<VerificationProposal, Termi
     };
     validate_verification_content(&proposal.content)?;
     Ok(proposal)
+}
+
+fn read_verification_proposal_document(
+    text: &str,
+) -> Result<VerificationProposalDocument, ProposalDeserializationError> {
+    let shape = proposal_shape(text)?;
+    match shape {
+        ProposalShape::Prepared => toml::from_str::<VerificationRecordedEvent>(text)
+            .map(VerificationProposalDocument::Prepared)
+            .map_err(|source| ProposalDeserializationError::new(text, Some(shape), source)),
+        ProposalShape::Human => toml::from_str::<VerificationContent>(text)
+            .map(VerificationProposalDocument::Human)
+            .map_err(|source| ProposalDeserializationError::new(text, Some(shape), source)),
+    }
 }
 
 fn validate_verification_content(content: &VerificationContent) -> Result<(), TerminalFailure> {

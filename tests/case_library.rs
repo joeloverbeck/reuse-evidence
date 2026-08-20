@@ -25,7 +25,7 @@ use std::sync::Barrier;
 use reuse_evidence::case::{self, RecordedInstant};
 use reuse_evidence::portfolio::PortfolioLocation;
 use reuse_evidence::{ExitMeaning, TerminalFailure, Visibility, enroll};
-use support::Fixture;
+use support::{Fixture, snapshot};
 
 const CASE_ID: &str = "00000000-0000-4000-8000-000000000011";
 const STEWARD_ID: &str = "00000000-0000-4000-8000-000000000012";
@@ -135,9 +135,8 @@ fn steward_with_one_open_case(fixture: &Fixture) -> PathBuf {
     steward
 }
 
-/// Enrolls a private steward and three public participants, opens a review-ready case, and records
-/// its accepted decision. Returns the steward repository at revision 2.
-fn steward_with_decided_case(fixture: &Fixture) -> PathBuf {
+/// Enrolls a private steward and three public participants, then opens a review-ready case.
+fn steward_with_review_ready_case(fixture: &Fixture) -> PathBuf {
     let steward = fixture.repository("steward", STEWARD_ID, "private");
     fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
     fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "public");
@@ -146,6 +145,12 @@ fn steward_with_decided_case(fixture: &Fixture) -> PathBuf {
     let opening = fixture.write("open-case.toml", &three_occurrence_proposal());
     case::open(&steward, &opening, &fixture.location(), pinned(), false)
         .expect("opening a three-occurrence case should succeed");
+    steward
+}
+
+/// Opens a review-ready case and records its accepted decision. Returns revision 2.
+fn steward_with_decided_case(fixture: &Fixture) -> PathBuf {
+    let steward = steward_with_review_ready_case(fixture);
     let decision = fixture.write("decision.toml", &change_decision_proposal());
     case::decide(
         &steward,
@@ -318,6 +323,500 @@ fn refused_verification(
         "a verification refusal must preserve every recorded event byte"
     );
     failure
+}
+
+fn assert_refusal_without_writes(
+    failure: &TerminalFailure,
+    expected: &str,
+    fixture: &Fixture,
+    before: &[(PathBuf, Vec<u8>)],
+    subject: &str,
+) {
+    assert_eq!(
+        failure.meaning(),
+        ExitMeaning::Refusal,
+        "{subject}: {failure}"
+    );
+    assert_eq!(failure.meaning().status(), 3, "{subject}: {failure}");
+    assert_eq!(failure.to_string(), expected, "{subject}");
+    assert_eq!(
+        snapshot(&fixture.root).as_slice(),
+        before,
+        "the refused {subject} must write nothing"
+    );
+}
+
+#[test]
+fn an_opening_proposal_missing_responsibility_names_the_required_field() {
+    let fixture = Fixture::new("opening-missing-responsibility");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    let proposal = fixture.write(
+        "open-case.toml",
+        &two_occurrence_proposal().replace(
+            "responsibility = \"normalize durable event identities\"\n",
+            "",
+        ),
+    );
+    let before = snapshot(&fixture.root);
+
+    let failure = case::open(&steward, &proposal, &fixture.location(), pinned(), false)
+        .expect_err("an opening proposal without its responsibility should refuse");
+
+    assert_refusal_without_writes(
+        &failure,
+        &format!(
+            "refusal: case proposal `{}` is invalid: required field `responsibility` is missing\nresolution: add the required `responsibility` field to the case-opening proposal",
+            proposal.display()
+        ),
+        &fixture,
+        &before,
+        "opening",
+    );
+}
+
+#[test]
+fn an_append_proposal_missing_independence_names_the_required_field() {
+    let fixture = Fixture::new("append-missing-independence");
+    let steward = steward_with_one_open_case(&fixture);
+    let proposal = fixture.write(
+        "append.toml",
+        &append_occurrence_proposal()
+            .replace("independence = \"separate distribution contract\"\n", ""),
+    );
+    let before = snapshot(&fixture.root);
+
+    let failure = case::append(
+        &steward,
+        CASE_ID,
+        1,
+        &proposal,
+        &fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect_err("an append proposal without independence should refuse");
+
+    assert_refusal_without_writes(
+        &failure,
+        &format!(
+            "refusal: append proposal `{}` is invalid: required field `independence` is missing\nresolution: add the required `independence` field to the occurrence-append proposal",
+            proposal.display()
+        ),
+        &fixture,
+        &before,
+        "append",
+    );
+}
+
+#[test]
+fn an_append_proposal_with_an_unrecognized_evidence_kind_names_the_permitted_value() {
+    let fixture = Fixture::new("append-unrecognized-evidence-kind");
+    let steward = steward_with_one_open_case(&fixture);
+    let proposal = fixture.write(
+        "append.toml",
+        &append_occurrence_proposal().replace("kind = \"commit\"", "kind = \"source_blob\""),
+    );
+    let before = snapshot(&fixture.root);
+
+    let failure = case::append(
+        &steward,
+        CASE_ID,
+        1,
+        &proposal,
+        &fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect_err("an append proposal with an unrecognized evidence kind should refuse");
+
+    assert_refusal_without_writes(
+        &failure,
+        &format!(
+            "refusal: append proposal `{}` is invalid: field `kind` value `source_blob` is unrecognized; permitted values: `commit`\nresolution: use one permitted `kind` value in the occurrence-append proposal",
+            proposal.display()
+        ),
+        &fixture,
+        &before,
+        "append",
+    );
+}
+
+#[test]
+fn a_decision_proposal_missing_accepted_scope_names_the_required_field() {
+    let fixture = Fixture::new("decision-missing-accepted-scope");
+    let steward = steward_with_review_ready_case(&fixture);
+    let proposal = fixture.write(
+        "decision.toml",
+        &change_decision_proposal().replace(
+            "accepted_scope = \"the durable event identity contract\"\n",
+            "",
+        ),
+    );
+    let before = snapshot(&fixture.root);
+
+    let failure = case::decide(
+        &steward,
+        CASE_ID,
+        1,
+        &proposal,
+        &fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect_err("a decision proposal without its accepted scope should refuse");
+
+    assert_refusal_without_writes(
+        &failure,
+        &format!(
+            "refusal: reuse decision proposal `{}` is invalid: required field `accepted_scope` is missing\nresolution: add the required `accepted_scope` field to the reuse-decision proposal",
+            proposal.display()
+        ),
+        &fixture,
+        &before,
+        "reuse decision",
+    );
+}
+
+#[test]
+fn a_decision_proposal_with_the_wrong_accepted_scope_type_names_the_field() {
+    let fixture = Fixture::new("decision-wrong-accepted-scope-type");
+    let steward = steward_with_review_ready_case(&fixture);
+    let proposal = fixture.write(
+        "decision.toml",
+        &change_decision_proposal().replace(
+            "accepted_scope = \"the durable event identity contract\"",
+            "accepted_scope = 42",
+        ),
+    );
+    let before = snapshot(&fixture.root);
+
+    let failure = case::decide(
+        &steward,
+        CASE_ID,
+        1,
+        &proposal,
+        &fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect_err("a decision proposal with an integer accepted scope should refuse");
+
+    assert_refusal_without_writes(
+        &failure,
+        &format!(
+            "refusal: reuse decision proposal `{}` is invalid: field `accepted_scope` has invalid TOML type integer `42`; expected a string\nresolution: provide `accepted_scope` with the expected TOML type in the reuse-decision proposal",
+            proposal.display()
+        ),
+        &fixture,
+        &before,
+        "reuse decision",
+    );
+}
+
+#[test]
+fn decision_vocabulary_and_empty_list_refusals_keep_their_exact_text() {
+    let fixture = Fixture::new("decision-existing-refusal-text");
+    let steward = steward_with_review_ready_case(&fixture);
+    let proposal = fixture.write("decision.toml", &change_decision_proposal());
+    let cases = [
+        (
+            "identity verdict vocabulary",
+            change_decision_proposal().replace(
+                "identity_verdict = \"same_responsibility\"",
+                "identity_verdict = \"looks_similar\"",
+            ),
+            "refusal: reuse decision `identity_verdict` value `looks_similar` is unrecognized\nresolution: use one permitted `identity_verdict` value: same_responsibility, different_responsibilities, insufficient_evidence, existing_abstraction_is_wrong",
+        ),
+        (
+            "action vocabulary",
+            change_decision_proposal().replace(
+                "action = \"publish_public_package\"",
+                "action = \"extract_automatically\"",
+            ),
+            "refusal: reuse decision `action` value `extract_automatically` is unrecognized\nresolution: use one permitted `action` value: retain_intentional_duplication, wait_for_more_evidence, use_existing_dependency, extract_or_deepen_locally, create_workspace_package, create_private_cross_repository_package, publish_public_package, centralize_schema_specification_or_fixture_corpus, replace_copies_with_generated_artifacts, contribute_missing_behavior_upstream, split_inline_or_narrow_existing_abstraction",
+        ),
+        (
+            "required empty list",
+            change_decision_proposal().replace(
+                "non_responsibilities = [\"case lifecycle storage\"]",
+                "non_responsibilities = []",
+            ),
+            "refusal: reuse decision `non_responsibilities` is missing or empty\nresolution: provide non-empty `non_responsibilities` content in the accepted reuse decision",
+        ),
+    ];
+
+    for (case_name, contents, expected) in cases {
+        fs::write(&proposal, contents).expect("the refused decision should be writable");
+        let before = snapshot(&fixture.root);
+        let failure = case::decide(
+            &steward,
+            CASE_ID,
+            1,
+            &proposal,
+            &fixture.location(),
+            pinned(),
+            false,
+        )
+        .expect_err("the existing decision validation should refuse");
+
+        assert_refusal_without_writes(&failure, expected, &fixture, &before, case_name);
+    }
+}
+
+#[test]
+fn a_verification_proposal_missing_disposition_names_the_required_field() {
+    let fixture = Fixture::new("verification-missing-disposition");
+    let steward = steward_with_decided_case(&fixture);
+    let proposal = fixture.write(
+        "verification.toml",
+        &closed_verification_proposal().replace("disposition = \"closed\"\n", ""),
+    );
+    let before = snapshot(&fixture.root);
+
+    let failure = case::verify(
+        &steward,
+        CASE_ID,
+        2,
+        &proposal,
+        &fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect_err("a verification proposal without its disposition should refuse");
+
+    assert_refusal_without_writes(
+        &failure,
+        &format!(
+            "refusal: verification proposal `{}` is invalid: required field `disposition` is missing\nresolution: add the required `disposition` field to the verification proposal",
+            proposal.display()
+        ),
+        &fixture,
+        &before,
+        "verification",
+    );
+}
+
+#[test]
+fn an_opening_proposal_with_an_unrecognized_evidence_kind_names_the_field_and_permitted_value() {
+    let fixture = Fixture::new("opening-unrecognized-evidence-kind");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    let proposal = fixture.write(
+        "open-case.toml",
+        &two_occurrence_proposal().replacen("kind = \"commit\"", "kind = \"source_blob\"", 1),
+    );
+    let before = snapshot(&fixture.root);
+
+    let failure = case::open(&steward, &proposal, &fixture.location(), pinned(), false)
+        .expect_err("an opening proposal with an unrecognized evidence kind should refuse");
+
+    assert_refusal_without_writes(
+        &failure,
+        &format!(
+            "refusal: case proposal `{}` is invalid: field `kind` value `source_blob` is unrecognized; permitted values: `commit`\nresolution: use one permitted `kind` value in the case-opening proposal",
+            proposal.display()
+        ),
+        &fixture,
+        &before,
+        "opening",
+    );
+}
+
+#[test]
+fn an_incomplete_recorded_envelope_is_diagnosed_as_a_prepared_opening() {
+    let fixture = Fixture::new("prepared-opening-missing-schema-version");
+    let steward = fixture.repository("steward", STEWARD_ID, "private");
+    fixture.repository("first-consumer", FIRST_PARTICIPANT_ID, "public");
+    fixture.repository("second-consumer", SECOND_PARTICIPANT_ID, "public");
+    let proposal = fixture.write("open-case.toml", &two_occurrence_proposal());
+    let preview = case::open(&steward, &proposal, &fixture.location(), pinned(), true)
+        .expect("the Human proposal should preview as a Prepared event")
+        .to_string();
+    let prepared = preview
+        .split_once("event:\n")
+        .expect("the preview receipt should carry exact event bytes")
+        .1
+        .replace("schema_version = 1\n", "");
+    fs::write(&proposal, prepared).expect("the incomplete Prepared proposal should be writable");
+    let before = snapshot(&fixture.root);
+
+    let failure = case::open(&steward, &proposal, &fixture.location(), pinned(), false)
+        .expect_err("an incomplete recorded envelope should refuse as Prepared");
+
+    assert_refusal_without_writes(
+        &failure,
+        &format!(
+            "refusal: prepared case proposal `{}` is invalid: required field `schema_version` is missing\nresolution: use the exact event rendered by `case open --preview`",
+            proposal.display()
+        ),
+        &fixture,
+        &before,
+        "Prepared opening",
+    );
+}
+
+#[test]
+fn a_verification_proposal_with_an_unrecognized_disposition_names_the_permitted_values() {
+    let fixture = Fixture::new("verification-unrecognized-disposition");
+    let steward = steward_with_decided_case(&fixture);
+    let proposal = fixture.write(
+        "verification.toml",
+        &closed_verification_proposal()
+            .replace("disposition = \"closed\"", "disposition = \"complete\""),
+    );
+    let before = snapshot(&fixture.root);
+
+    let failure = case::verify(
+        &steward,
+        CASE_ID,
+        2,
+        &proposal,
+        &fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect_err("a verification proposal with an unrecognized disposition should refuse");
+
+    assert_refusal_without_writes(
+        &failure,
+        &format!(
+            "refusal: verification proposal `{}` is invalid: field `disposition` value `complete` is unrecognized; permitted values: `closed`, `parked`, `reopened`\nresolution: use one permitted `disposition` value in the verification proposal",
+            proposal.display()
+        ),
+        &fixture,
+        &before,
+        "verification",
+    );
+}
+
+#[test]
+fn verification_proposals_name_unrecognized_condition_and_consumer_outcomes() {
+    let fixture = Fixture::new("verification-unrecognized-outcomes");
+    let steward = steward_with_decided_case(&fixture);
+    let proposal = fixture.write("verification.toml", &closed_verification_proposal());
+    let cases = [
+        (
+            "condition outcome",
+            "condition_unknown",
+            closed_verification_proposal().replacen(
+                "outcome = \"met\"",
+                "outcome = \"condition_unknown\"",
+                1,
+            ),
+        ),
+        (
+            "consumer outcome",
+            "consumer_unknown",
+            closed_verification_proposal().replace(
+                "consumer = \"rust-release-tool\"\noutcome = \"met\"",
+                "consumer = \"rust-release-tool\"\noutcome = \"consumer_unknown\"",
+            ),
+        ),
+    ];
+
+    for (case_name, value, contents) in cases {
+        fs::write(&proposal, contents).expect("the invalid verification should be writable");
+        let before = snapshot(&fixture.root);
+        let failure = case::verify(
+            &steward,
+            CASE_ID,
+            2,
+            &proposal,
+            &fixture.location(),
+            pinned(),
+            false,
+        )
+        .expect_err("an unrecognized verification outcome should refuse");
+
+        assert_refusal_without_writes(
+            &failure,
+            &format!(
+                "refusal: verification proposal `{}` is invalid: field `outcome` value `{value}` is unrecognized; permitted values: `met`, `not_met`, `accepted_exception`\nresolution: use one permitted `outcome` value in the verification proposal",
+                proposal.display()
+            ),
+            &fixture,
+            &before,
+            case_name,
+        );
+    }
+}
+
+#[test]
+fn an_early_review_proposal_with_an_unrecognized_evidence_kind_names_the_permitted_value() {
+    let fixture = Fixture::new("early-review-unrecognized-evidence-kind");
+    let steward = steward_with_one_open_case(&fixture);
+    let proposal = fixture.write(
+        "early-review.toml",
+        &early_review_override_proposal().replace("kind = \"commit\"", "kind = \"source_blob\""),
+    );
+    let before = snapshot(&fixture.root);
+
+    let failure = case::authorize_early_review(
+        &steward,
+        CASE_ID,
+        1,
+        &proposal,
+        &fixture.location(),
+        pinned(),
+        false,
+    )
+    .expect_err("an early-review proposal with an unrecognized evidence kind should refuse");
+
+    assert_refusal_without_writes(
+        &failure,
+        &format!(
+            "refusal: early-review proposal `{}` is invalid: field `kind` value `source_blob` is unrecognized; permitted values: `commit`\nresolution: use one permitted `kind` value in the early-review proposal",
+            proposal.display()
+        ),
+        &fixture,
+        &before,
+        "early-review authorization",
+    );
+}
+
+#[test]
+fn early_review_omissions_keep_their_named_semantic_refusals() {
+    let fixture = Fixture::new("early-review-omissions");
+    let steward = steward_with_one_open_case(&fixture);
+    let proposal = fixture.write("early-review.toml", "");
+    let cases = [
+        (
+            "empty early-review proposal",
+            "",
+            "refusal: early-review override reason is missing\nresolution: provide a concrete reason why waiting for a third occurrence is materially worse",
+        ),
+        (
+            "missing early-review reason",
+            "review_appetite = \"one working day\"\n\n[[evidence]]\nkind = \"commit\"\nreference = \"4444444\"\n",
+            "refusal: early-review override reason is missing\nresolution: provide a concrete reason why waiting for a third occurrence is materially worse",
+        ),
+        (
+            "missing early-review appetite",
+            "reason = \"coordinated fixes are already required\"\n\n[[evidence]]\nkind = \"commit\"\nreference = \"4444444\"\n",
+            "refusal: early-review override review appetite is missing\nresolution: bound the review effort before authorizing early review",
+        ),
+        (
+            "missing early-review evidence",
+            "reason = \"coordinated fixes are already required\"\nreview_appetite = \"one working day\"\n",
+            "refusal: early-review override evidence is missing\nresolution: add one or more recoverable evidence references bearing why waiting is worse",
+        ),
+    ];
+
+    for (case_name, contents, expected) in cases {
+        fs::write(&proposal, contents).expect("the incomplete proposal should be writable");
+        let before = snapshot(&fixture.root);
+        let failure = case::authorize_early_review(
+            &steward,
+            CASE_ID,
+            1,
+            &proposal,
+            &fixture.location(),
+            pinned(),
+            false,
+        )
+        .expect_err("the incomplete early-review proposal should refuse semantically");
+
+        assert_refusal_without_writes(&failure, expected, &fixture, &before, case_name);
+    }
 }
 
 #[test]
