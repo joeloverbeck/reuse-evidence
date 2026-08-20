@@ -689,55 +689,50 @@ fn a_verification_proposal_with_an_unrecognized_disposition_names_the_permitted_
 }
 
 #[test]
-fn verification_proposals_name_unrecognized_condition_and_consumer_outcomes() {
-    let fixture = Fixture::new("verification-unrecognized-outcomes");
+fn review_r1_standards_2_unrecognized_condition_outcome_names_field_and_permitted_values() {
+    let fixture = Fixture::new("review-r1-condition-outcome");
     let steward = steward_with_decided_case(&fixture);
-    let proposal = fixture.write("verification.toml", &closed_verification_proposal());
-    let cases = [
-        (
-            "condition outcome",
-            "condition_unknown",
-            closed_verification_proposal().replacen(
-                "outcome = \"met\"",
-                "outcome = \"condition_unknown\"",
-                1,
-            ),
+    let proposal = fixture.write(
+        "verification.toml",
+        &closed_verification_proposal().replacen(
+            "outcome = \"met\"",
+            "outcome = \"condition_unknown\"",
+            1,
         ),
-        (
-            "consumer outcome",
-            "consumer_unknown",
-            closed_verification_proposal().replace(
-                "consumer = \"rust-release-tool\"\noutcome = \"met\"",
-                "consumer = \"rust-release-tool\"\noutcome = \"consumer_unknown\"",
-            ),
-        ),
-    ];
+    );
+    let failure = refused_verification(&steward, 2, &proposal, &fixture.location());
 
-    for (case_name, value, contents) in cases {
-        fs::write(&proposal, contents).expect("the invalid verification should be writable");
-        let before = snapshot(&fixture.root);
-        let failure = case::verify(
-            &steward,
-            CASE_ID,
-            2,
-            &proposal,
-            &fixture.location(),
-            pinned(),
-            false,
+    assert_eq!(failure.meaning().status(), 3, "{failure}");
+    assert_eq!(
+        failure.to_string(),
+        format!(
+            "refusal: verification proposal `{}` is invalid: field `outcome` value `condition_unknown` is unrecognized; permitted values: `met`, `not_met`, `accepted_exception`\nresolution: use one permitted `outcome` value in the verification proposal",
+            proposal.display()
         )
-        .expect_err("an unrecognized verification outcome should refuse");
+    );
+}
 
-        assert_refusal_without_writes(
-            &failure,
-            &format!(
-                "refusal: verification proposal `{}` is invalid: field `outcome` value `{value}` is unrecognized; permitted values: `met`, `not_met`, `accepted_exception`\nresolution: use one permitted `outcome` value in the verification proposal",
-                proposal.display()
-            ),
-            &fixture,
-            &before,
-            case_name,
-        );
-    }
+#[test]
+fn review_r1_standards_2_unrecognized_consumer_outcome_names_field_and_permitted_values() {
+    let fixture = Fixture::new("review-r1-consumer-outcome");
+    let steward = steward_with_decided_case(&fixture);
+    let proposal = fixture.write(
+        "verification.toml",
+        &closed_verification_proposal().replace(
+            "consumer = \"rust-release-tool\"\noutcome = \"met\"",
+            "consumer = \"rust-release-tool\"\noutcome = \"consumer_unknown\"",
+        ),
+    );
+    let failure = refused_verification(&steward, 2, &proposal, &fixture.location());
+
+    assert_eq!(failure.meaning().status(), 3, "{failure}");
+    assert_eq!(
+        failure.to_string(),
+        format!(
+            "refusal: verification proposal `{}` is invalid: field `outcome` value `consumer_unknown` is unrecognized; permitted values: `met`, `not_met`, `accepted_exception`\nresolution: use one permitted `outcome` value in the verification proposal",
+            proposal.display()
+        )
+    );
 }
 
 #[test]

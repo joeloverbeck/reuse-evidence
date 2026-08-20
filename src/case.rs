@@ -2337,11 +2337,19 @@ fn proposal_shape(text: &str) -> Result<ProposalShape, ProposalDeserializationEr
     let table = text
         .parse::<toml::Table>()
         .map_err(|source| ProposalDeserializationError::new(text, None, source))?;
-    Ok(if event::Envelope::is_claimed_by(&table) {
-        ProposalShape::Prepared
-    } else {
-        ProposalShape::Human
-    })
+    // Human proposal shapes declare none of the envelope fields. Seeing any
+    // one of them therefore selects the prepared shape, including when the
+    // claimed envelope is incomplete and needs a field-specific refusal.
+    Ok(
+        if event::Envelope::FIELD_NAMES
+            .iter()
+            .any(|field| table.contains_key(*field))
+        {
+            ProposalShape::Prepared
+        } else {
+            ProposalShape::Human
+        },
+    )
 }
 
 fn invalid_proposal(
