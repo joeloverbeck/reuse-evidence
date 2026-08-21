@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-20T11:30:24.645656354Z",
+  "generated_at": "2026-08-20T13:22:26.470360804Z",
   "target_content_hash": "2785481265152dec4b7c8cf4e756bd4c232e0d836bb5d03dd5cec16b588958a9",
-  "qualifying_uses_on_current_hash": 36,
+  "qualifying_uses_on_current_hash": 37,
   "open_incident_ids": [
     "evt_2e1cd2a5-9e32-4a91-a8ce-6b29182cd27b",
     "evt_04781c8b-8a47-4a28-8d60-58016659663d",
@@ -33,7 +33,10 @@
     "evt_902e808c-a71c-46c0-a411-92bcb7c466ce",
     "evt_3ab48494-f532-4c93-8ca2-069e71e87e9e",
     "evt_99167fa1-5666-4b04-a260-9be5f6ab92ad",
-    "evt_b8a0781e-79da-4ffd-a4be-e33b76fcf200"
+    "evt_b8a0781e-79da-4ffd-a4be-e33b76fcf200",
+    "evt_ded18580-2ded-45ff-92a6-07e1b5749d8a",
+    "evt_9e938c1b-f49f-4a4a-9ba4-e0154570cc3c",
+    "evt_ab32a844-1ce9-489c-a3ba-e56c1e4da986"
   ],
   "candidate_clusters": [
     {
@@ -52,9 +55,10 @@
         "evt_902e808c-a71c-46c0-a411-92bcb7c466ce",
         "evt_3ab48494-f532-4c93-8ca2-069e71e87e9e",
         "evt_99167fa1-5666-4b04-a260-9be5f6ab92ad",
-        "evt_b8a0781e-79da-4ffd-a4be-e33b76fcf200"
+        "evt_b8a0781e-79da-4ffd-a4be-e33b76fcf200",
+        "evt_9e938c1b-f49f-4a4a-9ba4-e0154570cc3c"
       ],
-      "independent_incidents": 10,
+      "independent_incidents": 11,
       "max_severity": "material_failure"
     },
     {
@@ -73,9 +77,10 @@
         "evt_4fd58544-9a2b-4b8a-bb2c-f50cdddc0355",
         "evt_b3851ab6-3218-43e8-ab81-9da0f731b64c",
         "evt_519be0aa-2c62-45f4-a332-bdaf3fdbcd34",
-        "evt_9340753d-edff-4e60-8616-a327e2bf0bfd"
+        "evt_9340753d-edff-4e60-8616-a327e2bf0bfd",
+        "evt_ded18580-2ded-45ff-92a6-07e1b5749d8a"
       ],
-      "independent_incidents": 4,
+      "independent_incidents": 5,
       "max_severity": "material_failure"
     },
     {
@@ -90,6 +95,14 @@
       "symptom_key": "coordination",
       "open_event_ids": [
         "evt_55c7dc20-03b1-4a5c-9559-04fee80f0f21"
+      ],
+      "independent_incidents": 1,
+      "max_severity": "friction"
+    },
+    {
+      "symptom_key": "state",
+      "open_event_ids": [
+        "evt_ab32a844-1ce9-489c-a3ba-e56c1e4da986"
       ],
       "independent_incidents": 1,
       "max_severity": "friction"
@@ -112,7 +125,8 @@
     "evt_902e808c-a71c-46c0-a411-92bcb7c466ce",
     "evt_3ab48494-f532-4c93-8ca2-069e71e87e9e",
     "evt_99167fa1-5666-4b04-a260-9be5f6ab92ad",
-    "evt_b8a0781e-79da-4ffd-a4be-e33b76fcf200"
+    "evt_b8a0781e-79da-4ffd-a4be-e33b76fcf200",
+    "evt_9e938c1b-f49f-4a4a-9ba4-e0154570cc3c"
   ],
   "threshold_session_id": "019febe5-2a89-76b3-ad6d-3f5d8f0e4bba",
   "not_before": null,
@@ -121,5 +135,5 @@
   "review_reentry_basis": "first_eligibility",
   "target_name": "implement",
   "target_repo_relative_path": ".claude/skills/implement",
-  "derivation_session_id": "12359283-2b7b-4872-9659-e867860e3b84"
+  "derivation_session_id": "01a01f2b-30fa-7f71-9330-510d4568baa8"
 }
